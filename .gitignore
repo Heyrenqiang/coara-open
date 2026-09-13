@@ -1,0 +1,170 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local secrets and per-workspace runtime copies. Keep the checked-in .env.example
+# as the development template; each developer maintains their own root .env.
+.env
+.coara/.env
+.coara/config.yaml
+.coara/providers.yaml
+.coara/llm_preferences.yaml
+.coara/config.local.yaml
+scripts/tunnels/tunnels.local.env
+
+# Editors and local tools
+.idea/
+.vscode/
+.lingma/
+.codeartsdoer/
+.qoder/
+
+# Local runtime data (per-workspace; global home is outside repo at $COARA_HOME)
+.coara/
+.coara/config/
+.coara/logs/
+.coara/data/
+.coara/dashboard_runtime.json
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test data (simulation outputs)
+tests/simulation_*.json
+tests/simulation_*.jsonl
+MagicMock/
+
+# AI reference repos
+qwen-code/
+claude-code/
+kimi-cli-reference/
+sandbox-reference/
+skills-cursor/
+# skills/ppt/
+d-code-ws-v8/
+
+# Local Anthropic prompt dumps (not for git)
+ref-doc/Claude-Fable-5.1.md
+ref-doc/Claude-Fable-5.1-对coara注入借鉴.md
+
+# Office lock files
+~$*
+
+# User-uploaded source files in skills root (not part of any skill)
+skills/*.pptx
+skills/*.ppt
+skills/*.docx
+skills/*.doc
+skills/*.pdf
+
+# IDE cache
+temp_skills/
+test-coara/
+
+# Node.js
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+
+# Build outputs
+**/.next/
+**/out/
+
+# TypeScript
+*.tsbuildinfo
+
+# Large model files
+*.onnx
+*.pt
+*.pth
+*.tflite
+*.h5
+*.pkl
+
+# Large image files
+*.png
+*.jpg
+*.jpeg
+!src/**/*.webp
+
+# Documents (reference docs should not be in repo)
+*.pdf
+*.docx
+
+# IDE / tool caches
+.arts/
+.atomcode/
+.claude/
+.fractum/
+.qwen/
+.opencode/
+.trae/
+.workbuddy/
+.dbg/
+# workbuddy 临时目录（.pt9/.ptsweep/.ptx3 等 .pt 前缀）
+.pt*/
+
+# Android model assets (large binary files, not for git)
+android-app/app/src/main/assets/models/
+
+# Android optional third-party clones
+android-app/third_party/
+
+# Backup directories
+res copy/
+
+# GoMatrix build artifacts and runtime data
+gomatrix/gomatrix.exe
+gomatrix/gomatrix.exe.bak
+gomatrix/gomatrix.exe~
+gomatrix/gomatrix
+gomatrix/gomatrix.db
+gomatrix/gomatrix.db-*
+gomatrix/gomatrix.apk
+gomatrix/*.apk
+gomatrix/media/
+gomatrix.toml
+
+# Legacy path (unused): old Install-CoaraStack wrote prebuilts here
+deploy/bundle/
+
+# release build artifacts
+deploy/release/out/
+deploy/release/cache/
+deploy/release/logs/
+
+# 内网/云机器清单（含 IP 与连接方式，不入库）
+deploy/MACHINES.md
+
+output/
+
+deploy/homepage/coara-app.apk
+deploy/homepage/app-version.json

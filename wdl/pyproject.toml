@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wdl-engine"
+version = "0.1.0"
+description = "独立 WDL 执行引擎：图模型 + in-process asyncio 引擎 + 自带 provider 与节点执行器"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.9",
+    "pyyaml>=6",
+    "httpx>=0.27",
+    "loguru>=0.7",
+    "aiosqlite>=0.19",
+    "aiohttp>=3.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff==0.15.12",
+]
+# 前端构建前提（非 Python 依赖，发包时可再议预构建产物入包）：
+# 需 Node.js + npm；在 wdl/workbench 下 npm install && npm run build，
+# 产物落 wdl/workbench/dist，`wdl serve` 直接静态托管
+
+[project.scripts]
+wdl = "wdl.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM"]

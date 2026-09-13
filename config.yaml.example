@@ -1,0 +1,221 @@
+# coara global configuration example (DEVELOPER reference)
+#
+# END-USER DEFAULTS (shipped in the zip) live ONLY in:
+#   deploy/release/templates/config.yaml
+# Do NOT copy this file into the release bundle. See docs/DEV_VS_USER.md.
+#
+# For a user-identical COARA_HOME, copy from deploy/release/templates/ instead.
+# Copy to <coara_home>/system/config.yaml when using this richer example locally.
+#
+# coara_home: "D:/coara"   # optional; or set COARA_HOME
+# Matrix: PC ↔ local GoMatrix; phone pairs via the QR on coara WebUI 手机 page (tunnel).
+# Priority: env var > config file > src/cli/product_defaults.py
+#
+# GoMatrix runs as an INDEPENDENT desktop application — coara does NOT auto-start it
+# (except optional ensure_local_gomatrix when connecting).
+#
+# Build GoMatrix: cd gomatrix && go build -o gomatrix.exe ./cmd/gomatrix
+# GoMatrix dashboard: http://127.0.0.1:8008/dashboard/
+matrix:
+  # GoMatrix server domain (used in Matrix user IDs: @user:server_name)
+  server_name: "coara.local"
+  # GoMatrix HTTP port (default 8008)
+  port: 8008
+  # Bot credentials: installer generates a random password into gomatrix.toml
+  # and system\.env; keep this empty — do NOT hard-code a default password.
+  homeserver: "http://127.0.0.1:8008"
+  user: "@coara:coara.local"
+  password: ""
+  # Room id for webhook/event auto_run reports (phone). Optional if you only use `coara --matrix`
+  # and chat from the phone first (last mobile Matrix room is remembered).
+  # notify_room_id: "!abc:coara.local"
+
+# External event sources (webhook listener when coara CLI is running)
+events:
+  webhook_host: "127.0.0.1"
+  webhook_port: 8765
+
+# In-process personal reminders (Root tool: reminder(action=add_once|…))
+reminders:
+  timezone: "Asia/Shanghai"
+  tick_seconds: 1.0
+
+# First-turn environment seed injected into new sessions
+environment:
+  location: "江西赣州信丰"   # shown as "- 地点：…" in the env seed; empty string omits the line
+
+# General settings
+# CLI-only display (does not change Matrix/mobile message delivery)
+cli:
+  stream_assistant: false  # true = 生成时逐字显示；false = 完成后一次性显示。会话内可用 /stream on|off 切换
+
+# vault_enabled: encrypted personal vault via vault tool (credentials + documents)
+# Master password: COARA_VAULT_PASSWORD in .env (see .env.example) — auto-unlock on coara startup.
+# No CLI unlock command. Remote/mobile: enter password in Matrix chat card when Agent needs vault.
+vault_enabled: true
+skills_enabled: true
+# Default skills injected into Root system prompt (empty = none; use skill tool)
+skills:
+  default_include: []   # list 的 [default] 标签 + Dashboard 勾选；不预注入 system prompt
+  default_exclude: []   # applied after include
+
+# Local records (Markdown under users/default/records/{agent,user}/).
+# records.enabled = agent write switch (janitor/daily); change via config assistant, then restart.
+records:
+  enabled: true
+  default_ttl_days: 180
+  daily_curator_enabled: true
+  curator_timezone: Asia/Shanghai
+
+log_level: "INFO"
+
+# CLI 配色主题：dark（默认）/ light；聊天内 /theme 可切换；
+# 环境变量 COARA_CLI_THEME 可覆盖此项
+cli:
+  theme: "dark"
+
+# LLM output truncation recovery (when finish_reason=max_tokens/length)
+output_truncation:
+  enabled: true
+  default_policy: force_tool   # force_tool | auto_continue | warn_only
+  max_continuations: 3         # auto_continue only
+  long_text_threshold_chars: 4000
+  output_token_ratio: 0.98     # treat as truncated when output_tokens >= ratio * max_tokens
+
+# LLM 请求超时：读超时约束「两次 socket 读之间」的最长间隔（滴漏式响应挡不住）；
+# 总预算是单次调用全程硬上限（含连接/首字节/流式消费/重试），超限即中止并报错，
+# 不会无限等待（大上下文慢响应可适当调大）
+llm:
+  request_timeout_seconds: 300
+  total_timeout_seconds: 300
+
+# Runtime enhancements (M1): tool output spill + rules glob
+# Usage accounting: append-only JSONL via background writer (hot path = queue only)
+# Query offline: coara usage summary | coara usage session <id>
+usage:
+  enabled: true
+  max_queue: 8192
+
+# web_search: auto-mode RRF freshness weight (see src/tools/builtin/web/README.md)
+web_search:
+  freshness_rrf_weight: 0.08
+
+# web_fetch policy: dedup, per-session/domain limits, low-quality rejection
+web_fetch:
+  enabled: true
+  max_per_session: 25
+  max_per_domain: 6
+  min_quality_score: 0.18
+  min_meaningful_chars: 120
+  skip_duplicate_url: true
+
+# Provider content moderation: block risky domains at web_fetch/web_search ingress;
+# on MiniMax 1026/1027, strip external tool results from context and retry LLM.
+content_policy:
+  enabled: true
+  block_domains:
+    - ntdtv.com
+  llm_recovery_enabled: true
+  llm_recovery_providers:
+    - minimax
+  max_llm_recovery_strips: 2
+
+session:
+  # Keep in sync with Android SessionInactivityTracker.AUTO_NEW_SESSION_MS (2 hours).
+  idle_timeout_seconds: 7200   # auto /new after 2 hours without a user message; 0 = disable
+  idle_check_interval_seconds: 60
+  # Optional: pin janitor (ws.md overview writer) to a specific provider/model.
+  # Empty / omitted = follow the foreground Root provider.
+  # janitor_provider: kimi
+  # janitor_model: k3
+  # Min interval between janitor runs per workspace; triggers inside the window
+  # are deferred (latest snapshot wins), never dropped. 0 = no cooldown.
+  janitor_min_interval_seconds: 600
+
+# 主会话工具开关：disabled 列表内的工具不注入 prompt 且执行被拒（实验/裁剪用）。
+# 例：停用 delete → disabled: [delete]
+tools:
+  disabled: []
+
+runtime_enhancements:
+  tool_output_store:
+    enabled: true
+    spill_threshold_bytes: 25000      # global default (Qwen-aligned)
+    batch_budget_bytes: 200000         # per LLM tool-call batch cap; 0=disable
+    preview_head_chars: 2000
+    preview_tail_chars: 8000
+    # tool_thresholds:                  # optional overrides by tool name
+    #   workflow: 32000
+    retention_days: 30
+  rules_glob:
+    enabled: true
+    max_total_chars: 8000
+    max_rule_chars: 2000
+  shell_notify:
+    enabled: true
+    default_debounce_ms: 5000
+    default_max_notifications: 3
+
+# ------------------------------------------------------------------------------
+# Security configuration
+# ------------------------------------------------------------------------------
+security:
+  # Matrix user IDs that are treated as "owner" (trusted local user).
+  # Messages from other senders are treated as "untrusted" and run inside
+  # the execution sandbox.
+  owner_matrix_ids:
+    - "@alice:coara.local"
+
+  # Call-layer policy: which tools are considered approval-worthy.
+  # Approval is binary: a prompt is shown when EITHER condition is true:
+  #   1. The tool declares approval via `requires_approval` (staticmethod on
+  #      the tool class, e.g. shell sudo/mkfs/dd, vault write/forget, etc.),
+  #      OR the tool name is listed in `call_policy.prompt` below.
+  #   2. The LLM explicitly requests approval via require_approval: true.
+  # Only `prompt` and `auto_allow` keys are consumed.
+  call_policy:
+    prompt: []
+    auto_allow: []
+
+  # Execution sandbox: hard boundaries applied to untrusted callers only.
+  # These rules are NOT applied to owner context (local CLI).
+  sandbox:
+    enabled_for_untrusted: true
+
+    # Commands blocked for untrusted callers (exact match or prefix match)
+    blocked_commands:
+      - "rm"
+      - "sudo"
+      - "chmod"
+      - "chown"
+      - "mkfs"
+      - "dd"
+      - "shutdown"
+      - "reboot"
+
+    # Paths blocked for untrusted callers (exact match or glob)
+    blocked_paths:
+      - "/etc/*"
+      - "/usr/local/etc/*"
+      - "C:\\Windows\\*"
+      - "/var/log/*"
+
+    # Network hosts blocked for untrusted callers
+    blocked_hosts:
+      - "192.168.*"
+      - "10.*"
+      - "127.0.0.1"
+      - "169.254.169.254"
+      - "metadata.google.internal"
+
+    # Environment variables sanitized before passing to child processes
+    # spawned by untrusted callers.
+    blocked_env:
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - DATABASE_URL
+      - "*TOKEN*"
+      - "*SECRET*"
+      - "*PASSWORD*"

@@ -1,0 +1,40 @@
+{
+  "name": "coara-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "predev": "node sync-loading-phrases.mjs",
+    "dev": "vite",
+    "prebuild": "node sync-loading-phrases.mjs && node scripts/check-tokens.mjs --fail",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test:paths": "tsx src/lib/pathDetect.selftest.ts",
+    "check:tokens": "node scripts/check-tokens.mjs",
+    "check:tokens:gate": "node scripts/check-tokens.mjs --fail",
+    "test:store": "tsx src/lib/store.selftest.ts",
+    "test:tree": "tsx src/lib/subagentTree.selftest.ts"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.5.2",
+    "antd": "^5.22.0",
+    "katex": "^0.17.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "react-router-dom": "^6.28.0",
+    "rehype-highlight": "^7.0.1",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.0",
+    "remark-math": "^6.0.0",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

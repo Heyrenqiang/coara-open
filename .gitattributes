@@ -1,0 +1,2 @@
+# Shell scripts must use LF for WSL/Linux.
+deploy/release/*.sh text eol=lf

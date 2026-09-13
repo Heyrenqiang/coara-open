@@ -1,0 +1,16 @@
+agent:
+  name: config-assistant
+  role: 配置助手
+  when_to_use: >-
+    WebUI 配置页面专属会话主体；帮用户用自然语言管理 coara 配置，含模型提供者、
+    常规项），不经 delegate 委派，由配置模块直接加载
+  tools:
+    include:
+      - read
+      - write
+      - edit
+      - grep
+      - glob
+  skills:
+    include: []
+    exclude: []

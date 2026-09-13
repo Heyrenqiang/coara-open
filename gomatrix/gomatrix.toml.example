@@ -1,0 +1,49 @@
+server_name = "coara.local"
+database_path = "./gomatrix.db"
+address = "127.0.0.1"
+port = 8008
+allow_registration = false
+# The local dashboard issues one-time, five-minute registration tickets in QR
+# codes when registration is enabled. Do not share a pairing QR publicly.
+# WARNING: allow_encryption=false stores all room messages as PLAINTEXT in the
+# database. Only disable encryption for local development or testing.
+allow_encryption = false
+default_room_version = "10"
+media_path = "./media"
+log_level = "info"
+
+# Cloudflare tunnel — exposes GoMatrix to the public internet for coara App.
+# Requires cloudflared: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+# quick = temporary https://*.trycloudflare.com (URL changes on restart)
+# named = fixed hostname (requires token + public_url from Cloudflare Zero Trust)
+[tunnel]
+enabled = true
+mode = "quick"
+# token = ""
+# public_url = "https://matrix.example.com"
+# binary_path = ""
+
+# Rate limiting for /login and /register: a per source IP + account name
+# bucket plus a coarser aggregate bucket per source IP (ip_per_minute), so
+# rotating account names cannot mint fresh buckets; both buckets must pass.
+# 429 + Retry-After when exceeded. /sync long polling and all other routes
+# are never limited. Set enabled = false (or a non-positive quota) to disable.
+[rate_limit]
+enabled = true
+login_per_minute = 10
+register_per_minute = 5
+ip_per_minute = 30
+burst = 3
+
+# 手机扫码配对固定账号（可选）：password 非空时配对二维码携带该凭据，
+# 手机重装/重扫后找回同一账号与房间历史；启动时确保账号存在并以此为准重置密码。
+# 留空 password 则禁用，App 退回随机注册账号。
+# [pairing]
+# username = "phone"
+# password = ""
+
+[[agents]]
+name = "coara"
+password = ""
+display_name = "coara"
+default = true

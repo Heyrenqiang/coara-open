@@ -1,0 +1,456 @@
+/* 中西文同栈：Latin 字体在前（英文走 system-ui/Segoe UI），中文回退到苹方／
+   雅黑，两族字面高度接近——混排时英文不再比中文显得小一号。 */
+:root {
+  font-family:
+    system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC",
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji";
+  color: var(--coara-text);
+  background: var(--coara-surface);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--coara-surface);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ---- coara 设计令牌 ----
+   令牌已收敛到单一真源：src/theme/tokens.ts
+   （antd 主题与 :root CSS 变量均由该文件派生，运行时注入，勿在此重复定义，
+     否则又回到"双真源漂移"。）
+   样式表继续用 var(--coara-*) 引用即可。设计约定见 docs/Web设计体系.md。
+   对齐 Android coara app：单色灰阶、助手气泡无视觉边界、用户气泡浅灰、
+   正文 15px / 行高 20px（与 app L1 一致）。
+*/
+
+/* ---- Chat message markdown rendering ----
+   字号体系对齐 coara app:
+   L1 body: 15/20  气泡、输入、Markdown 段落
+   L2 secondary: 14/18  围栏代码块
+   L3 caption: 12/16  暂未在 web 使用
+*/
+.chat-markdown {
+  font-size: 15px;
+  /* 行高按中文段落定 1.6（汉字字面方正、密度高，1.5 在整段中文里发闷）；
+     不加 letter-spacing：中文字距靠字体本身，人为加宽只会让英文变稀疏、
+     中英观感不一致。 */
+  line-height: 1.6;
+  overflow-wrap: break-word;
+  word-break: normal;
+  /* 中文标点不落行首（避头尾） */
+  line-break: strict;
+}
+
+/* 段落两端对齐、最后一行自然左对齐：中文字距拉伸交给表意文字算法，
+   避免逐字均摊造成的「字间开洞」；text-wrap: pretty 让断行做全局取舍，
+   少出现「末尾只剩一两个字」的秃尾行（新引擎生效，旧引擎自动忽略）。 */
+.chat-markdown p {
+  margin: 0 0 12px;
+  text-align: justify;
+  text-justify: inter-ideograph;
+  text-wrap: pretty;
+}
+
+.chat-markdown p:last-child {
+  margin-bottom: 0;
+}
+
+/* 代码块：单一底色、零边框、零阴影（原先「外框 + 底色 + 标题条」三层装饰
+   叠加，一屏里出现好几个方块，是视觉杂乱的主要来源）。 */
+.chat-markdown pre {
+  background: var(--coara-code-bg);
+  border: none;
+  border-radius: 4px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* 代码块带语言标签 + 复制按钮的容器 */
+.codeblock {
+  margin: 12px 0;
+  border: none;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--coara-code-bg);
+}
+.codeblock pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  padding-top: 6px;
+}
+.codeblock-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px 0;
+  background: transparent;
+  border-bottom: none;
+  font-size: 11px;
+  color: var(--coara-text-muted);
+}
+.codeblock-lang {
+  text-transform: lowercase;
+  font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+}
+.codeblock-copy {
+  border: none;
+  background: transparent;
+  color: var(--coara-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.codeblock-copy:hover {
+  color: var(--coara-brand);
+  background: var(--coara-accent-wash);
+}
+
+/* 行内代码：只留极浅底 + 跟随正文字号（0.92em），无边框无阴影——
+   中英混排时不再出现「这几个字突然大一号、还带个方块」的跳变。 */
+.chat-markdown code {
+  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Microsoft YaHei", monospace;
+  font-size: 0.92em;
+}
+
+.chat-markdown :not(pre) > code {
+  background: var(--coara-code-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  padding-left: 22px;
+  margin-bottom: 12px;
+}
+
+.chat-markdown li {
+  margin-bottom: 4px;
+}
+
+.chat-markdown blockquote {
+  border-left: 3px solid var(--coara-border);
+  padding-left: 12px;
+  color: var(--coara-text-muted);
+  margin: 12px 0;
+}
+
+.chat-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+/* 表格只留行分隔线：去掉全网格线与斑马纹——格子套格子是另一个「五花八门」
+   的来源，行线已足够读表。 */
+.chat-markdown th,
+.chat-markdown td {
+  border: none;
+  border-bottom: 1px solid var(--coara-border-soft);
+  padding: 6px 12px 6px 0;
+  text-align: left;
+}
+
+.chat-markdown th {
+  background: transparent;
+  border-bottom-color: var(--coara-border);
+  font-weight: 600;
+}
+
+.chat-markdown a {
+  color: var(--coara-link);
+  text-decoration: none;
+}
+
+.chat-markdown a:hover {
+  text-decoration: underline;
+}
+
+.chat-markdown img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+/* Outbound files from send_file (images / video / download chips). */
+.chat-message-files {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  max-width: 100%;
+}
+
+.chat-file-media {
+  margin: 0;
+  max-width: min(100%, 520px);
+}
+
+.chat-file-media img,
+.chat-file-media video {
+  display: block;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--coara-border-soft);
+  background: var(--coara-bg-subtle);
+}
+
+.chat-file-media audio {
+  width: 100%;
+  max-width: 420px;
+}
+
+.chat-file-media figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--coara-text-muted);
+  line-height: 1.4;
+}
+
+.chat-file-download {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: min(100%, 420px);
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--coara-border-soft);
+  background: var(--coara-bg-subtle);
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-file-download:hover {
+  border-color: var(--coara-link);
+}
+
+.chat-file-download-name {
+  font-size: 14px;
+  font-weight: 550;
+  word-break: break-all;
+}
+
+.chat-file-download-meta {
+  font-size: 12px;
+  color: var(--coara-text-muted);
+}
+
+/* Horizontal rule — 短虚线居中，作为温和的分段标记 */
+.chat-markdown hr {
+  border: none;
+  border-top: 1px dashed var(--coara-border-soft);
+  width: 80px;
+  margin: 20px auto;
+}
+
+/* 工具行运行中的 spinner（delegate 等长耗时工具：行首旋转，结束换成 ✓/✗）。 */
+@keyframes coara-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.coara-spin {
+  display: inline-block;
+  animation: coara-spin 1.2s linear infinite;
+}
+
+/* Headings — 对齐 CLI 的口径：标题不靠行距或空白建立层级。
+   行距与正文同档（inherit），上下留白归零，只有字重与字号在说话——
+   标题因此不再打断正文的阅读节奏。 */
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin: 0;
+  font-weight: 600;
+  line-height: inherit;
+  color: var(--coara-text);
+}
+
+.chat-markdown h1 {
+  font-size: 17px;
+  font-weight: 700;
+  text-wrap: balance;
+}
+
+.chat-markdown h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.chat-markdown h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--coara-text-muted);
+}
+
+/* KaTeX formulas — keep inline math at body size */
+.chat-markdown .katex {
+  font-size: 1.05em;
+}
+
+.chat-markdown .katex-display {
+  margin: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* ---- Chat bubble layout (对齐 coara app) ---- */
+.chat-bubble-user {
+  background: var(--coara-bubble-user);
+  color: var(--coara-text);
+  border-radius: var(--coara-bubble-radius) var(--coara-bubble-radius) var(--coara-bubble-radius) 2px;
+  padding: var(--coara-bubble-pad-v) var(--coara-bubble-pad-h);
+  /* 用户气泡靠右，最大宽度 75%（web 端有侧边栏，不贴屏边）。
+     不用阴影与悬停浮起：气泡靠底色区分即可，投影会让整条流显得脏。 */
+  max-width: 75%;
+  overflow-wrap: break-word;
+}
+
+.chat-bubble-agent {
+  background: var(--coara-bubble-agent);
+  color: var(--coara-text);
+  /* 助手气泡无圆角、无边框、无阴影 — 与背景同色，靠位置区分 */
+  border-radius: 0;
+  padding: var(--coara-bubble-pad-v) var(--coara-bubble-pad-h);
+  /* 助手占满可用宽度（对齐 app 行为） */
+  width: 100%;
+  word-break: break-word;
+}
+
+/* ---- highlight.js theme (单色灰阶适配) ---- */
+.hljs {
+  color: var(--coara-text);
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--coara-text-muted);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type {
+  color: var(--coara-syntax-red);
+}
+
+.hljs-string,
+.hljs-doctag {
+  color: var(--coara-syntax-string);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--coara-syntax-number);
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-attribute {
+  color: var(--coara-syntax-title);
+}
+
+.hljs-variable,
+.hljs-template-variable {
+  color: var(--coara-syntax-variable);
+}
+
+.hljs-built_in,
+.hljs-builtin-name {
+  color: var(--coara-syntax-number);
+}
+
+/* 对话页消息列表：隐藏滚动条（保留滚动功能），观感更干净 */
+.chat-scroll-nobar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge legacy */
+}
+.chat-scroll-nobar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--coara-scroll-thumb);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--coara-scroll-thumb-hover);
+}
+
+/* ---- Ant Design 微调：更柔和的菜单和按钮 ---- */
+.ant-menu-light .ant-menu-item-selected {
+  background: var(--coara-accent-subtle) !important;
+  color: var(--coara-accent) !important;
+}
+
+.ant-btn-primary {
+  box-shadow: var(--coara-shadow-primary);
+}
+
+.ant-btn-primary:hover {
+  box-shadow: var(--coara-shadow-primary-hover);
+}
+
+/* 危险按钮：默认低调灰，hover 时才变红 */
+.ant-btn-dangerous,
+.ant-btn-dangerous.ant-btn-default {
+  color: var(--coara-text-muted);
+  border-color: var(--coara-border-soft);
+  background: transparent;
+  transition: all var(--coara-transition);
+}
+
+.ant-btn-dangerous:hover,
+.ant-btn-dangerous.ant-btn-default:hover {
+  color: var(--coara-error) !important;
+  border-color: var(--coara-error) !important;
+  background: var(--coara-danger-wash) !important;
+}
+
+/* App layout Splitter: keep resize, hide the centered grip “pill” marker. */
+.coara-app-splitter > .ant-splitter-bar .ant-splitter-bar-dragger::after {
+  display: none;
+}
+

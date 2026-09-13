@@ -1,0 +1,22 @@
+name: 内容发布流水线
+description: 选题核验后写初稿，审校定稿，一条 error 兜底边示范重试路由
+nodes:
+  topic-check:
+    task: |-
+      核验给定选题：查时效性与事实基础，给出可写 / 需改题 / 放弃三选一结论与理由。
+      输出结论与要点提示。
+  draft:
+    task: |-
+      依据选题核验结论撰写初稿：结构完整、论点有据、口语化但不轻浮。
+      输出初稿全文。
+  review:
+    task: |-
+      审校初稿：事实核对、逻辑检查、措辞精炼、排版规范。输出定稿全文与修改摘要。
+  topic-rework:
+    task: |-
+      兜底路由：初稿写作失败（如事实不足）时，重新检索补料并改写一版可用的稿子。
+      输出改写稿全文。
+edges:
+  - {from: topic-check, to: draft}
+  - {from: draft, to: review}
+  - {from: draft, to: topic-rework, on: error}

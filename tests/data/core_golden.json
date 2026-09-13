@@ -1,0 +1,725 @@
+[
+  {
+    "label": "线性两节点",
+    "graph_text": "name: linear\nnodes:\n  a:\n    task: A\n  b:\n    task: B\nedges:\n  - from: a\n    to: b\n",
+    "expected": {
+      "nodes": [
+        "a",
+        "b"
+      ],
+      "edges": [
+        [
+          "a",
+          "b",
+          "success"
+        ]
+      ],
+      "name": "linear",
+      "max_activations": 100,
+      "settings": {},
+      "schedule": {
+        "kind": "manual"
+      },
+      "emit": "name: linear\nnodes:\n  a:\n    task: A\n  b:\n    task: B\nedges:\n- from: a\n  to: b\n",
+      "validate": [],
+      "classify": {
+        "('a', 'b', 'success')": "wait"
+      },
+      "activations": [
+        [
+          "a",
+          true,
+          true,
+          100
+        ],
+        [
+          "b",
+          false,
+          true,
+          100
+        ],
+        [
+          "a",
+          "consumed",
+          1,
+          []
+        ],
+        [
+          "b",
+          "consumed",
+          1,
+          [
+            [
+              "a",
+              "r"
+            ]
+          ]
+        ],
+        [
+          "a",
+          "after",
+          false,
+          1
+        ],
+        [
+          "b",
+          "after",
+          false,
+          1
+        ],
+        [
+          "snapshot",
+          {
+            "activations": {
+              "a": 1,
+              "b": 1
+            },
+            "queues": {
+              "('a', 'b', 'success')": []
+            }
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "label": "扇出 + 扇入",
+    "graph_text": "name: fan\nnodes:\n  s:\n    task: S\n  x:\n    task: X\n  y:\n    task: Y\n  e:\n    task: E\nedges:\n  - from: s\n    to: x\n  - from: s\n    to: y\n  - from: x\n    to: e\n  - from: y\n    to: e\n",
+    "expected": {
+      "nodes": [
+        "s",
+        "x",
+        "y",
+        "e"
+      ],
+      "edges": [
+        [
+          "s",
+          "x",
+          "success"
+        ],
+        [
+          "s",
+          "y",
+          "success"
+        ],
+        [
+          "x",
+          "e",
+          "success"
+        ],
+        [
+          "y",
+          "e",
+          "success"
+        ]
+      ],
+      "name": "fan",
+      "max_activations": 100,
+      "settings": {},
+      "schedule": {
+        "kind": "manual"
+      },
+      "emit": "name: fan\nnodes:\n  e:\n    task: E\n  s:\n    task: S\n  x:\n    task: X\n  y:\n    task: Y\nedges:\n- from: s\n  to: x\n- from: s\n  to: y\n- from: x\n  to: e\n- from: y\n  to: e\n",
+      "validate": [],
+      "classify": {
+        "('s', 'x', 'success')": "wait",
+        "('x', 'e', 'success')": "wait",
+        "('s', 'y', 'success')": "wait",
+        "('y', 'e', 'success')": "wait"
+      },
+      "activations": [
+        [
+          "e",
+          false,
+          true,
+          100
+        ],
+        [
+          "s",
+          true,
+          true,
+          100
+        ],
+        [
+          "x",
+          false,
+          true,
+          100
+        ],
+        [
+          "y",
+          false,
+          true,
+          100
+        ],
+        [
+          "s",
+          "consumed",
+          1,
+          []
+        ],
+        [
+          "x",
+          "consumed",
+          1,
+          [
+            [
+              "s",
+              "r"
+            ]
+          ]
+        ],
+        [
+          "y",
+          "consumed",
+          1,
+          [
+            [
+              "s",
+              "r"
+            ]
+          ]
+        ],
+        [
+          "e",
+          "after",
+          true,
+          0
+        ],
+        [
+          "s",
+          "after",
+          false,
+          1
+        ],
+        [
+          "x",
+          "after",
+          false,
+          1
+        ],
+        [
+          "y",
+          "after",
+          false,
+          1
+        ],
+        [
+          "snapshot",
+          {
+            "activations": {
+              "s": 1,
+              "x": 1,
+              "y": 1
+            },
+            "queues": {
+              "('x', 'e', 'success')": [
+                [
+                  "x",
+                  "r"
+                ]
+              ],
+              "('s', 'x', 'success')": [],
+              "('s', 'y', 'success')": [],
+              "('y', 'e', 'success')": [
+                [
+                  "y",
+                  "r"
+                ]
+              ]
+            }
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "label": "one 路由",
+    "graph_text": "name: branch\nnodes:\n  s:\n    task: S\n    routes: one\n  x:\n    task: X\n  y:\n    task: Y\nedges:\n  - from: s\n    to: x\n  - from: s\n    to: y\n",
+    "expected": {
+      "nodes": [
+        "s",
+        "x",
+        "y"
+      ],
+      "edges": [
+        [
+          "s",
+          "x",
+          "success"
+        ],
+        [
+          "s",
+          "y",
+          "success"
+        ]
+      ],
+      "name": "branch",
+      "max_activations": 100,
+      "settings": {},
+      "schedule": {
+        "kind": "manual"
+      },
+      "emit": "name: branch\nnodes:\n  s:\n    task: S\n    routes: one\n  x:\n    task: X\n  y:\n    task: Y\nedges:\n- from: s\n  to: x\n- from: s\n  to: y\n",
+      "validate": [],
+      "classify": {
+        "('s', 'x', 'success')": "wait",
+        "('s', 'y', 'success')": "wait"
+      },
+      "activations": [
+        [
+          "s",
+          true,
+          true,
+          100
+        ],
+        [
+          "x",
+          false,
+          true,
+          100
+        ],
+        [
+          "y",
+          false,
+          true,
+          100
+        ],
+        [
+          "s",
+          "consumed",
+          1,
+          []
+        ],
+        [
+          "x",
+          "consumed",
+          1,
+          [
+            [
+              "s",
+              "r"
+            ]
+          ]
+        ],
+        [
+          "y",
+          "consumed",
+          1,
+          [
+            [
+              "s",
+              "r"
+            ]
+          ]
+        ],
+        [
+          "s",
+          "after",
+          false,
+          1
+        ],
+        [
+          "x",
+          "after",
+          false,
+          1
+        ],
+        [
+          "y",
+          "after",
+          false,
+          1
+        ],
+        [
+          "snapshot",
+          {
+            "activations": {
+              "s": 1,
+              "x": 1,
+              "y": 1
+            },
+            "queues": {
+              "('s', 'x', 'success')": [],
+              "('s', 'y', 'success')": []
+            }
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "label": "回边（循环）",
+    "graph_text": "name: loop\nnodes:\n  a:\n    task: A\n  b:\n    task: B\nedges:\n  - from: a\n    to: b\n  - from: b\n    to: a\n",
+    "expected": {
+      "nodes": [
+        "a",
+        "b"
+      ],
+      "edges": [
+        [
+          "a",
+          "b",
+          "success"
+        ],
+        [
+          "b",
+          "a",
+          "success"
+        ]
+      ],
+      "name": "loop",
+      "max_activations": 100,
+      "settings": {},
+      "schedule": {
+        "kind": "manual"
+      },
+      "emit": "name: loop\nnodes:\n  a:\n    task: A\n  b:\n    task: B\nedges:\n- from: a\n  to: b\n- from: b\n  to: a\n",
+      "validate": [],
+      "classify": {
+        "('a', 'b', 'success')": "wait",
+        "('b', 'a', 'success')": "wait"
+      },
+      "activations": [
+        [
+          "a",
+          false,
+          true,
+          100
+        ],
+        [
+          "b",
+          false,
+          true,
+          100
+        ],
+        [
+          "a",
+          "after",
+          false,
+          0
+        ],
+        [
+          "b",
+          "after",
+          false,
+          0
+        ],
+        [
+          "snapshot",
+          {
+            "activations": {},
+            "queues": {
+              "('b', 'a', 'success')": [],
+              "('a', 'b', 'success')": []
+            }
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "label": "error 边（重试路由）",
+    "graph_text": "name: retry\nnodes:\n  a:\n    task: A\n  b:\n    task: B\nedges:\n  - from: a\n    to: b\n  - from: b\n    to: a\n    on: error\n",
+    "expected": {
+      "nodes": [
+        "a",
+        "b"
+      ],
+      "edges": [
+        [
+          "a",
+          "b",
+          "success"
+        ],
+        [
+          "b",
+          "a",
+          "error"
+        ]
+      ],
+      "name": "retry",
+      "max_activations": 100,
+      "settings": {},
+      "schedule": {
+        "kind": "manual"
+      },
+      "emit": "name: retry\nnodes:\n  a:\n    task: A\n  b:\n    task: B\nedges:\n- from: a\n  to: b\n- from: b\n  to: a\n  'on': error\n",
+      "validate": [],
+      "classify": {
+        "('a', 'b', 'success')": "wait",
+        "('b', 'a', 'error')": "kick"
+      },
+      "activations": [
+        [
+          "a",
+          true,
+          true,
+          100
+        ],
+        [
+          "b",
+          false,
+          true,
+          100
+        ],
+        [
+          "a",
+          "consumed",
+          1,
+          []
+        ],
+        [
+          "b",
+          "consumed",
+          1,
+          [
+            [
+              "a",
+              "r"
+            ]
+          ]
+        ],
+        [
+          "a",
+          "after",
+          false,
+          1
+        ],
+        [
+          "b",
+          "after",
+          false,
+          1
+        ],
+        [
+          "snapshot",
+          {
+            "activations": {
+              "a": 1,
+              "b": 1
+            },
+            "queues": {
+              "('a', 'b', 'success')": [],
+              "('b', 'a', 'error')": [],
+              "('b', 'a', 'success')": [
+                [
+                  "b",
+                  "r"
+                ]
+              ]
+            }
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "label": "模板隐式依赖 + 节点级上限 + tools",
+    "graph_text": "name: tmpl\nnodes:\n  a:\n    task: A\n  b:\n    task: B\n    input: '{{steps.a.text}}'\n    max_activations: 5\n    tools:\n      - read_file\n    provider: p\n    model: m\nedges:\n  - from: a\n    to: b\n",
+    "expected": {
+      "nodes": [
+        "a",
+        "b"
+      ],
+      "edges": [
+        [
+          "a",
+          "b",
+          "success"
+        ]
+      ],
+      "name": "tmpl",
+      "max_activations": 100,
+      "settings": {},
+      "schedule": {
+        "kind": "manual"
+      },
+      "emit": "name: tmpl\nnodes:\n  a:\n    task: A\n  b:\n    task: B\n    input: '{{steps.a.text}}'\n    max_activations: 5\n    provider: p\n    model: m\n    tools:\n    - read_file\nedges:\n- from: a\n  to: b\n",
+      "validate": [],
+      "classify": {
+        "('a', 'b', 'success')": "wait"
+      },
+      "activations": [
+        [
+          "a",
+          true,
+          true,
+          100
+        ],
+        [
+          "b",
+          false,
+          true,
+          5
+        ],
+        [
+          "a",
+          "consumed",
+          1,
+          []
+        ],
+        [
+          "b",
+          "consumed",
+          1,
+          [
+            [
+              "a",
+              "r"
+            ]
+          ]
+        ],
+        [
+          "a",
+          "after",
+          false,
+          1
+        ],
+        [
+          "b",
+          "after",
+          false,
+          1
+        ],
+        [
+          "snapshot",
+          {
+            "activations": {
+              "a": 1,
+              "b": 1
+            },
+            "queues": {
+              "('a', 'b', 'success')": []
+            }
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "label": "图级 settings 与 provider/model",
+    "graph_text": "name: full\nprovider: pp\nmodel: mm\nmax_activations: 7\nsettings:\n  max_tool_rounds: 3\n  shell_timeout: 1.5\nschedule:\n  kind: cron\n  expr: '* * * * *'\ndescription: 描述\nnodes:\n  a:\n    task: A\nedges: []\n",
+    "expected": {
+      "nodes": [
+        "a"
+      ],
+      "edges": [],
+      "name": "full",
+      "max_activations": 7,
+      "settings": {
+        "max_tool_rounds": 3,
+        "shell_timeout": 1.5
+      },
+      "schedule": {
+        "kind": "cron",
+        "expr": "* * * * *"
+      },
+      "emit": "name: full\ndescription: 描述\nprovider: pp\nmodel: mm\nschedule:\n  kind: cron\n  expr: '* * * * *'\nmax_activations: 7\nsettings:\n  max_tool_rounds: 3\n  shell_timeout: 1.5\nnodes:\n  a:\n    task: A\nedges: []\n",
+      "validate": [],
+      "classify": {},
+      "activations": [
+        [
+          "a",
+          true,
+          true,
+          7
+        ],
+        [
+          "a",
+          "consumed",
+          1,
+          []
+        ],
+        [
+          "a",
+          "after",
+          false,
+          1
+        ],
+        [
+          "snapshot",
+          {
+            "activations": {
+              "a": 1
+            },
+            "queues": {}
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "label": "非法：routes 非法 + 边引用不存在",
+    "graph_text": "name: bad\nnodes:\n  a:\n    task: A\n    routes: nope\nedges:\n  - from: a\n    to: ghost\n",
+    "expected": {
+      "nodes": [
+        "a"
+      ],
+      "edges": [
+        [
+          "a",
+          "ghost",
+          "success"
+        ]
+      ],
+      "name": "bad",
+      "max_activations": 100,
+      "settings": {},
+      "schedule": {
+        "kind": "manual"
+      },
+      "emit": "name: bad\nnodes:\n  a:\n    task: A\n    routes: nope\nedges:\n- from: a\n  to: ghost\n",
+      "validate": [
+        [
+          "error",
+          "节点 a routes 非法：nope（all | one）"
+        ],
+        [
+          "error",
+          "边引用不存在的目标节点：ghost"
+        ]
+      ],
+      "classify": {
+        "('a', 'ghost', 'success')": "wait"
+      },
+      "activations": [
+        [
+          "a",
+          true,
+          true,
+          100
+        ],
+        [
+          "a",
+          "consumed",
+          1,
+          []
+        ],
+        [
+          "a",
+          "after",
+          false,
+          1
+        ],
+        [
+          "snapshot",
+          {
+            "activations": {
+              "a": 1
+            },
+            "queues": {
+              "('a', 'ghost', 'success')": [
+                [
+                  "a",
+                  "r"
+                ]
+              ]
+            }
+          }
+        ]
+      ]
+    }
+  }
+]

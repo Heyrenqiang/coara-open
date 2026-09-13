@@ -1,0 +1,190 @@
+{
+  "$schema": "./coara-envelopes.schema.json",
+  "version": 2,
+  "updated": "2026-09-11",
+  "_comment": [
+    "coara 三端（内核 / CLI / Web / Matrix-Android）控制信封协议的单一真源。",
+    "任何一端的信封增减，都改这里，再用 scripts/dev/gen_envelopes.py 重新生成两端常量。",
+    "背景：2026-09-10 手机端显示 [COARA_DIRTREE] 控制帧 —— 服务端删了发端、Android 端",
+    "从未认识该标签且没有未知信封兜底，导致控制帧漏成聊天气泡。此文件即为此类问题的根治。",
+    "2026-09-11 增 role 字段：端上语义（timeline=渲染成时间线条目 / control=消费后隐藏 /",
+    "embedded=内嵌于正文）。此前生成物只有标签集合、没有任何消费方，端上靠「body 形状」",
+    "二次猜信封类型，导致 COARA_TOOL / COARA_DIFF 被当未知信封整类吞掉。"
+  ],
+
+  "conventions": {
+    "naming": "〔[COARA_<TAG>] … [/COARA_<TAG>]〕成对；单边标签见 single_sided",
+    "scan_anchor": "行首锚定（^\\s*\\[COARA_）；正文中提及标签不算信封",
+    "roles": "timeline = 端上渲染成时间线条目（识别一次、按类型隐藏豁免）；control = 端上消费后隐藏；embedded = 内嵌于正文，不单独成条",
+    "unknown_envelope_policy": "凡行首为 [COARA_*] 且不被任何已注册 handler 消费，一律静默吞掉，绝不落为聊天文本/LLM 输入"
+  },
+
+  "envelopes": [
+    {
+      "tag": "COARA_TURN",
+      "role": "control",
+      "direction": "pc_to_phone",
+      "single_sided": true,
+      "purpose": "回合生命周期信号（typing 灯 / chunk_lost 补拉）",
+      "carrier": "m.text",
+      "handlers": { "server": null, "android": "MatrixApiService.parseMessageEvent" }
+    },
+    {
+      "tag": "COARA_TOOL",
+      "role": "timeline",
+      "direction": "pc_to_phone",
+      "single_sided": true,
+      "purpose": "工具行（手机端聊天流里的一行工具调用；send_file / delegate wait 由端上按 web 同规则隐去）。慢工具可先发 running=true 预览，完成帧同 tool_call_id 覆盖",
+      "carrier": "m.text",
+      "handlers": { "server": null, "android": "MatrixApiService.parseMessageEvent" }
+    },
+    {
+      "tag": "COARA_DIFF",
+      "role": "timeline",
+      "direction": "pc_to_phone",
+      "purpose": "工具变更的 diff 卡片",
+      "carrier": "m.text",
+      "handlers": { "server": "response_stream (发送端)", "android": "DiffMessage" }
+    },
+    {
+      "tag": "COARA_SUBAGENT",
+      "role": "timeline",
+      "direction": "pc_to_phone",
+      "single_sided": true,
+      "purpose": "子智能体帧（过程正文 subagent_chunk / 最终结果 subagent_result）：带 parent_tool_call_id，端上折进发起它的 delegate 行，不当主会话气泡",
+      "carrier": "m.text",
+      "handlers": { "server": "response_stream (发送端)", "android": "MatrixApiService.parseMessageEvent" }
+    },
+    {
+      "tag": "COARA_STATUS",
+      "role": "control",
+      "direction": "both",
+      "purpose": "运行状态同步（provider/model/工作空间/session_event）",
+      "carrier": "m.text",
+      "handlers": { "server": "mobile_sync.try_handle_mobile_sync_query", "android": "MobileSyncParser.parseStatus" }
+    },
+    {
+      "tag": "COARA_MODELS",
+      "role": "control",
+      "direction": "both",
+      "purpose": "可用模型列表同步",
+      "carrier": "m.text",
+      "handlers": { "server": "mobile_sync.try_handle_mobile_sync_query", "android": "MobileSyncParser.parseModels" }
+    },
+    {
+      "tag": "COARA_WORKSPACES",
+      "role": "control",
+      "direction": "both",
+      "purpose": "工作空间列表同步",
+      "carrier": "m.text",
+      "handlers": { "server": "mobile_sync.try_handle_mobile_sync_query", "android": "MobileSyncParser.parseWorkspaces" }
+    },
+    {
+      "tag": "COARA_THINKING",
+      "role": "control",
+      "direction": "both",
+      "purpose": "思考强度（thinking level）同步",
+      "carrier": "m.text",
+      "handlers": { "server": "mobile_sync.try_handle_mobile_sync_query", "android": "MobileSyncParser.parseThinking" }
+    },
+    {
+      "tag": "COARA_USAGE",
+      "role": "control",
+      "direction": "both",
+      "purpose": "会话用量摘要同步（token / 费用）",
+      "carrier": "m.text",
+      "handlers": { "server": "mobile_sync.try_handle_mobile_sync_query", "android": "MobileSyncParser.parseUsage" }
+    },
+    {
+      "tag": "COARA_UPDATES",
+      "role": "control",
+      "direction": "pc_to_phone",
+      "purpose": "动态收件箱推送（事项/提醒结果）",
+      "carrier": "m.text",
+      "handlers": { "server": "updates_matrix_sync", "android": "UpdatesSyncParser.parse" }
+    },
+    {
+      "tag": "COARA_UPDATE_ACK",
+      "role": "control",
+      "direction": "phone_to_pc",
+      "purpose": "动态已读/处置回执",
+      "carrier": "m.text",
+      "handlers": { "server": "updates_matrix_sync.is_updates_control_message", "android": "UpdatesSyncParser.parseAck" }
+    },
+    {
+      "tag": "COARA_UPDATE_CMD",
+      "role": "control",
+      "direction": "phone_to_pc",
+      "purpose": "动态操作命令（归档/标记已读等）",
+      "carrier": "m.text",
+      "handlers": { "server": "update_cmd_bridge.is_update_cmd_message", "android": "UpdatesSyncParser.buildUpdateCmd" }
+    },
+    {
+      "tag": "COARA_COLLECT",
+      "role": "control",
+      "direction": "phone_to_pc",
+      "purpose": "收藏请求（文件/链接/文本）",
+      "carrier": "m.text",
+      "handlers": { "server": "collect_bridge.is_collect_message", "android": "ApproveMessage.isCollectMessage" }
+    },
+    {
+      "tag": "COARA_COLLECT_ACK",
+      "role": "control",
+      "direction": "pc_to_phone",
+      "purpose": "收藏回执",
+      "carrier": "m.text",
+      "handlers": { "server": "collect_bridge", "android": "isCollectAckMessage" }
+    },
+    {
+      "tag": "COARA_VAULT",
+      "role": "control",
+      "direction": "pc_to_phone",
+      "purpose": "保险柜口令提示",
+      "carrier": "m.text",
+      "handlers": { "server": "vault_bridge", "android": "MobileSyncParser / ApprovalMessage" }
+    },
+    {
+      "tag": "COARA_VAULT_REPLY",
+      "role": "control",
+      "direction": "phone_to_pc",
+      "purpose": "保险柜口令回填",
+      "carrier": "m.text",
+      "handlers": { "server": "vault_bridge.try_resolve_vault_reply", "android": "isVaultReplyMessage" }
+    },
+    {
+      "tag": "COARA_WORKFLOW_DRAFT",
+      "role": "control",
+      "direction": "pc_to_phone",
+      "purpose": "工作流草案推送",
+      "carrier": "m.text",
+      "handlers": { "server": null, "android": "WorkflowDraft 解析" }
+    },
+    {
+      "tag": "COARA_QUOTE_MXC",
+      "role": "embedded",
+      "direction": "phone_to_pc",
+      "purpose": "引用消息的 mxc 媒体标记",
+      "carrier": "m.text (内嵌于正文)",
+      "embedded": true,
+      "handlers": { "server": null, "android": "ChatQuoteUtil" }
+    }
+  ],
+
+  "deprecated": [
+    {
+      "tag": "COARA_DIRTREE",
+      "removed_in": "40c39da2 (2026-08-08)",
+      "reason": "目录树同步整体移除（服务端 dirtree_sync.py 已删）。该提交信息声称同时删了 Android 端，实际未动 android-app —— 且 Android 端历来没有该标签。若旧 APK 或残留发送方仍在发，两端都必须靠未知信封兜底吞掉。",
+      "handlers": { "server": "is_any_coara_envelope (兜底)", "android": "EnvelopeSpec.isUnrecognizedEnvelope (兜底)" }
+    }
+  ],
+
+  "non_text_protocols": {
+    "_comment": "不走文本信封、而是自定义 msgtype 的结构化事件（文本层不再识别其前缀）。",
+    "items": [
+      { "msgtype": "m.coara.approval", "purpose": "审批请求卡" },
+      { "msgtype": "m.coara.approval_reply", "purpose": "审批回执" },
+      { "msgtype": "m.coara.approval_resolved", "purpose": "审批终态帧（隐藏，驱动本地状态）" }
+    ]
+  }
+}

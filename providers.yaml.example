@@ -1,0 +1,222 @@
+# LLM provider connections (protocol endpoints + credentials)
+#
+# END-USER DEFAULTS (shipped in the zip) live ONLY in:
+#   deploy/release/templates/providers.yaml
+# Do NOT copy this file into the release bundle. See docs/DEV_VS_USER.md.
+#
+# This *.example is for editable/dev setups that want a richer catalog.
+# For a user-identical COARA_HOME, copy from deploy/release/templates/ instead.
+#
+# Best practices (MiniMax + Agnes + DeepSeek + 智谱, 2026-08):
+# - Per-model max_tokens / temperature: set on models.available[] entries below.
+#   /model switches adopt the *target* model's settings (never carry the previous vendor's).
+#   Resolution + hard caps: src/llm/call_defaults.py (Agnes API rejects max_tokens > 65536).
+# - Agnes: OpenAI-compatible. Default base_url https://apihub.agnes-ai.cn/v1
+#   (intl key; same key also works on https://apihub.agnes-ai.com/v1).
+#   Domestic account: https://api.agnes-ai.cn/v1 with domestic key only — do not mix.
+#   Skill CLI follows providers.yaml / AGNES_BASE_URL. Text: agnes-2.5-flash;
+#   /thinking → enable_thinking. Image/video: built-in `agnes_media` tool (原 agnes 技能已并入).
+# - MiniMax (Anthropic-compatible base_url https://api.minimaxi.com/anthropic, recommended):
+#   * temperature: [0, 2], default/recommended 1.0. Lower (0.0-0.3) for deterministic tasks;
+#     keep 1.0 for general chat/tool loops; rarely need > 1.3.
+#   * top_p: [0, 1]; coara auto-sets M3=0.95. Usually leave at default.
+#   * max_tokens: M3 supports up to 512K output tokens. Per-profile:
+#     chat/tools 8192-16384, coding/agentic 16384-65536, long docs up to 131072.
+#   * thinking: coara defaults ON for M3 (thinking={type: adaptive}, sent by
+#     src/llm/vendor_options.py); /thinking off 关闭，/thinking on 恢复。
+#   * coara auto-applies top_p/thinking via src/llm/vendor_options.py.
+# - agent.main max_tokens follows the selected model's available[] / call_defaults entry.
+#
+# See docs/CONFIGURATION.md §3.1 (LLM profiles)
+
+default_profile: agent.main
+# Align with release/templates (end-user default).
+default_provider: minimax
+default_model: MiniMax-M3
+
+providers:
+  # /model list pins deepseek → kimi → zhipu → minimax first (see src/llm/model_catalog.py)
+  deepseek:
+    driver: responses
+    base_url: "https://api.deepseek.com"
+    api_key_env: "DEEPSEEK_API_KEY"
+    default_model: "deepseek-flash"
+    models:
+      default: "deepseek-flash"
+      available:
+        - id: "deepseek-flash"
+          name: "DeepSeek V4.1 Flash"
+          description: "1M context / 384K max output；原生多模态；思考/非思考双模式"
+          function_calling: true
+          vision: true
+          max_tokens: 393216
+          temperature: 1.0
+          pricing:
+            input: 1.5
+            cache_hit: 0.03
+            output: 6.0
+
+  kimi:
+    driver: anthropic
+    base_url: "https://api.kimi.com/coding"
+    api_key_env: "KIMI_API_KEY"
+    max_tokens: 131072
+    default_model: "k3"
+    models:
+      default: "k3"
+      available:
+        - id: "k3"
+          name: "Kimi K3"
+          description: "Kimi K3 旗舰 — 最高 1M 上下文；思考档位 low/high/max。"
+          function_calling: true
+          max_tokens: 131072
+          temperature: 1.0
+          pricing:
+            input: 20.0
+            cache_hit: 2.0
+            output: 100.0
+
+  zhipu:
+    driver: responses
+    # Coding Plan / Codex：https://open.bigmodel.cn/api/v1（wire_api=responses）
+    # Chat Completions 套餐：…/api/coding/paas/v4 + driver openai
+    base_url: "https://open.bigmodel.cn/api/v1"
+    api_key_env: "ZHIPU_API_KEY"
+    max_tokens: 131072
+    default_model: "glm-5.3"
+    models:
+      default: "glm-5.3"
+      available:
+        - id: "glm-5.3"
+          name: "智谱 GLM-5.3"
+          description: "1M context；128K max output；Responses API + reasoning.effort"
+          function_calling: true
+          max_tokens: 131072
+          temperature: 1.0
+          pricing:
+            input: 8.0
+            cache_hit: 2.0
+            output: 28.0
+
+  minimax:
+    driver: anthropic
+    base_url: "https://api.minimaxi.com/anthropic"
+    api_key_env: "ANTHROPIC_API_KEY"
+    # Provider-level ceiling; per-profile/model max_tokens takes precedence.
+    # Model-aware fallback (M3 131072) lives in src/llm/call_defaults.py.
+    max_tokens: 131072
+    default_model: "MiniMax-M3"
+    models:
+      default: "MiniMax-M3"
+      available:
+        - id: "MiniMax-M3"
+          name: "MiniMax M3"
+          description: "1M context; agentic reasoning and coding."
+          function_calling: true
+          max_tokens: 131072
+          temperature: 1.0
+          # ≤512k 输入、标准层、永久五折后（元/百万）。>512k 翻倍；priority ×1.5。
+          # https://platform.minimaxi.com/docs/guides/pricing-paygo
+          pricing:
+            input: 2.10
+            cache_hit: 0.42
+            output: 8.40
+
+  agnes:
+    driver: openai
+    # 国内站（默认）：https://api.agnes-ai.cn/v1（国内 key only）。
+    # 旧国际站 key：apihub.agnes-ai.cn/v1 或 apihub.agnes-ai.com/v1（如需国际站时改用）。
+    base_url: "https://api.agnes-ai.cn/v1"
+    api_key_env: "AGNES_API_KEY"
+    max_tokens: 16384
+    default_model: "agnes-2.5-flash"
+    models:
+      default: "agnes-2.5-flash"
+      available:
+        - id: "agnes-2.5-flash"
+          name: "Agnes 2.5 Flash"
+          description: "Coding / agents / tool calling. /thinking for enable_thinking."
+          function_calling: true
+          max_tokens: 16384
+          temperature: 1.0
+          # 当前免费（标准刊例 $0.03/$0.15）；费用看板记 0。见 https://agnes-ai.com/zh-Hans/docs/agnes-25-flash
+          pricing:
+            input: 0
+            cache_hit: 0
+            output: 0
+
+llm_profiles:
+  agent.main:
+    provider: minimax
+    model: MiniMax-M3
+    max_tokens: 131072
+    temperature: 1.0
+    top_p: 0.95
+  agent.minimax:
+    provider: minimax
+    model: MiniMax-M3
+    # Official MiniMax M3 defaults: temperature=1.0, top_p=0.95.
+    # max_tokens 131072 is coara's practical default for M3 (official ceiling ~512K).
+    max_tokens: 131072
+    temperature: 1.0
+    top_p: 0.95
+  agent.minimax_m3:
+    provider: minimax
+    model: MiniMax-M3
+    # Official MiniMax defaults: temperature=1.0, top_p=0.95 (M3).
+    # max_tokens 131072 is coara's practical default for M3 (official ceiling ~512K).
+    max_tokens: 131072
+    temperature: 1.0
+    top_p: 0.95
+  agent.deepseek:
+    provider: deepseek
+    model: deepseek-flash
+    max_tokens: 393216
+    temperature: 1.0
+  agent.kimi:
+    provider: kimi
+    model: k3
+    max_tokens: 131072
+    temperature: 1.0
+  agent.zhipu:
+    provider: zhipu
+    model: glm-5.3
+    max_tokens: 131072
+    temperature: 1.0
+  agent.agnes:
+    provider: agnes
+    model: agnes-2.5-flash
+    max_tokens: 16384
+    temperature: 1.0
+  agent.web_search:
+    inherit: agent.main
+    max_tokens: 4096
+    temperature: 0.3
+  context.compression:
+    inherit: agent.main
+    max_tokens: 2048
+    temperature: 0.2
+  workflow.node:
+    provider: minimax
+    model: MiniMax-M3
+    max_tokens: 131072
+    temperature: 1.0
+    top_p: 0.95
+
+security:
+  call_policy:
+    auto_allow:
+      - read
+      - grep
+      - glob
+      - web_search
+      - web_fetch
+      - todo
+      - task
+      - delegate
+      - ask_user
+      - skill
+      - workflow
+      - tool
+    prompt_low:
+      - shell

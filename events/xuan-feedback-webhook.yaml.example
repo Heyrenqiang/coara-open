@@ -1,0 +1,22 @@
+# Copy to <workspace>/.coara/matters/definitions/xuan-feedback-webhook.yaml（workspace = 下方 workspace 字段登记的空间）
+
+id: xuan-feedback-webhook
+enabled: false
+kind: webhook
+workspace: 暄
+
+webhook_secret: change-me-in-production
+
+# salience: low / normal / high（high 上浮前台待处理视图）
+# handle:   park（默认，挂住等用户）/ janitor（叫醒管家过目）
+# 旧 trigger_mode 已废弃并被忽略；处置模式只写 handle（缺省 park）
+salience: normal
+handle: park
+priority: normal
+cooldown_seconds: 60
+
+routing_domain: xuan-maintenance
+suggested_delegate: coaras
+
+message_template: |
+  {{details}}

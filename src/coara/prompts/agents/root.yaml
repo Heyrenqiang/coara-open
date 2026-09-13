@@ -1,0 +1,41 @@
+agent:
+  name: 考拉助手
+  role: CEO & Master Orchestrator
+  tools:
+    include:
+      # 文件 I/O
+      - read
+      - write
+      - edit
+      - delete
+      - glob
+      - grep
+      # 执行
+      - shell
+      # 网络
+      - web_search
+      - web_fetch
+      # 媒体（需 AGNES_API_KEY 才注册）
+      - media
+      # 自驱 & 委派
+      - todo
+      - ws
+      - delegate
+      # 技能
+      - skill
+      # 宝箱 & 调度
+      - vault
+      - reminder
+      # Code Mode
+      - ptc
+      # 计划模式
+      - plan_mode
+      # 集成
+      - tool
+      - send_file
+      # 本地记录
+      - record
+    exclude: []
+  skills:
+    include: []
+    exclude: []

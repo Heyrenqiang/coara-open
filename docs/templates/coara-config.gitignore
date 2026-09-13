@@ -1,0 +1,10 @@
+# Machine-local coara config under %COARA_HOME%/system/
+# Copy to <coara_home>/system/.gitignore if you keep that tree in a private git repo.
+
+.env
+config.yaml
+providers.yaml
+config.local.yaml
+llm_preferences.yaml
+
+!.env.example

@@ -1,0 +1,16 @@
+# cron 事件源 — 定时巡检
+# 到点（每工作日 8:00，Asia/Shanghai）产生 cron.tick 事件 → 无条件落 stocks-watch
+# 消息收件箱 → janitor 过目处置（handle: janitor 即醒，或 salience: normal 挂住等你批示）
+# 落盘位置：<workspace>/.coara/matters/definitions/stocks-watch-daily.yaml
+id: stocks-watch-daily
+enabled: true
+kind: cron
+workspace: stocks-watch
+cron: "0 8 * * 1-5"
+salience: normal
+handle: park
+ttl_seconds: 86400
+message_template: |
+  [定时巡检 — {{source_id}}]
+  到点：{{details}}
+  例行拉行情写 brief；无异常可忽略，需要决策的呈阅

@@ -1,0 +1,256 @@
+/* Flow live / workbench styles — 与 workflow editor 同一套 --wf-* design token。 */
+
+/* ── 工作台：顶栏 + 全宽画布 ─────────────────────────────────────────── */
+
+.flow-workbench {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #fff;
+}
+
+.flow-workbench-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+  background: #fff;
+}
+
+.flow-workbench-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.flow-workbench-body-solo .flow-workbench-canvas {
+  width: 100%;
+}
+
+.flow-workbench-canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: #fff;
+}
+
+.flow-workbench-editor {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 左侧草案列表栏 */
+.flow-workbench-drafts {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid #f0f0f0;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.flow-workbench-drafts-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.flow-workbench-drafts-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: #8c8c8c;
+}
+.flow-workbench-drafts-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+}
+.flow-workbench-draft-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #262626;
+}
+.flow-workbench-draft-item:hover {
+  background: #f0f0f0;
+}
+.flow-workbench-draft-item.active {
+  background: #e6f4ff;
+  color: #1677ff;
+}
+.flow-workbench-draft-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.flow-workbench-draft-del {
+  color: #bfbfbf;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.flow-workbench-draft-del:hover {
+  color: #ff4d4f;
+}
+.flow-workbench-drafts.collapsed {
+  width: 40px;
+}
+.flow-workbench-drafts.collapsed .flow-workbench-drafts-head,
+.flow-workbench-drafts.collapsed .flow-workbench-drafts-list {
+  display: none;
+}
+.flow-workbench-drafts-expand {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #8c8c8c;
+  font-size: 16px;
+}
+.flow-workbench-drafts-expand:hover {
+  color: #1677ff;
+}
+
+.flow-workbench-editor > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.flow-live-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--wf-color-bg);
+}
+
+.flow-live-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flow-live-meta {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* ── 节点卡片 ──────────────────────────────────────────────────────── */
+
+.flow-live-node {
+  width: 220px;
+  border-radius: 10px;
+  background: var(--wf-color-bg);
+  border: 1px solid var(--wf-color-border-strong);
+  box-shadow: var(--wf-shadow-card);
+  padding: 10px 12px;
+  font-family: var(--wf-font-family, inherit);
+  transition: box-shadow 0.15s ease;
+}
+
+.flow-live-node:hover {
+  box-shadow: var(--wf-shadow-node-hover);
+}
+
+.flow-live-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.flow-live-node-id {
+  font-family: var(--wf-font-mono, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wf-color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-live-node-status {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1;
+  color: #fff;
+  border-radius: 999px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.flow-live-node-task {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--wf-color-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.flow-live-node-result {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--wf-color-border);
+  font-family: var(--wf-font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--wf-color-text-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.flow-live-node-running {
+  border-color: var(--wf-color-status-running);
+  animation: flow-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes flow-live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.22);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(37, 99, 235, 0);
+  }
+}
+
+.flow-live-node-failed {
+  border-color: var(--wf-color-status-failed);
+}
+
+.flow-live-handle {
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--wf-color-bg);
+  background: var(--wf-color-text-tertiary);
+}

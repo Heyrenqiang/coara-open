@@ -100,7 +100,9 @@ def sdk_client_kwargs(
     kwargs: dict[str, Any] = {
         "api_key": api_key or "",
         "max_retries": 0,
-        "timeout": timeout,
+        # 顶层 timeout 不传：超时已由 http_client 承载（下见 _build_sdk_http_client）。
+        # 新版 anthropic SDK 校验顶层 timeout 只认自家 Timeout 类型，传 httpx.Timeout
+        # 直接 TypeError（CI 曾踩：本地 0.89 宽松放行，runner 拉新版即炸）。
         "default_headers": {"User-Agent": product_user_agent()},
         "http_client": _build_sdk_http_client(client_cls, timeout),
     }

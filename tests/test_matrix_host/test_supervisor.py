@@ -74,7 +74,10 @@ def test_find_binary_missing_returns_none():
 
 
 def test_find_binary_dev_repo_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    exe = tmp_path / "gomatrix" / "gomatrix.exe"
+    import sys
+
+    exe_name = "gomatrix.exe" if sys.platform == "win32" else "gomatrix"
+    exe = tmp_path / "gomatrix" / exe_name
     exe.parent.mkdir(parents=True)
     exe.write_text("x", encoding="utf-8")
     monkeypatch.setattr("src.core.config._repo_root", lambda: tmp_path)

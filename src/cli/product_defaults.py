@@ -1,7 +1,7 @@
 """Product defaults shared by CLI / Matrix connect (end-user install contract).
 
-Keep in sync with ``deploy/gitee/templates/`` and ``install.ps1`` / ``install.sh``.
-Canonical human doc: ``docs/DEV_VS_USER.md`` and ``deploy/gitee/templates/README.md``.
+Keep in sync with ``deploy/official/templates/`` and ``install.ps1`` / ``install.sh``.
+Canonical human doc: ``docs/DEV_VS_USER.md`` and ``deploy/official/templates/README.md``.
 
 These are **product** defaults (what a fresh install expects), not developer-machine paths.
 """

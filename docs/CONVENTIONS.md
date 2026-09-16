@@ -20,7 +20,7 @@
 | 深度架构 | `docs/COARA_ARCHITECTURE.md` | 与代码对齐的实现细节（中文） |
 | 领域模型 | `docs/工作空间与目录.md`、`docs/工作空间动态模型.md`、`docs/工作空间与事项制度.md`、`docs/多工作空间与工作空间动态.md`、`docs/本地记录.md` | 工作空间、动态（updates）、事件源与管家、多工作空间、本地记录 |
 | 用户手册 | `docs/manual/` | 面向用户的 20 章手册（理解向） |
-| 配置 / 运维 | `docs/CONFIGURATION.md`、`docs/DEV_VS_USER.md`、`docs/TUNNELS_SETUP.md` 等 | 可操作的配置与部署；**用户默认只在** `deploy/gitee/templates/` |
+| 配置 / 运维 | `docs/CONFIGURATION.md`、`docs/DEV_VS_USER.md`、`docs/TUNNELS_SETUP.md` 等 | 可操作的配置与部署；**用户默认只在** `deploy/official/templates/` |
 | 工具 / Agent 正文 | `src/tools/builtin/**/*.py`（类 `description`）、`src/coara/prompts/` | LLM 可见描述（随代码走） |
 | Root 上下文（prompt） | `src/coara/prompts/agents/root.md` §上下文说明 / §标签说明 | 标签语义与处理规范 |
 | Root 上下文（实现） | `docs/PROMPT_CACHE_POLICY.md` §上下文消息标签与注入形态 | 注入链路与源码索引（不扩写 prompt） |

@@ -7,7 +7,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("pystray")
+try:
+    import pystray  # noqa: F401
+except Exception as exc:  # Xlib DisplayNameError 等：Linux 无头环境 import 即炸
+    pytest.skip(f"pystray 不可用（无显示环境？）: {exc}", allow_module_level=True)
 
 
 def test_tray_menu_has_quit_not_restart_or_status() -> None:

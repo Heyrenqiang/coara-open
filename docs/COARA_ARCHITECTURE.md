@@ -516,7 +516,7 @@ run_turn_loop 的一轮
 └── 任一命中 → ToolExecutionPolicy.resolve() 弹确认（默认超时 5 分钟）
 ```
 
-**例外（整段跳过审批门）**：`delegate_depth ≥ 1` 的子智能体，以及 `janitor` / `daily`（系统维护）。见 [RELEASE_WORKFLOW.md](../deploy/gitee/RELEASE_WORKFLOW.md) §8。
+**例外（整段跳过审批门）**：`delegate_depth ≥ 1` 的子智能体，以及 `janitor` / `daily`（系统维护）。见 [RELEASE_WORKFLOW.md](../deploy/official/RELEASE_WORKFLOW.md) §8。
 
 工具分离校验与执行：`create_invocation(params)` → `invocation.execute(signal)` → `ToolResult`。
 

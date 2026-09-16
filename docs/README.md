@@ -9,7 +9,7 @@
 
 | 角色 | 路径 |
 |------|------|
-| **部署 / 发版** | [RELEASE_WORKFLOW](../deploy/gitee/RELEASE_WORKFLOW.md) · [DEV_VS_USER](./DEV_VS_USER.md) · [deploy/README](../deploy/README.md) |
+| **部署 / 发版** | [RELEASE_WORKFLOW](../deploy/official/RELEASE_WORKFLOW.md) · [DEV_VS_USER](./DEV_VS_USER.md) · [deploy/README](../deploy/README.md) |
 | 新开发者 | [`../README.md`](../README.md) → [DEV_VS_USER](./DEV_VS_USER.md) → [工作空间与目录](./工作空间与目录.md) → [CONFIGURATION](./CONFIGURATION.md) |
 | **通读系统（推荐）** | [`manual/`](./manual/README.md) 用户手册 20 章 + 附录 |
 | 改代码的 AI | [`AGENTS.md`](../AGENTS.md) · [架构契约](./架构契约.md)（改动前必读） · [COARA_ARCHITECTURE](./COARA_ARCHITECTURE.md) · [技能系统](./技能系统.md) |
@@ -104,7 +104,7 @@
 |------|------|
 | [REMAINING_ISSUES.md](./REMAINING_ISSUES.md) | 剩余问题清单（唯一在册台账）：P0 决策项 1 + P1 问题 7 + 待评估 3 + P3 观察 12（P2 已于 08-20 全部出册） |
 | [PERFORMANCE_REVIEW.md](./archive/PERFORMANCE_REVIEW.md) | **已归档调研快照**（2026-08，行号已漂移）：热路径优化点分级清单 |
-| [templates/](./templates/) | coara Home `system/.gitignore` 模板；**用户默认配置**见 [`../deploy/gitee/templates/`](../deploy/gitee/templates/) |
+| [templates/](./templates/) | coara Home `system/.gitignore` 模板；**用户默认配置**见 [`../deploy/official/templates/`](../deploy/official/templates/) |
 
 ---
 

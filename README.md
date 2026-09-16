@@ -4,8 +4,6 @@
 
 多智能体运行时，个人 AI 助手的内核。Python 3.11+ / asyncio。
 
-> 镜像仓：[Gitee coara-open](https://gitee.com/huang-renqiang_admin/coara-open)（内容一致，主仓在 GitHub）
-
 ## 它是什么
 
 一个无头内核，里面跑多路工作空间、多路会话，经统一输出路由连接多个显示端，

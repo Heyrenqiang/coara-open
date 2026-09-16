@@ -1,12 +1,12 @@
 # 开发机 vs 用户机（配置与发布隔离）
 
-> **发版流程（现行）**：[`deploy/gitee/RELEASE_WORKFLOW.md`](../deploy/gitee/RELEASE_WORKFLOW.md)  
+> **发版流程（现行）**：[`deploy/official/RELEASE_WORKFLOW.md`](../deploy/official/RELEASE_WORKFLOW.md)  
 > 部署入口：[`deploy/README.md`](../deploy/README.md)  
-> 用户默认模板：[`deploy/gitee/templates/`](../deploy/gitee/templates/)
+> 用户默认模板：[`deploy/official/templates/`](../deploy/official/templates/)
 
 ## 一句话
 
-**同一套运行时代码（`src/`）；程序怎么装可以不同；配置/数据必须落在 `COARA_HOME`，且用户默认只来自 `deploy/gitee/templates/`。禁止把本机私货打进安装包。**
+**同一套运行时代码（`src/`）；程序怎么装可以不同；配置/数据必须落在 `COARA_HOME`，且用户默认只来自 `deploy/official/templates/`。禁止把本机私货打进安装包。**
 
 ```text
 ┌──────────────────────────────────────────┐
@@ -54,16 +54,16 @@ YAML（深度合并，**后者覆盖前者**；代码见 `src/core/config.py`）
 
 | 种类 | 路径 | 用途 |
 |------|------|------|
-| **用户默认（唯一进 zip）** | `deploy/gitee/templates/*` | `install.ps1` 首次写入 `COARA_HOME`（已存在则保留，不覆盖） |
-| **开发 example** | 仓库根 `*.example` | editable 安装时人手复制参考；**禁止**被 Build-Release 拷进用户包（`Build-Release.ps1` 只从 `deploy/gitee/templates/` 拷贝） |
+| **用户默认（唯一进 zip）** | `deploy/official/templates/*` | `install.ps1` 首次写入 `COARA_HOME`（已存在则保留，不覆盖） |
+| **开发 example** | 仓库根 `*.example` | editable 安装时人手复制参考；**禁止**被 Build-Release 拷进用户包（`Build-Release.ps1` 只从 `deploy/official/templates/` 拷贝） |
 | **本机私货** | 真实 `config.yaml` / `.env`（gitignore） | 只留在本机；永不提交、永不打进 zip |
 
 ## 发布 vs 本机跑
 
 | 动作 | 谁做 |
 |------|------|
-| `deploy/gitee/Build-Release.ps1` + `Publish-GiteeRelease.ps1` | 开发机发版 → 见 [RELEASE_WORKFLOW.md](../deploy/gitee/RELEASE_WORKFLOW.md) |
-| `install.ps1`（Gitee raw） | 用户 |
+| `deploy/official/Build-Release.ps1` + `Publish-Official.ps1` | 开发机发版 → 见 [RELEASE_WORKFLOW.md](../deploy/official/RELEASE_WORKFLOW.md) |
+| `install.ps1` / `install.sh`（coara.top） | 用户 |
 | `pip install -e` | 仅开发机本地跑；**不是**用户路径 |
 
 ## 验收「新用户」时怎么测（最佳实践）
@@ -82,12 +82,12 @@ $env:COARA_HOME = "$env:USERPROFILE\coara-fresh-test"
 
 | 脚本 | 用途 |
 |------|------|
-| Gitee `install.ps1`（母本 `deploy/gitee/install.ps1`） | **用户正式路径** |
+| coara.top `install.ps1`（母本 `deploy/official/install.ps1`） | **用户正式路径** |
 | `pip install -e ".[dev]"` | 仅开发机 |
 
 ## 改默认时的检查清单
 
-- [ ] 改 `deploy/gitee/templates/` 对应文件（`config.yaml` / `providers.yaml` / `env.example`）
+- [ ] 改 `deploy/official/templates/` 对应文件（`config.yaml` / `providers.yaml` / `env.example`）
 - [ ] 改 `src/cli/product_defaults.py`（Matrix 服务器名/端口/机器人账号、默认 provider）——与 templates、install.ps1 保持同步
 - [ ] 改 `install.ps1` 里 `gomatrix.toml` 生成段（若涉及 Matrix 默认值）
 - [ ] 仓库根 `*.example` 头部注释仍指向本隔离规则（内容可更丰富，但默认 provider 勿与用户模板冲突）

@@ -82,13 +82,11 @@ def check_and_stage_update() -> dict[str, Any] | None:
     if not remote_hash or not name or remote_hash == str(current["sha256"]).lower():
         return None
 
-    # manifest.json 在仓库 raw，附件在 Release：url = releases/download/<tag>/<name>。
-    tag = version if version.startswith("v") else f"v{version}"
-    # https://gitee.com/<owner>/<repo>/raw/master/manifest.json → 仓库基址
-    repo_base = str(current["manifest_url"]).split("/raw/", 1)[0]
+    # 附件与 manifest 同目录（coara.top 站点根）：url = <manifest 目录>/<name>。
+    base_url = str(current["manifest_url"]).rsplit("/", 1)[0] + "/"
 
     def _download(name_: str, expect_hash: str) -> Path | None:
-        url_ = f"{repo_base}/releases/download/{tag}/{name_}"
+        url_ = base_url + name_
         tmp = Path(tempfile.gettempdir()) / name_
         try:
             if not (tmp.is_file() and _sha256(tmp) == expect_hash):

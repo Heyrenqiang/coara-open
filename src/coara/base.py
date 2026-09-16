@@ -179,8 +179,13 @@ def _route_tool_frame(coara: Any, frame: dict[str, Any], *, payload: dict[str, A
     子智能体产生的帧带 ``parent_tool_call_id``（发起它的 delegate 工具行）：
     落带后不进主会话正文流，端上把它折进那条行。主会话自己的帧无此字段。
     """
+    # 归属优先级与正文 chunk 同款：当前注入段 source 优先（mid-turn 跟话开新段
+    # 后工具帧随段切到跟话端），payload 的 source 是 executor 在回合发起端打的
+    # 快照，只作兜底——旧判据拿快照当首选，跟话后工具行就一直留在发起端。
+    segments = getattr(coara, "_segments", None)
     source = (
         str(payload.get("subagent_origin") or "").strip()
+        or str(getattr(segments, "source", "") or "").strip()
         or str(payload.get("source") or "").strip()
         or str(getattr(coara, "_active_turn_source", "") or "")
     )
@@ -194,7 +199,6 @@ def _route_tool_frame(coara: Any, frame: dict[str, Any], *, payload: dict[str, A
     registry = getattr(root, "end_registry", None) if root is not None else None
     if registry is None:
         return
-    segments = getattr(coara, "_segments", None)
     session_id = (
         coara._route_session_id()
         if hasattr(coara, "_route_session_id")

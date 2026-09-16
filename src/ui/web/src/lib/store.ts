@@ -642,7 +642,7 @@ const SIDEBAR_TRACE_TYPES = new Set([
  * 用户输入来自 web → 该回合的所有输出都在 web 端显示；来自 CLI/手机 → 都不显示。
  * 聊天区（user_message/turn_start/turn_end）与工具侧栏（tool_*）一律走这里。
  */
-function isWebSource(source: string | undefined): boolean {
+export function isWebSource(source: string | undefined): boolean {
   return source === "web";
 }
 
@@ -2775,14 +2775,10 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
           if (data.runtime.running === true && isWebSource(turnSrc) && !get().turnActive) {
             set({ turnActive: true, turnStartedAt: get().turnStartedAt ?? Date.now() });
           }
-          // 已误亮（例如旧心跳）：同空间非 web 回合在跑 → 灭掉 Web spinner
-          if (
-            get().turnActive &&
-            data.runtime.running === true &&
-            turnSrc != null &&
-            turnSrc !== "" &&
-            !isWebSource(turnSrc)
-          ) {
+          // 已误亮或归属已切走：turnSrc 不是本端就灭。空段名也算——mid-turn 跟话
+          // 注入后段归属已离开 web，本端 spinner 继续转就是误导（他端占用改由
+          // spinner 行的静态小标识表达，见 TurnSpinner）。
+          if (get().turnActive && data.runtime.running === true && !isWebSource(turnSrc)) {
             set({ turnActive: false, currentTurnId: null, turnStartedAt: null });
           }
           // Detect session change. When the session changes (e.g. CLI ran

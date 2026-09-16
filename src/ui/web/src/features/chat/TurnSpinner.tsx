@@ -11,7 +11,7 @@
  */
 import { useEffect, useState } from "react";
 import { Popconfirm } from "antd";
-import { useStore } from "../../lib/store";
+import { useStore, isWebSource } from "../../lib/store";
 import { getWS } from "../../lib/ws";
 import { currentPhrase, refreshCustomPhrases } from "../../lib/loadingPhrases";
 
@@ -40,8 +40,20 @@ export function TurnSpinner() {
   const turnActive = useStore((s) => s.turnActive);
   const turnStartedAt = useStore((s) => s.turnStartedAt);
   const pendingCommand = useStore((s) => s.pendingCommand);
+  const runtime = useStore((s) => s.runtime);
   const [, setTick] = useState(0);
   const active = turnActive || pendingCommand !== null;
+  // 他端占用：同空间有回合在跑但段归属不在本端（手机端跟话/CLI 同空间发起）。
+  // 主会话被占用不是本端的事，用大 spinner 误导，降级为静态小标识。
+  const remoteSrc = String(runtime?.turn_source ?? "").trim();
+  const remoteBusy =
+    !active && Boolean(runtime?.running) && remoteSrc !== "" && !isWebSource(remoteSrc);
+  const remoteLabel =
+    remoteSrc === "matrix"
+      ? "手机端占用主会话"
+      : remoteSrc.startsWith("cli")
+        ? "CLI 端占用主会话"
+        : "他端占用主会话";
 
   // 统一心跳：驱动旋转帧 + 轮播文案 + 已用时间一起刷新（帧 80ms，文案/计时随帧
   // 重读即可——文案 60s 才变，计时 1s 精度，80ms 重读成本可忽略且实现最简）。
@@ -74,8 +86,7 @@ export function TurnSpinner() {
       }}
     >
       {active ? (
-        (() => {
-          const inner = (
+        (() => {          const inner = (
             <div
               style={{
                 display: "inline-flex",
@@ -126,6 +137,31 @@ export function TurnSpinner() {
             </Popconfirm>
           );
         })()
+      ) : remoteBusy ? (
+        // 他端占用主会话：静态小标识（圆点同形不呼吸 + 灰字），不转圈、不可点停。
+        // 归属不在本端，interrupt 也轮不到这里发。
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            color: "var(--coara-text-muted)",
+            fontSize: 12,
+            userSelect: "none",
+          }}
+        >
+          <span
+            style={{
+              display: "inline-block",
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: "var(--coara-progress)",
+              flexShrink: 0,
+            }}
+          />
+          <span>{remoteLabel}</span>
+        </div>
       ) : null}
     </div>
   );

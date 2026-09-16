@@ -47,7 +47,7 @@ coara v8 是 **Python 优先的多智能体运行时**：asyncio 核心、内置
 | 文件 | 用途 |
 |------|------|
 | `pyproject.toml` | 主构建配置 — setuptools、元数据、依赖、入口点（`coara` → `src.cli.main:cli`）、ruff 与 pytest 工具配置 |
-| `deploy/gitee/templates/` | **最终用户默认唯一真相**（Build-Release 拷进安装包）；`config.yaml.example`/`providers.yaml.example` 仅为开发参考 |
+| `deploy/official/templates/` | **最终用户默认唯一真相**（Build-Release 拷进安装包）；`config.yaml.example`/`providers.yaml.example` 仅为开发参考 |
 | `docs/DEV_VS_USER.md` | 开发机 vs 用户机：公用运行时 / COARA_HOME / 发布隔离 |
 | `llm_preferences.yaml` | `/model` 聊天命令写入，持久化到 `<coara_home>/users/default/`（无 home 时为 `<cwd>/.coara/`） |
 | `<coara_home>/system/config.yaml`、`providers.yaml`、`.env` | 本地生效配置（不入 git；从 templates 复制） |
@@ -240,7 +240,7 @@ python scripts/dev/gen_core_golden.py            # 重新生成 flow 内核语�
 
 ### Web UI 前端构建
 
-`src/ui/static/dist/` **不入 git**。改 `src/ui/web` 后本地预览或发版前需 `cd src/ui/web && npm run build`，然后 hard refresh 浏览器。`deploy/gitee/Build-Release.ps1` 在 dist 过期时自动重建
+`src/ui/static/dist/` **不入 git**。改 `src/ui/web` 后本地预览或发版前需 `cd src/ui/web && npm run build`，然后 hard refresh 浏览器。`deploy/official/Build-Release.ps1` 在 dist 过期时自动重建
 
 ### 类型检查
 
@@ -372,7 +372,7 @@ mypy src/
 ## 配置
 
 1. **环境变量**：`<coara_home>/system/.env` 放 provider API keys 与可选 Matrix/vault 凭据——无需手动创建，首次启动无可用 key 时交互向导自动写入（非交互走 WebUI Providers 面板）；`env.example` 仅为变量参考
-2. **Provider / 全局配置**：从 `deploy/gitee/templates/` 复制 → `<coara_home>/system/providers.yaml` / `config.yaml`（勿把本机私货打进 templates）；用户级覆盖 `users/default/config.yaml`；开发机可选仓根 `config.yaml`/`.env`（覆盖 home，见 `docs/DEV_VS_USER.md`）
+2. **Provider / 全局配置**：从 `deploy/official/templates/` 复制 → `<coara_home>/system/providers.yaml` / `config.yaml`（勿把本机私货打进 templates）；用户级覆盖 `users/default/config.yaml`；开发机可选仓根 `config.yaml`/`.env`（覆盖 home，见 `docs/DEV_VS_USER.md`）
 3. **coara_home 解析**：合并配置 `coara_home` 字段 → `COARA_HOME` env → `<cwd>/.coara`（单工作空间试用）
 4. **上下文模块**（AGENTS.md / 用户规则 / 情境注入）顺序可配置：`<coara_home>/system/context_modules.yaml`（详见 `docs/工作空间概况.md`）
 

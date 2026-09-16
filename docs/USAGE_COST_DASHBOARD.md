@@ -91,7 +91,7 @@ providers:
             output: 6.0
 ```
 
-- 模板 `deploy/gitee/templates/providers.yaml` 给 DeepSeek Flash 填文档依据价
+- 模板 `deploy/official/templates/providers.yaml` 给 DeepSeek Flash 填文档依据价
   （峰谷均值），其余 provider 不预填，避免误导
 - 读取实现：新增 `src/runtime/usage_pricing.py`，从 `config_manager` 构建
   `{provider/model → ModelPricing}` 映射（与聚合的 `model_key = f"{provider}/{model}"` 对齐），

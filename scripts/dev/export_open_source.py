@@ -53,7 +53,7 @@ EXCLUDE_DIRS = (
     "docs/open-source",
     "scripts/soft-copyright",
     "scripts/tunnels",
-    "deploy/gitee",
+    "deploy/official",
     "deploy/checklists",
     "deploy/homepage",
     "deploy/release",
@@ -258,7 +258,7 @@ def _scan(root: Path) -> list[tuple[str, str, int, str]]:
             rows = text.splitlines()
             snippet = rows[line - 1].strip()[:110] if rows else ""
             if "镜像仓" in snippet:
-                continue  # README 有意保留的 Gitee 镜像说明，不算残留
+                continue  # README 曾保留的镜像说明（已按用户要求移除），不算残留
             hits.append((path.relative_to(root).as_posix(), label, line, snippet))
     return hits
 
@@ -268,8 +268,6 @@ README = """# coara
 [![CI](https://github.com/Heyrenqiang/coara-open/actions/workflows/ci.yml/badge.svg)](https://github.com/Heyrenqiang/coara-open/actions/workflows/ci.yml)
 
 多智能体运行时，个人 AI 助手的内核。Python 3.11+ / asyncio。
-
-> 镜像仓：[Gitee coara-open](https://gitee.com/huang-renqiang_admin/coara-open)（内容一致，主仓在 GitHub）
 
 ## 它是什么
 
@@ -406,6 +404,14 @@ def main() -> int:
         encoding="utf-8",
     )
     (target / "LICENSE").write_text(LICENSE, encoding="utf-8")
+    # CI 等开源专属文件的单一真源：docs/open-source/ 下的隐藏目录（.github 等）
+    # 整棵复制——缺了这一步导出会把 .github/workflows 抹掉（09-17 踩过）
+    for hidden in (REPO / "docs" / "open-source").iterdir():
+        if hidden.is_dir() and hidden.name.startswith("."):
+            dest = target / hidden.name
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(hidden, dest)
 
     print(f"\n共复制 {total} 个文件，剔除 {skipped} 个；已写入 README / CONTRIBUTING / LICENSE")
 

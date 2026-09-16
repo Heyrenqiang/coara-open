@@ -4,7 +4,7 @@
 >
 > 最小可运行链路：`.env`（API Key） + `providers.yaml`（模型）→ `coara`
 >
-> **最终用户默认配置唯一真相**：[`deploy/gitee/templates/`](../deploy/gitee/templates/)（进安装包，由 `install.ps1` / `install.sh` 在缺失时写入 `COARA_HOME`）。
+> **最终用户默认配置唯一真相**：[`deploy/official/templates/`](../deploy/official/templates/)（进安装包，由 `install.ps1` / `install.sh` 在缺失时写入 `COARA_HOME`）。
 > **开发机 vs 用户机隔离**：[`DEV_VS_USER.md`](./DEV_VS_USER.md)。
 > 仓库根 `*.example` 仅供 editable 开发参考，**不会**被 Build-Release 拷进用户包。
 >
@@ -84,7 +84,7 @@ copy deploy\release\templates\config.yaml $env:COARA_HOME\system\config.yaml
 
 ## 二、`.env` — 环境变量
 
-`.env` 无需手动创建：首次启动 coara 时若没有可用 key，交互向导会引导粘贴并自动写入（非交互环境走 WebUI 配置页 Providers 面板）。`deploy/gitee/templates/env.example` 与仓根 `.env.example` 仅为可用变量参考。
+`.env` 无需手动创建：首次启动 coara 时若没有可用 key，交互向导会引导粘贴并自动写入（非交互环境走 WebUI 配置页 Providers 面板）。`deploy/official/templates/env.example` 与仓根 `.env.example` 仅为可用变量参考。
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
@@ -114,7 +114,7 @@ copy deploy\release\templates\config.yaml $env:COARA_HOME\system\config.yaml
 
 ## 三、`providers.yaml` — LLM 提供商
 
-结构以用户模板 [`deploy/gitee/templates/providers.yaml`](../deploy/gitee/templates/providers.yaml) 为准（含 `deepseek` / `kimi`(k3) / `zhipu` / `minimax` / `agnes` 和完整 `llm_profiles`）：
+结构以用户模板 [`deploy/official/templates/providers.yaml`](../deploy/official/templates/providers.yaml) 为准（含 `deepseek` / `kimi`(k3) / `zhipu` / `minimax` / `agnes` 和完整 `llm_profiles`）：
 
 ```yaml
 default_profile: agent.main
@@ -246,7 +246,7 @@ session:
 
 ## 四、`config.yaml` — 全局行为
 
-复制 `deploy/gitee/templates/config.yaml` → `<coara_home>/system/config.yaml`（全部可选，不配也有默认值）。用户模板只含 matrix / events / reminders / dashboard / output_truncation / runtime_enhancements / security 的最小集；仓根 `config.yaml.example` 是更全的开发参考。
+复制 `deploy/official/templates/config.yaml` → `<coara_home>/system/config.yaml`（全部可选，不配也有默认值）。用户模板只含 matrix / events / reminders / dashboard / output_truncation / runtime_enhancements / security 的最小集；仓根 `config.yaml.example` 是更全的开发参考。
 
 ### 4.1 顶层通用项
 
@@ -319,7 +319,7 @@ gomatrix.exe            # 无头服务模式（由 coara 托管拉起，无需�
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `webhook_host` | `"127.0.0.1"` | Webhook 监听地址 |
-| `webhook_port` | `8765`（代码默认） | Webhook 监听端口；**用户安装模板改为 `18765`**（`deploy/gitee/templates/config.yaml`），开发机未配时用 8765（隧道脚本 `scripts/tunnels/` 也按 8765） |
+| `webhook_port` | `8765`（代码默认） | Webhook 监听端口；**用户安装模板改为 `18765`**（`deploy/official/templates/config.yaml`），开发机未配时用 8765（隧道脚本 `scripts/tunnels/` 也按 8765） |
 
 Webhook 接收路径：`POST http://<host>:<port>/webhook/<事件源 id>`，另有 `GET /health`。
 
@@ -370,7 +370,7 @@ security:
 
 **旁路**：工具名在 `call_policy.auto_allow` 列表中时，即使命中上述条件也直接放行（同一工具同时在两个名单时 `prompt` 优先）。
 
-**系统维护例外**：`janitor` / `daily` 跳过审批（`tool_policy.py`）。详见 [RELEASE_WORKFLOW.md §8](../deploy/gitee/RELEASE_WORKFLOW.md)。
+**系统维护例外**：`janitor` / `daily` 跳过审批（`tool_policy.py`）。详见 [RELEASE_WORKFLOW.md §8](../deploy/official/RELEASE_WORKFLOW.md)。
 
 ### 4.7.2 各工具的审批触发条件
 

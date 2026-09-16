@@ -1,7 +1,7 @@
 # 外部事件源 — 实现说明与运维手册
 
 > **范围**：`src/event_sources/` 的实现细节 + webhook 反馈闭环的运维步骤。
-> 概念层（多工作空间、动态、Root/janitor）以 [多工作空间与工作空间动态.md](./多工作空间与工作空间动态.md) 为准；存储布局见 [STORAGE_AND_WORKSPACES.md](./STORAGE_AND_WORKSPACES.md)；webhook 公网隧道见 [TUNNELS_SETUP.md](./TUNNELS_SETUP.md)。
+> 概念层（多工作空间、动态、Root/janitor）以 [多工作空间与工作空间动态.md](./多工作空间与工作空间动态.md) 为准；存储布局见 [STORAGE_AND_WORKSPACES.md](./STORAGE_AND_WORKSPACES.md)。
 
 **一句话**：事件源把「外部世界发生的变化」（文件落盘 / 定时扫描发现 / HTTP POST / cron 到点）规范化为统一事件；事件内容**无条件**落所属工作空间的动态收件箱，再按 `salience`（显著性）与 `handle`（park / janitor）决定曝光与处置。
 

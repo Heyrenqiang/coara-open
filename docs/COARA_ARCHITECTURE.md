@@ -95,7 +95,7 @@ src/
 ├── workspace/        # 工作空间注册表、VFS、权限、updates（动态存储）
 └── workflow/         # 工作流内核（core 图模型/serde/semantics）、持久化、触发器、结果投递
 
-tests/  skills/  android-app/  gomatrix/  deploy/  docs/  ref-doc/
+tests/  skills/  gomatrix/  docs/
 ```
 
 ---
@@ -516,7 +516,7 @@ run_turn_loop 的一轮
 └── 任一命中 → ToolExecutionPolicy.resolve() 弹确认（默认超时 5 分钟）
 ```
 
-**例外（整段跳过审批门）**：`delegate_depth ≥ 1` 的子智能体，以及 `janitor` / `daily`（系统维护）。见 [RELEASE_WORKFLOW.md](../deploy/official/RELEASE_WORKFLOW.md) §8。
+**例外（整段跳过审批门）**：`delegate_depth ≥ 1` 的子智能体，以及 `janitor` / `daily`（系统维护）。见 RELEASE_WORKFLOW（闭源仓） §8。
 
 工具分离校验与执行：`create_invocation(params)` → `invocation.execute(signal)` → `ToolResult`。
 

@@ -4,7 +4,7 @@
 >
 > 最小可运行链路：`.env`（API Key） + `providers.yaml`（模型）→ `coara`
 >
-> **最终用户默认配置唯一真相**：[`deploy/official/templates/`](../deploy/official/templates/)（进安装包，由 `install.ps1` / `install.sh` 在缺失时写入 `COARA_HOME`）。
+> **最终用户默认配置唯一真相**：deploy/official/templates/（闭源仓）（进安装包，由 `install.ps1` / `install.sh` 在缺失时写入 `COARA_HOME`）。
 > **开发机 vs 用户机隔离**：[`DEV_VS_USER.md`](./DEV_VS_USER.md)。
 > 仓库根 `*.example` 仅供 editable 开发参考，**不会**被 Build-Release 拷进用户包。
 >
@@ -114,7 +114,7 @@ copy deploy\release\templates\config.yaml $env:COARA_HOME\system\config.yaml
 
 ## 三、`providers.yaml` — LLM 提供商
 
-结构以用户模板 [`deploy/official/templates/providers.yaml`](../deploy/official/templates/providers.yaml) 为准（含 `deepseek` / `kimi`(k3) / `zhipu` / `minimax` / `agnes` 和完整 `llm_profiles`）：
+结构以用户模板 [`providers.yaml.example`](../providers.yaml.example) 为准（含 `deepseek` / `kimi`(k3) / `zhipu` / `minimax` / `agnes` 和完整 `llm_profiles`）：
 
 ```yaml
 default_profile: agent.main
@@ -240,7 +240,7 @@ session:
 | Android | 跟随 Root 的 `last_user_activity_at`（本地镜像） | 同 2h | **不**自行发 `/new`；本地看似超时只拉 status；`session_event=new_session` 推送时画「新会话」分隔线，`workspace_switch` 推送时画「已切换到工作空间 X」分隔线 |
 | Web UI | 无独立计时 | — | 走 Root |
 
-三端共用 Root 上的 `_last_user_activity_at`；手机不得仅凭房间可见消息时间静默 `/new`（否则 CLI 活跃时会被误杀）。详见 [`Android远程控制与输入交互.md`](./Android远程控制与输入交互.md)。
+三端共用 Root 上的 `_last_user_activity_at`；手机不得仅凭房间可见消息时间静默 `/new`（否则 CLI 活跃时会被误杀）。手机端交互细则见闭源仓 App 文档。
 
 ---
 
@@ -370,7 +370,7 @@ security:
 
 **旁路**：工具名在 `call_policy.auto_allow` 列表中时，即使命中上述条件也直接放行（同一工具同时在两个名单时 `prompt` 优先）。
 
-**系统维护例外**：`janitor` / `daily` 跳过审批（`tool_policy.py`）。详见 [RELEASE_WORKFLOW.md §8](../deploy/official/RELEASE_WORKFLOW.md)。
+**系统维护例外**：`janitor` / `daily` 跳过审批（`tool_policy.py`）。详见 RELEASE_WORKFLOW（闭源仓）)。
 
 ### 4.7.2 各工具的审批触发条件
 

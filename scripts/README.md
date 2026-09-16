@@ -31,4 +31,3 @@ scripts/
 | [`dev/`](dev/) | [`dev/README.md`](dev/README.md) |
 | [`examples/`](examples/) | [`examples/README.md`](examples/README.md) |
 | [`soft-copyright/`](soft-copyright/) | [`soft-copyright/README.md`](soft-copyright/README.md) |
-| [`tunnels/`](tunnels/) | [`tunnels/README.md`](tunnels/README.md) · [`../docs/TUNNELS_SETUP.md`](../docs/TUNNELS_SETUP.md) |

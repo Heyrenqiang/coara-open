@@ -290,7 +290,13 @@ def main() -> int:
     args = parser.parse_args()
 
     spec = load_spec()
-    outputs = {PY_OUT: render_python(spec), KT_OUT: render_kotlin(spec)}
+    # android-app 是闭源件：开源版仓库没有该目录时跳过 Kotlin 端生成
+    # （信封真源仍随开源走，Android 侧常量由闭源仓自己的 gen 生成）
+    outputs = {PY_OUT: render_python(spec)}
+    if KT_OUT.parents[7].exists() or KT_OUT.parent.exists():  # android-app 树存在
+        outputs[KT_OUT] = render_kotlin(spec)
+    else:
+        print("提示：android-app 不在本仓库，跳过 Kotlin 端信封常量生成", file=sys.stderr)
 
     drift: list[Path] = []
     for path, content in outputs.items():

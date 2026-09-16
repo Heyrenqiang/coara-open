@@ -9,15 +9,15 @@
 
 | 角色 | 路径 |
 |------|------|
-| **部署 / 发版** | [RELEASE_WORKFLOW](../deploy/official/RELEASE_WORKFLOW.md) · [DEV_VS_USER](./DEV_VS_USER.md) · [deploy/README](../deploy/README.md) |
+| **部署 / 发版** | RELEASE_WORKFLOW（闭源仓） · [DEV_VS_USER](./DEV_VS_USER.md) · deploy/README（闭源仓） |
 | 新开发者 | [`../README.md`](../README.md) → [DEV_VS_USER](./DEV_VS_USER.md) → [工作空间与目录](./工作空间与目录.md) → [CONFIGURATION](./CONFIGURATION.md) |
 | **通读系统（推荐）** | [`manual/`](./manual/README.md) 用户手册 20 章 + 附录 |
 | 改代码的 AI | [`AGENTS.md`](../AGENTS.md) · [架构契约](./架构契约.md)（改动前必读） · [COARA_ARCHITECTURE](./COARA_ARCHITECTURE.md) · [技能系统](./技能系统.md) |
 | 工作空间 / 多工作空间 | [工作空间与目录](./工作空间与目录.md) → [工作空间概况](./工作空间概况.md) → [多工作空间与工作空间动态](./多工作空间与工作空间动态.md) → [工作空间动态模型](./工作空间动态模型.md) |
 | Workflow / 事件源 | [工作空间与事项制度](./工作空间与事项制度.md) · [`./WORKFLOW_SPEC.md`](./WORKFLOW_SPEC.md)（格式权威） · [节点即智能体](./节点即智能体.md) · [wdl 执行引擎](../wdl/README.md) |
 | 事件源 | [WORKSPACE_EVENTS_IMPLEMENTATION](./WORKSPACE_EVENTS_IMPLEMENTATION.md)（运维） · [`../skills/event-source/EVENT_SOURCE_SPEC.md`](../skills/event-source/EVENT_SOURCE_SPEC.md)（智能体配置权威） · 技能 `event-source` |
-| 事件 / webhook 运维 | [WORKSPACE_EVENTS_IMPLEMENTATION](./WORKSPACE_EVENTS_IMPLEMENTATION.md) · [TUNNELS_SETUP](./TUNNELS_SETUP.md) |
-| Android / Matrix 链路 | [MATRIX_APP_LINK](./MATRIX_APP_LINK.md)（通信 Canonical）· [Android远程控制与输入交互](./Android远程控制与输入交互.md) · [`../android-app/README.md`](../android-app/README.md) |
+| 事件 / webhook 运维 | [WORKSPACE_EVENTS_IMPLEMENTATION](./WORKSPACE_EVENTS_IMPLEMENTATION.md) |
+| Android / Matrix 链路 | [MATRIX_APP_LINK](./MATRIX_APP_LINK.md)（通信 Canonical） |
 | 改配置 | [CONFIGURATION](./CONFIGURATION.md)（逐键速查） |
 | 已知问题 | [REMAINING_ISSUES](./REMAINING_ISSUES.md) · [manual/18 §18.9](./manual/18-安全与治理.md)（面向用户的安全限制） |
 
@@ -86,14 +86,12 @@
 | 文档 | 内容 |
 |------|------|
 | [MATRIX_APP_LINK.md](./MATRIX_APP_LINK.md) | **App ↔ PC 通信 Canonical**：架构、消息流、侧信道协议、可靠性语义 |
-| [Android远程控制与输入交互.md](./Android远程控制与输入交互.md) | 手机 slash 命令、输入区手势、Matrix 命令链、Windows 重启 |
 
 ### 运维
 
 | 文档 | 内容 |
 |------|------|
 | [WORKSPACE_EVENTS_IMPLEMENTATION.md](./WORKSPACE_EVENTS_IMPLEMENTATION.md) | 事件源实现与 webhook 反馈闭环运维 |
-| [TUNNELS_SETUP.md](./TUNNELS_SETUP.md) | webhook 公网隧道搭建（cloudflared） |
 | [`../scripts/README.md`](../scripts/README.md) | 仓库脚本总览（dev / examples / soft-copyright / tunnels） |
 | [`../tests/README.md`](../tests/README.md) | pytest 布局与标记（默认 1630 / extended 376 / 全量 2006） |
 | [`../gomatrix/README.md`](../gomatrix/README.md) | GoMatrix homeserver：构建、部署、配置、侧信道 |
@@ -104,7 +102,7 @@
 |------|------|
 | [REMAINING_ISSUES.md](./REMAINING_ISSUES.md) | 剩余问题清单（唯一在册台账）：P0 决策项 1 + P1 问题 7 + 待评估 3 + P3 观察 12（P2 已于 08-20 全部出册） |
 | [PERFORMANCE_REVIEW.md](./archive/PERFORMANCE_REVIEW.md) | **已归档调研快照**（2026-08，行号已漂移）：热路径优化点分级清单 |
-| [templates/](./templates/) | coara Home `system/.gitignore` 模板；**用户默认配置**见 [`../deploy/official/templates/`](../deploy/official/templates/) |
+| [templates/](./templates/) | coara Home `system/.gitignore` 模板；**用户默认配置**见 deploy/official/templates/（闭源仓） |
 
 ---
 
@@ -122,12 +120,8 @@
 
 | 路径 | 说明 |
 |------|------|
-| [`../ref-doc/`](../ref-doc/) | 外部调研、个人笔记 |
-| [`../competition/`](../competition/) | 比赛/商业素材 |
-| [`../软著申请材料/`](../软著申请材料/) | 软著产出 |
-| `skills/*/SKILL.md` | 运行时技能（LLM 可见） |
+| | | | `skills/*/SKILL.md` | 运行时技能（LLM 可见） |
 | `src/tools/builtin/**/*.py` | 工具类 `description`（LLM 可见） |
-| `android-app/docs/` | Android 端专题（如 Markdown 渲染架构） |
 
 ---
 

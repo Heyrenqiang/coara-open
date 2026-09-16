@@ -84,7 +84,6 @@ src/
 
 skills/               # 内置技能包（各含 SKILL.md 入口）
 tests/                # 基于 pytest 的验证，按子系统组织
-android-app/          # Jetpack Compose Android Matrix 客户端（coara App）
 gomatrix/             # GoMatrix — 轻量 Matrix homeserver（纯 Go、SQLite）
 wdl/                  # WDL 软件 — 独立工作流引擎 + 画布工作台（Python 包 wdl + workbench/）
 deploy/               # Windows/Linux 部署；release/ = 局域网一键
@@ -217,7 +216,7 @@ python scripts/dev/gen_envelopes.py            # 重新生成两端信封常量
 python scripts/dev/gen_envelopes.py --check    # 只校验（退出码 1 = 有漂移）
 ```
 
-真源 `docs/protocol/coara-envelopes.json` → `src/matrix_client/envelope_spec.py` + `android-app/.../coara/EnvelopeSpec.kt`。新增/移除信封只改真源一处。
+真源 `docs/protocol/coara-envelopes.json` → `src/matrix_client/envelope_spec.py`。新增/移除信封只改真源一处。
 
 ### 自持 flow 内核漂移校验
 
@@ -356,7 +355,7 @@ mypy src/
 - **coara Home**：设 `coara_home` 配置或 `COARA_HOME` env 后长期数据入全局：`workspaces/<id>/{traces,logs,artifacts,subagents,tool_outputs,usage}`、`system/`、`users/default/`；否则 `<cwd>/.coara`。实时 CLI 绑定 `{coara_home}/runtime/active.json`（Matrix/移动端经此路由）
 - **工作空间切换**（`src/coara/workspace_session.py`、`workspace_state.py`）：每已切入工作空间一个 `WorkspaceSession`（独立 message_history/工具/进程锁）；切换不改 cwd、不 vault-lock；回合中切换：人类/API 不中断进行中回合（`turn_detach.py`），LLM `ws(switch)` 抛 `CoaraRunCancelledError` 并 `strip_ws_switch_tail`；陈旧会话（>7200s）下次切入开新会话
 - **活动计时（易回归）**：基准是**最后一次会话活动**——`record_user_activity` 在 CLI / Web / Matrix 任一端发真实消息时刷新，`record_turn_activity` 在回合结束时刷新；`switch_workspace`、`/new`、空闲自动新会话、纯 slash 与子智能体/后台维护 agent 的 `turn_end` **不得**刷新。回归测试 `tests/test_coara/test_activity_clock_invariant.py`
-- **Matrix（可选）**：GoMatrix 纯 Go homeserver（`gomatrix/`，构建 `cd gomatrix && go build -o gomatrix.exe ./cmd/gomatrix`），coara 托管拉起/看护（adopt-or-spawn）；`matrix-nio` 客户端自动接受邀请；多 agent 共享房间按 `@mention` 路由（`mention_routing.py`）；文件桥 `MatrixFileBridge`；Android Compose 客户端连同一房间（构建见 `android-app/README.md`）
+- **Matrix（可选）**：GoMatrix 纯 Go homeserver（`gomatrix/`，构建 `cd gomatrix && go build -o gomatrix.exe ./cmd/gomatrix`），coara 托管拉起/看护（adopt-or-spawn）；`matrix-nio` 客户端自动接受邀请；多 agent 共享房间按 `@mention` 路由（`mention_routing.py`）；文件桥 `MatrixFileBridge`
 - **Web UI**：`DashboardRestHandlers`（REST）+ `WebServer`（/ws `trace_batch` 实时推送）内嵌同进程；Vite React SPA（`src/ui/web/`）；token 认证。关键优化：trace 100ms 批处理、5s 轻量心跳、订阅 `workspace_switched` EventBus 刷新 trace_store、并行 root 关闭
 - **安全模型**（两层 + 身份分层）：① 调用层 `ToolExecutionPolicy`（`src/agent/tool_policy.py`）——**审批按身份分**：拥有者本人回合（`_is_owner_context` 为真；拿不到身份时按拥有者）**工具静态硬门一律不参与**，只认 LLM 自述 `require_approval: true` 与 `call_policy.prompt` 点名（信任交给模型自决）；对外回合（executor 注入 `trust_level`）硬门全生效——工具声明 `requires_approval`（shell 破坏性基名集合、写类越出挂载）/ LLM 自述 / `call_policy.prompt` 任一命中弹确认，审批送拥有者。5 分钟超时=未执行；`auto_allow` 旁路，`prompt` 优先；子智能体与 janitor/daily 整体跳过（审批只发生在委派边界）；② 执行沙箱 `src/tools/sandbox.py`（仅 `trust_level="untrusted"` 启用）：拦命令/路径/私网 URL、净化环境变量
 - **文件工具安全**：全部要求**绝对路径**；写类越出挂载走人工审批门（delegate 子代理 strict resolver 硬拒）；`resolve_workspace_path()` 拒相对路径/UNC/扩展路径/ADS；`glob`/`grep` 默认 workspace 根；注入检测 `detect_suspicious()` + `wrap_external_content()`

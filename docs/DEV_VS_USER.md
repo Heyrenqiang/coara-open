@@ -1,8 +1,8 @@
 # 开发机 vs 用户机（配置与发布隔离）
 
-> **发版流程（现行）**：[`deploy/official/RELEASE_WORKFLOW.md`](../deploy/official/RELEASE_WORKFLOW.md)  
-> 部署入口：[`deploy/README.md`](../deploy/README.md)  
-> 用户默认模板：[`deploy/official/templates/`](../deploy/official/templates/)
+> **发版流程（现行）**：deploy/official/RELEASE_WORKFLOW.md（闭源仓）  
+> 部署入口：deploy/README（闭源仓）  
+> 用户默认模板：deploy/official/templates/（闭源仓）
 
 ## 一句话
 
@@ -62,7 +62,7 @@ YAML（深度合并，**后者覆盖前者**；代码见 `src/core/config.py`）
 
 | 动作 | 谁做 |
 |------|------|
-| `deploy/official/Build-Release.ps1` + `Publish-Official.ps1` | 开发机发版 → 见 [RELEASE_WORKFLOW.md](../deploy/official/RELEASE_WORKFLOW.md) |
+| `deploy/official/Build-Release.ps1` + `Publish-Official.ps1` | 开发机发版 → 见 RELEASE_WORKFLOW（闭源仓） |
 | `install.ps1` / `install.sh`（coara.top） | 用户 |
 | `pip install -e` | 仅开发机本地跑；**不是**用户路径 |
 

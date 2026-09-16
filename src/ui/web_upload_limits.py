@@ -39,10 +39,11 @@ def sanitize_upload_filename(raw: str) -> str:
     """Normalize an uploaded filename for safe on-disk use on Windows."""
     name = Path(raw.replace("\\", "/")).name.strip()
     stem = name.rstrip(" .")
-    suffix = name[len(stem) :] if stem else ""
     if not stem:
         stem = "upload"
     base = stem.split(".")[0].upper()
     if base in _WIN_RESERVED_NAMES:
         stem = f"_{stem}"
-    return f"{stem}{suffix}"
+    # 只返回 stem：尾部的点/空格剥掉后不再拼回。此前拼回靠 Win32 落盘自动
+    # 剥尾点兜底，Linux 上原样落盘（report.pdf.），两端行为不一致
+    return stem

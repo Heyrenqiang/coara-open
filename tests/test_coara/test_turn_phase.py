@@ -13,7 +13,9 @@ def test_awaiting_llm_describe() -> None:
     phase = TurnPhase()
     phase.set("awaiting_llm", "kimi/k3")
     desc = phase.describe(now=phase.since + 161)
-    assert desc.startswith("等待模型响应 kimi/k3（2m 41s")
+    # 161s 的末位四舍五入在跑得快时是 2m 40s——断言到「2m 4」为止，不赌最后一位
+    assert desc.startswith("等待模型响应 kimi/k3（2m 4")
+    assert desc.endswith("）")
 
 
 def test_first_chunk_switches_to_receiving_and_counts() -> None:

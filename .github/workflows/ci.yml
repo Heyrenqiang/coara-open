@@ -18,6 +18,11 @@ jobs:
       - name: Install
         run: pip install -e ".[dev,office]"
 
+      - name: Git identity for tests
+        run: |
+          git config --global user.name "coara-ci"
+          git config --global user.email "ci@localhost"
+
       - name: Ruff
         run: |
           ruff check .

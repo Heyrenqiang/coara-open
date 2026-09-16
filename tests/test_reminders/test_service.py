@@ -99,7 +99,12 @@ async def test_interval_reminder_reschedules(tmp_path):
     service._store.save(service._records)
     await service.start()
     try:
-        await asyncio.sleep(0.05)
+        # tick 10ms 在 CI 慢 runner 上 asyncio 调度抖动会错过 50ms 窗——轮询等 fire，
+        # 上限 2s，不再赌单次 sleep（17:39 曾在 ubuntu runner 挂 assert 0 == 1）
+        for _ in range(200):
+            if fired:
+                break
+            await asyncio.sleep(0.01)
         assert len(fired) == 1
         rows = await service.list_reminders()
         assert len(rows) == 1

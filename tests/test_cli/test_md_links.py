@@ -313,11 +313,11 @@ def test_win_open_dir_prefers_explorer(monkeypatch, tmp_path) -> None:
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows open strategy")
 def test_win_href_image_under_uploads_roundtrip(monkeypatch, tmp_path) -> None:
-    """``.coara/uploads`` 含 \\u 段：正斜杠 href 解析后仍指向原图。"""
+    """``uploads`` 含 \\u 段：正斜杠 href 解析后仍指向原图。"""
     from src.cli import local_open
 
     monkeypatch.setattr(local_open, "_registered", True)
-    img = tmp_path / ".coara" / "uploads" / "image.png"
+    img = tmp_path / "uploads" / "image.png"
     img.parent.mkdir(parents=True)
     img.write_bytes(b"x")
     href = local_open.href_for_local_path(img)

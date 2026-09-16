@@ -717,7 +717,7 @@ async def maybe_deliver_pending_digest(root: Any) -> bool:
         fe.scrollback_write(notice)
         fe.scrollback_write("")
     except Exception:
-        pass
+        logger.debug("mirror memory digest to frontend scrollback failed (best-effort)", exc_info=True)
 
     # Matrix
     try:
@@ -739,7 +739,7 @@ async def maybe_deliver_pending_digest(root: Any) -> bool:
         loading_phrases.set_custom_phrases_path(agent_dir / loading_phrases.CUSTOM_PHRASES_FILENAME)
         loading_phrases.reshuffle()
     except Exception:
-        pass
+        logger.debug("apply daily custom loading phrases failed (best-effort)", exc_info=True)
     logger.info(f"memory digest delivered for {pending}")
     return True
 

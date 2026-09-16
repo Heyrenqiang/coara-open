@@ -114,6 +114,7 @@ class AttachUI:
             app.output.write_raw(f"\x1b]0;{safe}\x07")
             app.output.flush()
         except Exception:
+            # 有意静默：OSC 0 写终端标题，部分终端不支持属常态，不影响功能
             pass
 
     def _refresh_title_spinner(self) -> None:

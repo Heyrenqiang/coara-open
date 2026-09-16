@@ -27,6 +27,8 @@ import time
 import urllib.parse
 from pathlib import Path
 
+from src.core.workspace_layout import UPLOAD_DIR_NAME
+
 PROTOCOL = "coara-open"
 _B64_PREFIX = "b64:"
 
@@ -215,7 +217,7 @@ def ensure_protocol_registered() -> None:
         winreg.CloseKey(key)
         _registered = True
     except OSError:
-        pass
+        pass  # 注册表写入失败（权限不足等）：协议注册是 best-effort，有意静默
     _ensure_windows_terminal_safe_scheme(PROTOCOL)
     _ensure_windows_terminal_safe_scheme("cursor")
     _ensure_windows_terminal_safe_scheme("vscode")
@@ -244,7 +246,7 @@ def _ensure_windows_terminal_safe_scheme(scheme: str) -> None:
             if updated is not None and updated != text:
                 path.write_text(updated, encoding="utf-8", newline="\n")
         except OSError:
-            continue
+            continue  # 单个 WT settings 读写失败：跳过该文件，其余路径照常尝试
 
 
 _SAFE_SCHEMES_RE = re.compile(
@@ -327,17 +329,17 @@ def _recover_nearby_same_name(path: Path) -> Path | None:
                         seen.add(resolved)
                         hits.append(resolved)
             except OSError:
-                continue
-        # 工作空间下 .coara/uploads
-        for nested in (base / ".coara" / "uploads" / name, base / "uploads" / name):
-            try:
-                if nested.is_file():
-                    resolved = nested.resolve(strict=False)
-                    if resolved not in seen:
-                        seen.add(resolved)
-                        hits.append(resolved)
-            except OSError:
-                continue
+                continue  # 单个候选路径探测失败（坏链接/权限）：跳过继续找
+        # 工作空间下 uploads（端上传来的附件统一落点）
+        nested = base / UPLOAD_DIR_NAME / name
+        try:
+            if nested.is_file():
+                resolved = nested.resolve(strict=False)
+                if resolved not in seen:
+                    seen.add(resolved)
+                    hits.append(resolved)
+        except OSError:
+            pass  # uploads 候选路径探测失败：跳过继续找
     if len(hits) == 1:
         return hits[0]
     return None
@@ -412,7 +414,7 @@ def _open_without_running(path: Path) -> None:
             os.startfile(str(path), "edit")  # type: ignore[attr-defined]
             return
         except OSError:
-            pass
+            pass  # 打开方式回落：edit 动词不可用时落到记事本/资源管理器兜底
         # 最后才记事本；explorer 选中不打开内容
         if _spawn_detached(["notepad.exe", str(path)]):
             return
@@ -437,7 +439,7 @@ def _open_file_best_effort(path: Path) -> None:
             os.startfile(str(path))  # type: ignore[attr-defined]
             return
         except OSError:
-            pass
+            pass  # 打开方式回落：startfile 失败时落到 explorer/选中兜底
         if _spawn_detached(["explorer", str(path)]):
             return
         _explorer_select(path)

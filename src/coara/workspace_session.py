@@ -78,20 +78,20 @@ class WorkspaceSession:
 
         is_internal = getattr(entry, "kind", None) == WorkspaceKind.INTERNAL
 
-        # internal 系统空间：entry.persona 显式指定专属对话主体（如记录空间
-        # persona=daily——条目名是展示名「记录」，对话主体仍是 daily）才查内置
-        # agent 注册表；未指定 persona 的 internal 空间（用量/消息/配置）用 root
-        # 身份对话，展示名不是 agent 名，不可拿去查注册表。
+        # 专属对话主体：条目带 persona 即解析（internal 系统空间如记录 persona=daily；
+        # 创作者空间如工作流 persona=flow-root）。缺省 None = 无专属主体，用 root 身份
+        # 对话（展示名不是 agent 名，不可拿去查注册表）。persona 与 kind 解耦——创作者
+        # 空间是普通用户空间（可移出/可删），但同样要自己的会话主体。
         internal_cfg = None
-        persona_key = ""
-        if is_internal:
-            from src.coara.builtin_agents import get_subagent
+        persona_key = str(getattr(entry, "persona", None) or "").strip()
+        if persona_key:
+            from src.coara.builtin_agents import get_module_persona, get_subagent
 
-            persona_key = str(getattr(entry, "persona", None) or "").strip()
-            if persona_key:
-                internal_cfg = get_subagent(persona_key)
-                if internal_cfg is None:
-                    raise RuntimeError(f"internal workspace '{entry.name}' missing builtin agent config")
+            # 先查 delegate 名单（daily），再查模块 persona 惰性加载器
+            # （flow-root / config-assistant 等：文件齐备即得，不是可委派类型）。
+            internal_cfg = get_subagent(persona_key) or get_module_persona(persona_key)
+            if internal_cfg is None and is_internal:
+                raise RuntimeError(f"internal workspace '{entry.name}' missing builtin agent config")
         coara_name = internal_cfg.name if internal_cfg is not None else root_coara.identity.name
 
         # 创建 CoaraBase 实例（用户空间用 root persona；internal 空间用专属 persona）
@@ -128,8 +128,8 @@ class WorkspaceSession:
             # daily 统筹全部工作空间：不注入单空间环境种子（对齐旧 delegate 语义）
             coara.inject_environment_seed = False
 
-        # 共享 workspace_manager（用于 VFS resolver）
-        coara.workspace_manager = root_coara.workspace_manager
+        # 共享 workspace_manager（用于 VFS resolver）；对等会话镜像 Root 的运行时属性
+        coara.workspace_manager = root_coara.workspace_manager  # type: ignore[attr-defined]
         # 反向引用：压缩成功后经此派 janitor 沉淀（覆盖连续工作不触发 janitor 的盲区）
         coara._root_ref = root_coara
 
@@ -159,7 +159,7 @@ class WorkspaceSession:
             logger.warning(f"Tool gateway registration failed for workspace session {entry.name}: {exc}")
 
         # record 常驻主会话（与 janitor 工具表一致，利于 prompt cache）；local_search 仍挂起。
-        coara.records_store = getattr(root_coara, "records_store", None)
+        coara.records_store = getattr(root_coara, "records_store", None)  # type: ignore[attr-defined]
         if getattr(root_coara, "records_store", None) is not None:
             from src.tools.builtin.records.local_search import LocalSearchTool
             from src.tools.builtin.records.record import RecordTool
@@ -179,7 +179,7 @@ class WorkspaceSession:
 
             # 对等会话不带自己的服务，镜像 Root 的引用——否则工具内
             # get_vault_service(coara) 拿到 None，误报「宝箱未启用」。
-            coara.vault_service = root_coara.vault_service
+            coara.vault_service = root_coara.vault_service  # type: ignore[attr-defined]
             coara.register_tool(VaultTool(parent_coara=coara), replace=True)
         if root_coara.reminder_service is not None:
             from src.tools.builtin.manifest import REMINDER_TOOL_TYPE

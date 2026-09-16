@@ -14,7 +14,7 @@ from typing import Any
 
 from src.coara.commands import execute_command
 
-SendText = Callable[[str], Awaitable[None]]
+SendText = Callable[[str], Awaitable[Any]]
 
 
 class _MatrixRoomChannel:

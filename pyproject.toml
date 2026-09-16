@@ -1,6 +1,6 @@
 [project]
 name = "coara"
-version = "1.0.17"
+version = "1.0.20"
 description = "An AI assistant runtime that can create and organize sub-agents"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,9 +22,8 @@ dependencies = [
     "click>=8.1.0",
     "prompt_toolkit>=3.0.0",
     "questionary>=2.0.0",
-    
+
     # Text Processing
-    "tokenizers>=0.20.0",
     "pygments>=2.18.0",
     "python-frontmatter>=1.1.0",
     "trafilatura>=2.0.0",

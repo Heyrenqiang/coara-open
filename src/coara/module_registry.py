@@ -109,8 +109,10 @@ module_registry = ModuleRegistry()
 def _register_builtin_modules() -> None:
     """注册内置模块。对话/消息/文件/发布/工作流/记录/用量/配置。
 
-    当前仅声明元数据与工作空间关系；agentic 能力按阶段逐个开启
-    （阶段 1 仅工作流 workflow 有 agentic 会话，即原 FlowChat）。
+    系统空间（消息/记录/用量/配置/工作流）均有 agentic 专属会话与 persona；
+    工作流以「示例工作空间」身份在册——与其它系统空间同构（persona + 专属
+    画布页面），是出厂自带的参考实现。执行层不在内核：WDL 实例运行由独立
+    wdl 软件承载。
     「LLM 请求」已移入独立开发者工具（src/devtools · coara-devtools），不进发布版。
     """
     module_registry.register(
@@ -131,6 +133,13 @@ def _register_builtin_modules() -> None:
             route="/review",
             workspace_relation="filterable",
             order=10,
+            agentic=AgenticSpec(
+                enabled=True,
+                persona_agent="review-assistant",
+                role="消息助手",
+                expertise_areas=("workspace updates", "triage", "summary"),
+                subject="review",
+            ),
         )
     )
     module_registry.register(
@@ -169,6 +178,13 @@ def _register_builtin_modules() -> None:
             route="/records",
             workspace_relation="filterable",
             order=50,
+            agentic=AgenticSpec(
+                enabled=True,
+                persona_agent="records-assistant",
+                role="记录助手",
+                expertise_areas=("records search", "digest", "summary"),
+                subject="records",
+            ),
         )
     )
     module_registry.register(
@@ -179,6 +195,13 @@ def _register_builtin_modules() -> None:
             route="/usage",
             workspace_relation="filterable",
             order=60,
+            agentic=AgenticSpec(
+                enabled=True,
+                persona_agent="usage-assistant",
+                role="用量助手",
+                expertise_areas=("usage analytics", "cost", "model distribution"),
+                subject="usage",
+            ),
         )
     )
     module_registry.register(

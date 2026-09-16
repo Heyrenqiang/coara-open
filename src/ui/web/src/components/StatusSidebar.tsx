@@ -1,18 +1,10 @@
-import { useMemo } from "react";
-import { useNavigate } from "react-router-dom";
-import { Typography, Divider, Tooltip } from "antd";
+import { Typography, Tooltip } from "antd";
 import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  LoadingOutlined,
-  ToolOutlined,
   ApiOutlined,
   DashboardOutlined,
   DatabaseOutlined,
 } from "@ant-design/icons";
 import { useStore, type RuntimeInfo } from "../lib/store";
-import { extractToolActivity, type ToolActivity } from "../lib/toolActivity";
-import { formatClock } from "../lib/format";
 
 const { Text, Title } = Typography;
 
@@ -89,22 +81,12 @@ function StatusRow({
 /**
  * 对话页右侧状态栏（对话态专属）。
  *
- * 职责边界（见 docs/Web设计体系.md §6.2）：只放「运行状态 / 上下文占用 / 最近工具调用」。
+ * 职责边界（见 docs/Web设计体系.md §6.2）：只放「运行状态 / 上下文占用」。
  * 全局事实（空间身份、连接态）已上移到 ChatView 顶栏——它们在别的页面同样成立，
  * 不该只在对话页可见。宽度可拖拽由 ChatView 负责。
  */
 export function StatusSidebar() {
-  const navigate = useNavigate();
   const runtime = useStore((s) => s.runtime);
-  // Don't subscribe to the full traceEvents array — streaming chat_chunk would
-  // re-render this sidebar on every token. activityEpoch only bumps on tool-ish events.
-  const activityEpoch = useStore((s) => s.activityEpoch);
-  const toolActivityReady = useStore((s) => s.toolActivityReady);
-
-  const toolActivity = useMemo(
-    () => extractToolActivity(useStore.getState().traceEvents),
-    [activityEpoch],
-  );
   const contextParts = formatContextParts(runtime);
 
   return (
@@ -158,126 +140,6 @@ export function StatusSidebar() {
           />
         </div>
       </div>
-
-      <Divider style={{ margin: "4px 0" }} />
-
-      {/* Recent tool activity */}
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <Text type="secondary" style={{ fontSize: 11, fontWeight: 500 }}>
-          最近工具调用
-        </Text>
-        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 8 }}>
-          {!toolActivityReady ? (
-            // hydrate 完成前显示加载占位：避免「暂无工具调用」先闪一下再被真实
-            // 列表替换（与缓存命中率恒渲染占位同一思路——数据晚到不插行不切换）。
-            <Text type="secondary" style={{ fontSize: 12, color: "var(--coara-text-tertiary)" }}>
-              加载中…
-            </Text>
-          ) : toolActivity.length === 0 ? (
-            <Text type="secondary" style={{ fontSize: 12, color: "var(--coara-text-tertiary)" }}>
-              暂无工具调用
-            </Text>
-          ) : (
-            toolActivity.map((tc) => (
-              <ToolActivityRow
-                key={tc.call_id || `${tc.tool}-${tc.timestamp}`}
-                tc={tc}
-                onOpen={() =>
-                  navigate(
-                    "/file?view=tool&call_id=" + encodeURIComponent(tc.call_id || ""),
-                  )
-                }
-              />
-            ))
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ToolActivityRow({ tc, onOpen }: { tc: ToolActivity; onOpen: () => void }) {
-  return (
-    <div
-      style={{
-        padding: "8px 10px",
-        background: "var(--coara-bg-subtle)",
-        borderRadius: 6,
-        fontSize: 12,
-        border: "1px solid var(--coara-border-faint)",
-        cursor: "pointer",
-        transition: "all 0.15s ease",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "var(--coara-bg-subtle)";
-        e.currentTarget.style.borderColor = "var(--coara-border)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "var(--coara-bg-subtle)";
-        e.currentTarget.style.borderColor = "var(--coara-border-faint)";
-      }}
-      onDoubleClick={onOpen}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span
-          style={{
-            minWidth: 18,
-            height: 18,
-            borderRadius: 4,
-            background: "var(--coara-border-muted)",
-            color: "var(--coara-text-strong)",
-            fontSize: 10,
-            fontWeight: 600,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          {tc.turn_number}
-        </span>
-        <ToolOutlined style={{ fontSize: 11, color: "var(--coara-text-muted)" }} />
-        <Text
-          style={{
-            fontSize: 12,
-            fontWeight: 500,
-            color: "var(--coara-text)",
-            flex: 1,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {tc.tool}
-        </Text>
-        <Text type="secondary" style={{ fontSize: 10, color: "var(--coara-text-tertiary)", flexShrink: 0 }}>
-          {formatClock(tc.timestamp)}
-        </Text>
-        {tc.done ? (
-          tc.ok === false ? (
-            <CloseCircleOutlined style={{ color: "var(--coara-error)", fontSize: 12 }} />
-          ) : (
-            <CheckCircleOutlined style={{ color: "var(--coara-success)", fontSize: 12 }} />
-          )
-        ) : (
-          <LoadingOutlined style={{ color: "var(--coara-accent)", fontSize: 12 }} />
-        )}
-      </div>
-      {tc.summary ? (
-        <Text
-          type="secondary"
-          style={{
-            display: "block",
-            fontSize: 11,
-            color: "var(--coara-text-secondary)",
-            marginTop: 3,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {tc.summary.length > 90 ? tc.summary.slice(0, 90) + "…" : tc.summary}
-        </Text>
-      ) : null}
     </div>
   );
 }

@@ -86,7 +86,7 @@ def maybe_spill_tool_result(
     content = result.content
     byte_len = _content_byte_len(content)
     # Cache on the result object only (never in metadata / LLM history).
-    result._cached_model_facing_bytes = byte_len
+    result._cached_model_facing_bytes = byte_len  # type: ignore[attr-defined]  # 运行期缓存属性，刻意不进 ToolResult 模型/metadata
     threshold, keep = resolve_spill_policy(tool_name, settings, tool_category=tool_category)
 
     if not force:
@@ -318,7 +318,7 @@ class ToolOutputStore:
     ) -> ToolOutputRecord:
         self._session_dir.mkdir(parents=True, exist_ok=True)
         ref = uuid.uuid4().hex[:8]
-        payload = {
+        payload: dict[str, Any] = {
             "ref": ref,
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,

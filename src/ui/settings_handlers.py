@@ -18,6 +18,7 @@ API 一览：
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -77,8 +78,11 @@ class SettingsHandlers(DashboardAuthMixin):
         r.add_get("/api/v1/workspaces", self.handle_list_workspaces)
         r.add_post("/api/v1/workspaces", self.handle_create_workspace)
         r.add_post("/api/v1/workspaces/{wid}/rename", self.handle_rename_workspace)
+        r.add_post("/api/v1/workspaces/{wid}/rebind", self.handle_rebind_workspace)
         r.add_post("/api/v1/workspaces/{wid}/default", self.handle_default_workspace)
         r.add_delete("/api/v1/workspaces/{wid}", self.handle_delete_workspace)
+
+        r.add_get("/api/fs/browse", self.handle_fs_browse)
 
     # ------------------------------------------------------------------
     # 通用
@@ -339,6 +343,20 @@ class SettingsHandlers(DashboardAuthMixin):
             raise web.HTTPNotFound(text=f"找不到工作空间: {wid}")
         return web.json_response({"ok": True, "workspace": _entry_to_dict(entry)})
 
+    async def handle_rebind_workspace(self, request: web.Request) -> web.Response:
+        """改绑目录（目录被删、项目挪位后的恢复）：id 不变，历史档案不断链。"""
+        self._check_token(request)
+        wid = request.match_info["wid"]
+        data = await self._json_body(request)
+        new_path = str(data.get("path") or "").strip()
+        if not new_path:
+            raise web.HTTPBadRequest(text="path 不能为空")
+        mgr = self._ws_manager()
+        entry = await self._safe(asyncio.to_thread(mgr.rebind_workspace, wid, new_path))
+        if entry is None:
+            raise web.HTTPNotFound(text=f"找不到工作空间: {wid}")
+        return web.json_response({"ok": True, "workspace": _entry_to_dict(entry)})
+
     async def handle_default_workspace(self, request: web.Request) -> web.Response:
         self._check_token(request)
         wid = request.match_info["wid"]
@@ -356,3 +374,71 @@ class SettingsHandlers(DashboardAuthMixin):
         if not ok:
             raise web.HTTPNotFound(text=f"找不到工作空间: {wid}")
         return web.json_response({"ok": True, "deleted": wid})
+
+    # ==================================================================
+    # 目录浏览（只读：web 添加工作空间的目录选择器）
+    # ==================================================================
+
+    def _recommended_root(self) -> Path:
+        """推荐根目录＝已登记空间路径的最长公共父目录；无已登记空间退 cwd。"""
+        paths: list[Path] = []
+        try:
+            mgr = self._ws_manager()
+            for entry in mgr.registry.list_active():
+                raw = getattr(entry, "path", None)
+                if not raw:
+                    continue
+                try:
+                    p = Path(str(raw)).expanduser().resolve()
+                except Exception:
+                    continue
+                if p.exists():
+                    paths.append(p)
+        except Exception:
+            paths = []
+        if not paths:
+            return Path(os.getcwd())
+        try:
+            return Path(os.path.commonpath([str(p) for p in paths]))
+        except ValueError:
+            # 跨盘符（Windows 多 drive）无公共路径，退第一个空间的父目录
+            return paths[0].parent
+
+    async def handle_fs_browse(self, request: web.Request) -> web.Response:
+        """GET /api/fs/browse?path=<绝对路径> —— 只列目录，path 空时浏览推荐根目录。"""
+        self._check_token(request)
+        raw = str(request.query.get("path") or "").strip()
+        if not raw:
+            target = self._recommended_root()
+        else:
+            expanded = Path(raw).expanduser()
+            if not expanded.is_absolute():
+                raise web.HTTPBadRequest(text="path 必须是绝对路径")
+            target = expanded
+        if not target.is_dir():
+            raise web.HTTPBadRequest(text=f"目录不存在或不可读: {target}")
+        try:
+            resolved = target.resolve()
+        except Exception:
+            resolved = target
+        dirs: list[dict[str, str]] = []
+        try:
+            entries = await asyncio.to_thread(lambda: list(os.scandir(resolved)))
+        except PermissionError as exc:
+            raise web.HTTPForbidden(text=f"无权限读取: {resolved}") from exc
+        for e in entries:
+            try:
+                if not e.is_dir():
+                    continue
+            except OSError:
+                continue
+            dirs.append({"name": e.name, "path": str(Path(e.path))})
+        dirs.sort(key=lambda d: d["name"].lower())
+        parent = resolved.parent
+        return web.json_response(
+            {
+                "path": str(resolved),
+                "parent": str(parent) if parent != resolved else None,
+                "dirs": dirs,
+            }
+        )

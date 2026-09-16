@@ -108,7 +108,9 @@ async def iter_while_foreground(
     # 保证静默回合在切走后 _DETACH_POLL_INTERVAL 内 detach，消费方及时让位。
     pending: asyncio.Task[T] | None = asyncio.ensure_future(agen.__anext__())
     try:
-        while True:
+        # pending 为 None 仅表示所有权已移交 drain 任务（随后立即 return），
+        # 故「还有挂起的 anext」即循环不变式
+        while pending is not None:
             done, _ = await asyncio.wait({pending}, timeout=_DETACH_POLL_INTERVAL)
             if not done:
                 if not still_foreground():
@@ -154,7 +156,9 @@ def foreground_workspace_matcher(
                 if isinstance(current, str) or current is None:
                     return str(current or "") == turn_workspace_id
             except Exception:
-                pass
+                logger.debug(
+                    "probe view workspace id for detach matcher failed; fall through to attr lookup", exc_info=True
+                )
         # 兼容旧 shim / 测试替身
         if end == "cli":
             return getattr(root, "_foreground_session_id", None) == turn_workspace_id
@@ -182,7 +186,7 @@ def workspace_display_name(root: object, workspace_dir: str) -> str:
             if name:
                 return str(name)
     except Exception:
-        pass
+        logger.debug(f"resolve workspace display name for {raw!r} failed; fall back to basename", exc_info=True)
     try:
         return Path(raw).name
     except Exception:

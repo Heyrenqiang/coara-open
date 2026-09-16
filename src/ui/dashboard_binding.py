@@ -14,6 +14,7 @@ from src.core.coara_home import (
     resolve_trace_data_dir,
     workspace_id_for,
 )
+from src.core.logger import logger
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +42,8 @@ def resolve_configured_coara_home(explicit: Path | str | None = None) -> Path:
             if raw_cfg is not None:
                 return Path(str(raw_cfg)).expanduser().resolve()
     except Exception:
-        pass
+        # 配置读取失败时静默回落到 bootstrap/env/cwd 链，不打断 home 解析
+        logger.debug("configured coara_home resolution failed, falling back to bootstrap/env/cwd chain", exc_info=True)
 
     bootstrap = resolve_bootstrap_coara_home()
     if bootstrap is not None:

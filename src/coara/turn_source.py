@@ -48,9 +48,8 @@ def current_turn_source(coara: Any) -> str:
     return normalize_launch_source(getattr(coara, "_active_turn_source", None))
 
 
-def should_push_matrix(source: str) -> bool:
-    """True when assistant text must be delivered to the Matrix room."""
-    return normalize_turn_source(source) in {"matrix", "event"}
+# 原 should_push_matrix 判据已删：子智能体结果不再由注入路径直推房间；
+# 显示面统一走 delegate 的帧路由（命中投递）与按端兜底（未命中落地）。
 
 
 def cli_shows_foreground_spinner(source: str | None) -> bool:
@@ -100,3 +99,33 @@ def resolve_trace_end_source(payload: dict[str, Any] | None) -> str:
         if value:
             return value
     return ""
+
+
+# ── 端族判定（family）─────────────────────────────────────────────────
+#
+# 唯一族抽象，语义对齐 commands/registry._turn_family：
+#   cli 族含 cli- 前缀、web 族含 web- 前缀、matrix 仅精确、event/background 归 system
+# 与显示门（cli_shows_source/web_shows_source 带 unknown 参数）刻意不同：
+# 族判定表达「这两个来源是不是同一端」，无空来源宽严档，空串一律 ""（无族）。
+# continuation_leftover 的分派门与本族判定的历史差异（is_cli_source 不认
+# cli- 前缀、is_matrix_source 不含 event）是有意的分派行为，见该文件注释。
+
+
+def turn_source_family(source: str | None) -> str:
+    """来源标签的端族：cli / web / matrix / system；无法归类返回 ""。"""
+    s = str(source or "").strip().lower()
+    if s in ("cli", "cli-attached") or s.startswith("cli-"):
+        return "cli"
+    if s == "web" or s.startswith("web-"):
+        return "web"
+    if s == "matrix":
+        return "matrix"
+    if s in ("event", "background"):
+        return "system"
+    return ""
+
+
+def same_turn_family(a: str | None, b: str | None) -> bool:
+    """两个来源标签是否同一端族；任一方无族判 False。"""
+    fa = turn_source_family(a)
+    return bool(fa) and fa == turn_source_family(b)

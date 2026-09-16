@@ -327,8 +327,8 @@ export function UsageView() {
       {usageViewActive && (
         <Suspense fallback={null}>
           <ModuleChatFloat
-            subject="root"
-            title="与用量空间对话"
+            subject="usage"
+            title="与用量助手对话"
             emptyHint="问用量：本月各模型费用、命中率走势、异常消耗排查"
           />
         </Suspense>

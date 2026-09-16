@@ -7,7 +7,34 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import os
+import tempfile
+from pathlib import Path
+
+
+@contextlib.contextmanager
+def atomic_output_path(target: Path):
+    """Office 生成/编辑统一落盘口径：先写同目录临时文件，正常退出才原子替换。
+
+    用法::
+
+        with atomic_output_path(output_path) as tmp:
+            document.save(str(tmp))
+
+    中途抛错即删临时文件——目标路径要么保持原样、要么是新内容，不会留半截文档。
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(dir=target.parent, prefix=f"{target.name}.", suffix=".tmp")
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        yield temp_path
+        os.replace(temp_path, target)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def require_pkg(pkg_name: str, exc_cls: type[Exception], hint: str, *extra_modules: str) -> None:

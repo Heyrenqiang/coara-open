@@ -10,10 +10,13 @@ import {
   DownloadOutlined,
   FileOutlined,
   FolderOutlined,
+  StarFilled,
   StarOutlined,
 } from "@ant-design/icons";
 import {
   collectFile,
+  deleteCollection,
+  fetchCollectionList,
   fetchFileView,
   fileRawUrl,
   fetchToolOutput,
@@ -46,6 +49,9 @@ import {
 const { Text } = Typography;
 
 const PAGE_SIZE = 500;
+
+/** 已收藏星标的填充色：复用 warning 语义令牌（琥珀色，与手机端收藏高亮同族） */
+const COLLECT_ACCENT = "var(--coara-warning)";
 
 function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "";
@@ -137,19 +143,67 @@ export function FileView() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [mdMode, setMdMode] = useState<"rendered" | "source">("rendered");
   const [collecting, setCollecting] = useState(false);
+  // 已收藏条目 id（scope=user 收藏列表中 source_url 匹配当前 path 的那条）；null=未收藏
+  const [collectedId, setCollectedId] = useState<string | null>(null);
 
-  const onCollectFile = useCallback(async () => {
+  // 已收藏判定（与手机端 CollectActions.kt 同款）：收藏库（scope=user）里存在
+  // source_url 以该路径结尾的条目；Windows 路径分隔符不一致时按统一斜杠比较
+  const findCollectedId = useCallback(
+    (entries: { id: string; source_url: string }[]): string | null => {
+      if (!path) return null;
+      const norm = (s: string) => s.replace(/\\/g, "/");
+      const hit = entries.find(
+        (e) =>
+          e.source_url.endsWith(path) ||
+          e.source_url.endsWith(`:${path}`) ||
+          norm(e.source_url).endsWith(norm(path)),
+      );
+      return hit?.id ?? null;
+    },
+    [path],
+  );
+
+  useEffect(() => {
+    setCollectedId(null);
+    if (!path || viewMode === "tool") return;
+    let cancelled = false;
+    fetchCollectionList({ limit: 200 })
+      .then((res) => {
+        if (!cancelled && res.enabled) setCollectedId(findCollectedId(res.entries));
+      })
+      .catch(() => {
+        /* 收藏状态读取失败不阻断文件页 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, viewMode, findCollectedId]);
+
+  const onToggleCollect = useCallback(async () => {
     if (!path || viewMode === "tool") return;
     setCollecting(true);
     try {
-      const res = await collectFile(path);
-      message.success(res.message || "已收藏");
+      if (collectedId) {
+        await deleteCollection(collectedId);
+        setCollectedId(null);
+        message.success("已取消收藏");
+      } else {
+        const res = await collectFile(path);
+        message.success(res.message || "已收藏");
+        // 回读拿收藏 id，让星标立即切为可取消态（与手机端同款）
+        try {
+          const list = await fetchCollectionList({ limit: 200 });
+          if (list.enabled) setCollectedId(findCollectedId(list.entries));
+        } catch {
+          /* 回读失败则保持未收藏态，下次进页会恢复 */
+        }
+      }
     } catch (err) {
       message.error(err instanceof Error ? err.message : String(err));
     } finally {
       setCollecting(false);
     }
-  }, [path, viewMode]);
+  }, [path, viewMode, collectedId, findCollectedId]);
 
   useEffect(() => {
     setData(null);
@@ -297,11 +351,18 @@ export function FileView() {
           {path && viewMode !== "tool" && data?.type !== "directory" ? (
             <Button
               size="small"
-              icon={<StarOutlined />}
+              icon={
+                collectedId ? (
+                  <StarFilled style={{ color: COLLECT_ACCENT }} />
+                ) : (
+                  <StarOutlined />
+                )
+              }
               loading={collecting}
-              onClick={() => void onCollectFile()}
+              onClick={() => void onToggleCollect()}
+              title={collectedId ? "取消收藏" : "收藏"}
             >
-              收藏
+              {collectedId ? "已收藏" : "收藏"}
             </Button>
           ) : null}
         </>

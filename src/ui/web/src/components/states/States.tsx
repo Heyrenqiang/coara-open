@@ -16,7 +16,7 @@ import { FileOutlined } from "@ant-design/icons";
 const ERROR_ICON = <FileOutlined style={{ fontSize: 40, color: "var(--coara-border)" }} />;
 const EMPTY_ICON = <FileOutlined style={{ fontSize: 48, color: "var(--coara-text-tertiary)" }} />;
 
-export interface StateBlockProps {
+interface StateBlockProps {
   icon?: ReactNode;
   /** 主文案（14px） */
   title?: ReactNode;
@@ -29,7 +29,7 @@ export interface StateBlockProps {
 }
 
 /** 居中态基座：各状态组件共用，保证四态外观一致。 */
-export function StateBlock({ icon, title, description, action, fill = true }: StateBlockProps) {
+function StateBlock({ icon, title, description, action, fill = true }: StateBlockProps) {
   return (
     <div
       style={{
@@ -54,7 +54,7 @@ export function StateBlock({ icon, title, description, action, fill = true }: St
   );
 }
 
-export interface LoadingStateProps {
+interface LoadingStateProps {
   tip?: ReactNode;
   /** 撑满内容区居中（默认 true）；列表内小块加载传 false */
   fill?: boolean;

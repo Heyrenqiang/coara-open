@@ -66,6 +66,7 @@ src/
 ├── core/             # 类型、配置、日志、错误、abort、coara_home、工具调用审计
 ├── event_sources/    # 事件源管理（文件监听、轮询、webhook）
 ├── examples/         # 内置示例项目安装器（stocks-watch）
+├── ext/              # 可选能力接入位（telemetry/account 由实现包注册，未装则空）
 ├── llm/              # Provider 抽象、流式、重试、profile、service
 ├── matrix_client/    # Matrix 机器人集成
 ├── records/          # 统一记录域：facade/migrate/store + agent_* 与 user_* 实现
@@ -121,6 +122,7 @@ events/ examples/ competition/   # 事件源模板 / 示例项目 / 路演答辩
 | 出站文件 | `src/tools/builtin/integration/outbound_file.py`、`send_file.py`、`src/ui/web_file_bridge.py`、`src/matrix_client/file_tools.py` |
 | 用量统计 | `src/runtime/usage_collector.py`、`usage_query.py`、`usage_attribution.py`、`src/llm/usage.py` |
 | 其他核心 | `src/context/window.py`（压缩）、`src/core/abort.py`（取消）、`src/core/coara_home.py`、`src/coara/rules_glob.py`（.mdc 规则） |
+| 可选能力接入 | `src/ext/__init__.py`（telemetry/account 等由实现包注册的门面） |
 
 ## 构建、运行与测试命令
 
@@ -178,13 +180,13 @@ coara examples install stocks-watch
 ### 测试
 
 ```bash
-# 默认：核心冒烟（约 1912 例；排除 extended / e2e / real_env）
+# 默认：核心冒烟（约 2245 例；排除 extended / e2e / real_env）
 pytest tests/ -q
 
-# 详细边界与集成测试（379 例；文件清单在 tests/conftest.py::_EXTENDED_TEST_PATHS）
+# 详细边界与集成测试（约 384 例；文件清单在 tests/conftest.py::_EXTENDED_TEST_PATHS）
 pytest tests/ -m extended -q
 
-# 完整套件（2291 例；PowerShell 下勿用 -m ""，易吞参数）
+# 完整套件（约 2630 例；PowerShell 下勿用 -m ""，易吞参数）
 pytest tests/ --override-ini="addopts=" -q
 ```
 
@@ -356,7 +358,7 @@ mypy src/
 - **活动计时（易回归）**：基准是**最后一次会话活动**——`record_user_activity` 在 CLI / Web / Matrix 任一端发真实消息时刷新，`record_turn_activity` 在回合结束时刷新；`switch_workspace`、`/new`、空闲自动新会话、纯 slash 与子智能体/后台维护 agent 的 `turn_end` **不得**刷新。回归测试 `tests/test_coara/test_activity_clock_invariant.py`
 - **Matrix（可选）**：GoMatrix 纯 Go homeserver（`gomatrix/`，构建 `cd gomatrix && go build -o gomatrix.exe ./cmd/gomatrix`），coara 托管拉起/看护（adopt-or-spawn）；`matrix-nio` 客户端自动接受邀请；多 agent 共享房间按 `@mention` 路由（`mention_routing.py`）；文件桥 `MatrixFileBridge`；Android Compose 客户端连同一房间（构建见 `android-app/README.md`）
 - **Web UI**：`DashboardRestHandlers`（REST）+ `WebServer`（/ws `trace_batch` 实时推送）内嵌同进程；Vite React SPA（`src/ui/web/`）；token 认证。关键优化：trace 100ms 批处理、5s 轻量心跳、订阅 `workspace_switched` EventBus 刷新 trace_store、并行 root 关闭
-- **安全模型**（两层）：① 调用层 `ToolExecutionPolicy`（`src/agent/tool_policy.py`）——工具声明 `requires_approval`（shell 破坏性基名集合 `{sudo,su,mkfs,format,fdisk,parted,dd,mkswap}`、写类越出挂载）/ LLM `require_approval: true` / `call_policy.prompt` 名单，任一命中弹人工确认（5 分钟超时=未执行；`auto_allow` 旁路，`prompt` 优先）；② 执行沙箱 `src/tools/sandbox.py`（仅 `trust_level="untrusted"` 启用）：拦命令/路径/私网 URL、净化环境变量
+- **安全模型**（两层 + 身份分层）：① 调用层 `ToolExecutionPolicy`（`src/agent/tool_policy.py`）——**审批按身份分**：拥有者本人回合（`_is_owner_context` 为真；拿不到身份时按拥有者）**工具静态硬门一律不参与**，只认 LLM 自述 `require_approval: true` 与 `call_policy.prompt` 点名（信任交给模型自决）；对外回合（executor 注入 `trust_level`）硬门全生效——工具声明 `requires_approval`（shell 破坏性基名集合、写类越出挂载）/ LLM 自述 / `call_policy.prompt` 任一命中弹确认，审批送拥有者。5 分钟超时=未执行；`auto_allow` 旁路，`prompt` 优先；子智能体与 janitor/daily 整体跳过（审批只发生在委派边界）；② 执行沙箱 `src/tools/sandbox.py`（仅 `trust_level="untrusted"` 启用）：拦命令/路径/私网 URL、净化环境变量
 - **文件工具安全**：全部要求**绝对路径**；写类越出挂载走人工审批门（delegate 子代理 strict resolver 硬拒）；`resolve_workspace_path()` 拒相对路径/UNC/扩展路径/ADS；`glob`/`grep` 默认 workspace 根；注入检测 `detect_suspicious()` + `wrap_external_content()`
 
 ## 技能系统

@@ -13,7 +13,7 @@ import type { ReactNode } from "react";
  *   - `padded={false}` 关掉内边距 —— 给自带 padding 的内容（如表格块、分栏布局）用。
  * 此前每个视图各自复写 `flex:1 + overflow:auto + padding`，收敛到此处。
  */
-export interface PageShellProps {
+interface PageShellProps {
   /** ① 空间身份头部（通常用 PageHeader） */
   header?: ReactNode;
   /** ② 工具条：筛选 / 视图切换 / 动作 */

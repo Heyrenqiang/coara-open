@@ -27,6 +27,7 @@ from src.cli.terminal_width import (
     wrap_to_width,
 )
 from src.cli.workspace_activity import WorkspaceActivityRegistry, workspace_color
+from src.core.logger import logger
 from src.llm.usage import total_prompt_tokens
 
 # Trace events that should mark the prompt/spinner dirty (coalesced in _loop).
@@ -608,6 +609,7 @@ class BackgroundSpinner:
             out.write_raw(f"\x1b]0;{safe}\x07")
             out.flush()
         except Exception:
+            # 有意静默：OSC 0 写终端标题，部分终端不支持属常态，不影响功能
             pass
 
     def _refresh_title_spinner(self) -> None:
@@ -1289,8 +1291,8 @@ class BackgroundSpinner:
                 provider_obj = getattr(fg, "provider", None)
                 if provider_obj is not None:
                     ctx_window = provider_obj.get_context_window(getattr(fg, "model_name", None))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"取 provider 上下文窗口失败，状态行 ctx 显示 0：{exc}")
             snap = getattr(fg, "_llm_usage_snapshot", None) or getattr(self._root, "_llm_usage_snapshot", None)
             hit_ratio = self._session_cache_hit_ratio(fg, snap)
             # Reserve room for left; mid may be dropped. Compact right if needed.

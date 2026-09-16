@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .office_support import require_pkg
+from .office_support import atomic_output_path, require_pkg
 
 # Cap units fed to CLI/Web diff so replace_all on huge sheets stays cheap.
 # Match count is still exact; only display text is truncated.
@@ -316,7 +316,8 @@ def edit_pptx_presentation(
         return OfficeEditResult(matches=0)
 
     try:
-        presentation.save(str(path))
+        with atomic_output_path(path) as temp_path:
+            presentation.save(str(temp_path))
     except Exception as exc:
         raise DocumentEditError(f"保存 PowerPoint 演示文稿失败: {path}（{exc}）") from exc
 

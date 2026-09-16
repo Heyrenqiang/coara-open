@@ -25,6 +25,7 @@ from src.llm.endpoints import (
     is_minimax_anthropic_endpoint,
     preserves_anthropic_thinking_wire,
 )
+from src.llm.errors import wrap_api_status_error, wrap_unexpected_error
 from src.llm.message_content import anthropic_assistant_wire_content
 from src.llm.provider import LLMProvider, LLMResponse, StreamChunk, ToolCallDelta
 from src.llm.retry import retry_complete, retry_stream_init
@@ -69,9 +70,7 @@ def _reasoning_from_blocks(blocks: list[dict[str, Any]]) -> str | None:
     return text or None
 
 
-def _user_content_with_vision_gate(
-    content: list[dict[str, Any]], vision: bool
-) -> list[dict[str, Any]]:
+def _user_content_with_vision_gate(content: list[dict[str, Any]], vision: bool) -> list[dict[str, Any]]:
     """USER 消息 content 列表按视觉门清洗：image 块不支持时替换为占位文本。
 
     text / 其它类型块原样保留，避免破坏既有 meta 标签等结构。
@@ -202,9 +201,7 @@ class AnthropicProvider(HTTPProviderMixin, LLMProvider):
         # 发送前闭合孤儿 tool_call 配对（与 OpenAI/Responses 驱动同一共享逻辑），
         # 防压缩/回滚/恢复造成的历史污染被严格端点 400 拒掉
         messages = close_orphan_tool_calls(messages)
-        vision = model_supports_vision(
-            model, provider_name=self.name, vision_model_ids=getattr(self, "_vision_model_ids", None)
-        )
+        vision = model_supports_vision(model, provider_name=self.name, vision_model_ids=self._vision_model_ids)
         system = system_prompt
         converted: list[dict[str, Any]] = []
 
@@ -552,11 +549,12 @@ class AnthropicProvider(HTTPProviderMixin, LLMProvider):
                     raise ContextWindowExceededError(f"Context window exceeded for model {resolved_model}") from exc
                 # 透传 status_code：retry 的结构化分类与降级决策靠它走确定性路径，
                 # 而不是退化到错误消息文案运气（403 额度 / 429 过载 / 401 认证各归各）。
-                raise LLMError(f"Anthropic API error: {exc}", status_code=exc.status_code) from exc
+                raise wrap_api_status_error(exc, prefix="Anthropic API error", status_code=exc.status_code) from exc
             except LLMError:
                 raise
             except Exception as exc:
-                raise LLMError(f"Unexpected error: {exc}") from exc
+                raise wrap_unexpected_error(exc) from exc
+
         async def _stream_aggregate() -> LLMResponse:
             from src.llm.stream import collect_stream
 
@@ -667,7 +665,7 @@ class AnthropicProvider(HTTPProviderMixin, LLMProvider):
                 try:
                     await stream_context.__aexit__(*sys.exc_info())
                 except Exception as close_exc:
-                    logger.debug(f"Anthropic stream init close error: {close_exc}")
+                    logger.debug(f"Anthropic stream init close error: {close_exc}", exc_info=True)
                 raise
             return stream_context, stream
 
@@ -691,7 +689,7 @@ class AnthropicProvider(HTTPProviderMixin, LLMProvider):
                     try:
                         await stream.close()
                     except Exception as close_exc:
-                        logger.debug(f"Anthropic stream close error: {close_exc}")
+                        logger.debug(f"Anthropic stream close error: {close_exc}", exc_info=True)
                 return
 
             stream_context, stream = await retry_stream_init(
@@ -709,17 +707,17 @@ class AnthropicProvider(HTTPProviderMixin, LLMProvider):
                 try:
                     await stream_context.__aexit__(*sys.exc_info())
                 except Exception as close_exc:
-                    logger.debug(f"Anthropic stream close error: {close_exc}")
+                    logger.debug(f"Anthropic stream close error: {close_exc}", exc_info=True)
         except anthropic.APIStatusError as exc:
             if exc.status_code == 400 and "prompt is too long" in str(exc).lower():
                 raise ContextWindowExceededError(f"Context window exceeded for model {resolved_model}") from exc
-            raise LLMError(f"Anthropic API error: {exc}") from exc
+            raise wrap_api_status_error(exc, prefix="Anthropic API error") from exc
         except anthropic.APIConnectionError as exc:
             # 带上端点：连接失败时「无法连接谁」比「Unexpected error」有用得多
             endpoint = getattr(self, "base_url", None) or "Anthropic 端点"
             raise LLMError(f"无法连接 {endpoint}：{exc}") from exc
         except Exception as exc:
-            raise LLMError(f"Unexpected error: {exc}") from exc
+            raise wrap_unexpected_error(exc) from exc
 
     def get_context_window(self, model: str | None = None) -> int:
         return ANTHROPIC_CONTEXT_WINDOWS.get(model or self.default_model, 200_000)

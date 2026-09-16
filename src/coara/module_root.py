@@ -132,6 +132,28 @@ async def create_module_root(root_coara: RootCoara, spec: ModuleSpec) -> Any:
 
     coara.set_trace_sink(_module_trace_sink)
 
+    # local_search 需绑 Root 的 records_store（模块主体不经 workspace_session 定制，
+    # 拿不到这条绑定），常驻非挂起——记录助手直接检索，无需先 tool activate
+    if getattr(root_coara, "records_store", None) is not None:
+        from src.tools.builtin.records.local_search import LocalSearchTool
+
+        coara.register_tool(
+            LocalSearchTool(store=root_coara.records_store, parent_coara=coara, defer=False),
+            replace=True,
+        )
+    # 配置模块专属：改完 providers.yaml 后触发热重载，立即生效
+    if spec.id == "config":
+        from src.tools.builtin.integration.reload_providers import ReloadProvidersTool
+
+        coara.register_tool(ReloadProvidersTool(), replace=True)
+    # 挂起工具入口：白名单含挂起工具时由它 search/activate
+    try:
+        from src.tools.builtin.integration.tool import ToolGatewayTool
+
+        coara.register_tool(ToolGatewayTool(parent_coara=coara), replace=True)
+    except Exception as exc:
+        logger.warning(f"Tool gateway registration failed for module {spec.id}: {exc}")
+
     logger.info(
         "Module root created: %s (subject=%s, session=%s, tools=%s)",
         spec.id,

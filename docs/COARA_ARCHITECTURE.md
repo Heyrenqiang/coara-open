@@ -414,7 +414,7 @@ run_turn_loop 的一轮
 |------|--------------|----------|
 | `CoaraRunCancelledError`（Ctrl+C、`/stop`、普通 `interrupt_current_turn`） | ✗ 不回滚；执行器经 `interrupt_sink` 把批次中已有结果（已完成工具的真实结果、被取消工具的已取消结果）先如实入史——尊重 AbortSignal 的工具（`wait_for_abortable`）执行中被中断时同样记录一条「执行中被用户打断」的真实结果（`preserve_cancel_content` 标记使文案不被统一改写）；`finalize_interrupted_turn_history` 只为**未执行**的 tool_calls 补「[未执行] 回合被中断」合成结果；再以 `<系统消息>当前会话已打断。</系统消息>` 注入 USER 历史（若硬停了子智能体，正文附可 `delegate(action="resume")` 的 task_id 列表） | UI：`[系统] 当前会话已打断。` |
 | `CoaraRunCancelledError(reason="new_session")`（运行中 `/new`） | ✗ 不回滚（/new 另行重置整个会话历史）；turn 内 `/new` 发 abort 后**延迟到旧回合释放 `_process_lock` 再清状态**（`_finish_new_session_after_turn_exit`，与调用方同栈不可原地 await），旧回合退出前的追加（工具结果、闭合注记）不会落进新会话空 history；延迟清理任务存活期间 `process_message` 拒绝新回合（引导稍候，防清理抹掉新回合历史），等锁超时（旧回合无视 abort 存活）则放弃清理并告警、保留旧会话现场 | 无「已打断」输出 |
-| `CoaraRunCancelledError(reason="switch_workspace:<名>")`（回合中 `ws(switch)`） | ✗ 不做整轮 `turn_history_start` 回滚；`strip_ws_switch_tail` 删除「触发切换的用户输入 → ws(switch)」整段尾部 | `[系统] 已切换到工作空间 <名>` |
+| `CoaraRunCancelledError(reason="switch_workspace:<名>")`（回合中 `ws(switch)`） | ✗ 不做整轮 `turn_history_start` 回滚；`strip_ws_switch_tail` 删除「触发切换的用户输入 → ws(switch)」整段尾部；若本回合已有工具落盘，strip 后追加一条磁盘副作用注记（与中断/回滚两条路径同源），模型不再误判磁盘未改动 | `[系统] 已切换到工作空间 <名>` |
 | Provider `LLMError` | ✗ 不回滚（已入史的 assistant/tool 保留），追加失败注记（见 §5.2 ③） | `Error: …` |
 | 其他未捕获异常 | ✓ 回滚后**继续抛出**；回滚时若有已执行工具，注入一条磁盘副作用注记（本回合已执行的 write/edit/delete 及目标文件清单，见本节末段） | 由上层处理 |
 | 工具审批 ESC / 取消 | 走 `user_cancelled` 分支，不是整轮回滚 | 工具结果标记取消 |
@@ -798,7 +798,7 @@ session 创建内容：共享 Root 的 persona/provider/`workspace_manager`；�
 
 人类 / API 切换（`/ws`、Web、Matrix）**不**中断离开空间的进行中回合：该 `WorkspaceSession` 继续跑完当前 `process_message`；前台焦点转到目标空间。工具绑定各 session 的 `workspace_dir`（shell 默认 cwd 亦然），不依赖进程 `chdir`。切走后离开空间的输出照常显示并带空间名标记；Matrix/Web 入队即绑定发送时 session；后台完成通知按发起 session 路由——细则见 [`多工作空间与工作空间动态.md`](./多工作空间与工作空间动态.md) §3.4。
 
-回合进行中由 LLM 调用 `ws(switch)`：检测到 `_inside_turn`，抛 `CoaraRunCancelledError("switch_workspace:<名>")`。编排器捕获后对**源**会话调用 `strip_ws_switch_tail`（从 `ws(switch)` 上溯到触发切换的用户输入，删除该用户输入及其后的切换尝试尾部，含 `ws(list)` 链），再输出 `[系统] 已切换到工作空间 <名>` 结束回合——**不**做整轮 `turn_history_start` 回滚。目标工作空间历史不受影响；离开的工作空间其余历史留在自己的 `WorkspaceSession` 里，切回即恢复。
+回合进行中由 LLM 调用 `ws(switch)`：检测到 `_inside_turn`，抛 `CoaraRunCancelledError("switch_workspace:<名>")`。编排器捕获后对**源**会话调用 `strip_ws_switch_tail`（从 `ws(switch)` 上溯到触发切换的用户输入，删除该用户输入及其后的切换尝试尾部，含 `ws(list)` 链），strip 后若本回合已有工具落盘则追加一条磁盘副作用注记（与 Ctrl+C 中断、未预期异常回滚两条路径同源），再输出 `[系统] 已切换到工作空间 <名>` 结束回合——**不**做整轮 `turn_history_start` 回滚。目标工作空间历史不受影响；离开的工作空间其余历史留在自己的 `WorkspaceSession` 里，切回即恢复。
 
 ### 12.5 活动运行时文件
 

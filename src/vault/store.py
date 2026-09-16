@@ -90,7 +90,7 @@ class VaultStore:
     def load_meta(self) -> VaultMeta:
         return load_meta(self.meta_path)
 
-    def verify_password(self, password: str) -> bytes:
+    def verify_password(self, password: str) -> bytearray:
         return unlock_dek(password, self.load_meta())
 
     def count_sealed(self) -> int:

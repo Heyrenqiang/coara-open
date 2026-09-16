@@ -105,6 +105,10 @@ class TraceBroadcastHandlers(HandlerMixinBase):
     # Trace event broadcast (EventBus → WS)
     # ------------------------------------------------------------------
 
+    # 宿主 WebServer 提供的批缓冲与 flush 任务（组合后才有，见模块 docstring）
+    _trace_batch: list[dict[str, Any]]
+    _trace_flush_task: asyncio.Task[None] | None
+
     # 外挂 CLI 完整事件流的必传 topic 全集（原主 CLI 界面召回：活动树/spinner/
     # diff/续接回显都靠它驱动）。浏览器集合不变（其前端按既有集合实现）。
     _ATTACH_TRACE_TOPICS = frozenset(

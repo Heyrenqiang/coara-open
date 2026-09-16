@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "antd";
 import { LoadingOutlined, MessageOutlined } from "@ant-design/icons";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -7,14 +8,13 @@ import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { chatRowKey, useStore, type ChatFileAttachment, type ChatMessage, type ChatToolLine } from "../../lib/store";
+import { chatRowKey, HISTORY_PAGE_LIMIT, useStore, type ChatFileAttachment, type ChatMessage, type ChatToolLine } from "../../lib/store";
 import type { CanonicalDiffLines } from "../../lib/ws";
 import {
   ToolLineAccordion,
   ToolLinePanel,
   ToolLineRow,
   ToolSubtreeRows,
-  formatToolDuration,
   toolRunning,
 } from "./ToolLineRow";
 import { buildToolLineGroups, workRowsOf, type ProcessEntry, type ToolLineGroup } from "../../lib/toolLineGroups";
@@ -459,11 +459,6 @@ function ProcessEntryList({ entries }: { entries: ProcessEntry[] }) {
                 label={entry.frame.tool.label}
                 ok={entry.frame.tool.ok !== false}
                 running={false}
-                elapsed={
-                  typeof entry.frame.tool.duration_ms === "number" && entry.frame.tool.duration_ms > 0
-                    ? formatToolDuration(entry.frame.tool.duration_ms)
-                    : ""
-                }
                 expandable={false}
                 open={false}
                 onToggle={() => {}}
@@ -485,7 +480,8 @@ function ProcessEntryList({ entries }: { entries: ProcessEntry[] }) {
  *  可能很长，让它无限撑高会把下面的内容与输入区顶出屏幕。 */
 const EXPAND_PANEL_MAX_HEIGHT = 240;
 
-/** 聊天流内的工具行：✓/✗（运行中 ◌）内联一行，插在正文段落之间（CLI 同构）。
+/** 聊天流内的工具行：`·` 内联一行，插在正文段落之间（CLI 同构）；运行中行首
+ *  单点脉动。双击整行打开工具详情（完整输入输出，复用 /file?view=tool 视图）。
  *  delegate 行的展开面板是「任务指令 / 过程 / 最终结果」三组——「过程」组里的
  *  活动树补给行不含子智能体自己那一行（那就是本条工具行本身），重复没有信息量。 */
 const ToolLine = memo(function ToolLine({
@@ -496,14 +492,19 @@ const ToolLine = memo(function ToolLine({
   marginTop: number;
 }) {
   const ok = tool.ok !== false;
-  const elapsed =
-    typeof tool.duration_ms === "number" && tool.duration_ms > 0
-      ? formatToolDuration(tool.duration_ms)
-      : "";
   const callId = String(tool.tool_call_id ?? "");
   const rows = useStore((s) => s.subagentRows);
   const output = useStore((s) => (callId ? s.subagentOutput[callId] : undefined));
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  // delegate 行双击不挂详情——双击在 delegate 行上是「展开折叠」的主路径，
+  // 跳走详情页反而打断了用户正在看的过程面板；其它工具行双击照常开详情。
+  const isDelegate = tool.tool_name === "delegate";
+  // 双击整行打开工具详情（完整输入输出，复用 /file?view=tool 视图）；与单击
+  // 展开 delegate 折叠共存——detail 只认 call_id，展开只认 groups，互不干扰。
+  const openDetail = callId && !isDelegate
+    ? () => navigate("/file?view=tool&call_id=" + encodeURIComponent(callId))
+    : undefined;
 
   const running = useMemo(() => toolRunning(rows, callId), [rows, callId]);
   const work = useMemo(() => (callId ? workRowsOf(rows, callId) : []), [rows, callId]);
@@ -542,12 +543,15 @@ const ToolLine = memo(function ToolLine({
   const expandable = groups.length > 0;
 
   return (
-    <div style={{ marginTop, display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+    <div
+      style={{ marginTop, display: "flex", flexDirection: "column", alignItems: "flex-start" }}
+      onDoubleClick={openDetail}
+      title={openDetail ? "双击查看工具详情" : undefined}
+    >
       <ToolLineRow
         label={tool.label}
         ok={ok}
         running={running}
-        elapsed={elapsed}
         expandable={expandable}
         open={open}
         onToggle={() => setOpen((v) => !v)}
@@ -900,6 +904,9 @@ export function MessageList() {
   const messages = useStore((s) => s.messages);
   const workspaceDir = useStore((s) => s.workspaceDir);
   const viewReady = useStore((s) => s.viewReady);
+  const hasMoreHistory = useStore((s) => s.hasMoreHistory);
+  const earlierLoading = useStore((s) => s.earlierLoading);
+  const loadEarlier = useStore((s) => s.loadEarlier);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRafRef = useRef<number | null>(null);
@@ -929,6 +936,21 @@ export function MessageList() {
   // 不经过本 effect（deps 只有 workspaceDir 与 viewReady），滚动位置因此不被帧动过。
   const prevDirRef = useRef<string | null>(null);
   const prevReadyRef = useRef(false);
+  /** prepend 保位：点击「加载更早消息」时记下视口锚，prepend 提交后按它还原——
+   *  内容变高但用户在读的那条原地不动；同时压住跟随贴底（stickToBottom 临时置
+   *  false 再恢复），否则上翻阅读时点翻页会被节流跟随 effect 拉回底部。 */
+  const prependAnchorRef = useRef<ScrollAnchor | null>(null);
+
+  const handleLoadEarlier = () => {
+    const el = scrollContainerRef.current;
+    if (!el || earlierLoading) return;
+    prependAnchorRef.current = measureScrollAnchor(el);
+    stickToBottomRef.current = false;
+    // 渲染窗口随翻页深度扩一页：store 里的更早消息要真的进 DOM，
+    // 不能只进 store 被末尾切片切掉（翻页功能在渲染层不可达）
+    setRenderDepth((d) => d + HISTORY_PAGE_LIMIT);
+    void loadEarlier();
+  };
   /** 切空间时挂起的待还原锚：无快照的切空间路径分两次提交（先骨架后内容），第一次
    *  提交时锚定那条消息还不在 DOM 里——锚留到它进 DOM 再落位。也正是它压住第二次
    *  提交的「骨架转内容贴底」，否则翻着历史切回来会被拽到底（旧实现靠 React 批处理
@@ -942,6 +964,21 @@ export function MessageList() {
     prevReadyRef.current = viewReady;
     const el = scrollContainerRef.current;
     if (workspaceDir === null || el === null) return;
+
+    // prepend 保位优先于一切：这不是边界变化，任何「贴底 / 还原空间锚」的判定都
+    // 不参与——只按点击那一刻量好的锚还原位置（锚定消息被裁掉时退回贴底）。
+    const prependAnchor = prependAnchorRef.current;
+    if (prependAnchor) {
+      prependAnchorRef.current = null;
+      if (!applyScrollAnchor(el, prependAnchor)) {
+        stickToBottomRef.current = true;
+        return scrollBottomWithCompensation(el);
+      }
+      stickToBottomRef.current = prependAnchor.kind === "bottom";
+      if (prependAnchor.kind === "bottom") return scrollBottomWithCompensation(el);
+      const raf = requestAnimationFrame(() => applyScrollAnchor(el, prependAnchor));
+      return () => cancelAnimationFrame(raf);
+    }
 
     const decision = decideScroll({
       newPageLife: !pageLifeCommitted,
@@ -977,15 +1014,20 @@ export function MessageList() {
     return scrollBottomWithCompensation(el);
   }, [workspaceDir, viewReady]);
 
-  // Cap to MAX_RENDERED_MESSAGES to keep DOM size bounded for long sessions.
+  // 渲染窗口深度：初始 MAX_RENDERED_MESSAGES，随「加载更早消息」每翻一页
+  // 扩一页——store 上限（1000）与渲染深度自然对齐（翻 4 页后渲染 1000，
+  // 再翻被 _capMessages 挤掉的最旧页不在 DOM 里，可重新拉取）。切空间/
+  // 新会话时组件随 MessageList 重挂载自动重置回初始值。
+  const [renderDepth, setRenderDepth] = useState(MAX_RENDERED_MESSAGES);
+  // Cap to renderDepth to keep DOM size bounded for long sessions.
   // System messages (<系统消息> etc.) are already filtered by the backend
   // in _handle_session_messages, so no frontend filter is needed here.
   const visibleMessages = useMemo(() => {
-    if (messages.length > MAX_RENDERED_MESSAGES) {
-      return messages.slice(messages.length - MAX_RENDERED_MESSAGES);
+    if (messages.length > renderDepth) {
+      return messages.slice(messages.length - renderDepth);
     }
     return messages;
-  }, [messages]);
+  }, [messages, renderDepth]);
 
   // Throttled scroll-to-bottom: during streaming, chunks arrive at high
   // frequency. Calling scrollIntoView on every chunk causes severe layout
@@ -1094,6 +1136,26 @@ export function MessageList() {
         maskImage: "linear-gradient(to bottom, transparent 0, black 28px)",
       }}
     >
+      {hasMoreHistory && visibleMessages.length > 0 && (
+        <div style={{ textAlign: "center", padding: "0 0 12px" }}>
+          <Button
+            type="link"
+            size="small"
+            onClick={handleLoadEarlier}
+            disabled={earlierLoading}
+            style={{ color: "var(--coara-text-muted)" }}
+          >
+            {earlierLoading ? (
+              <>
+                <LoadingOutlined style={{ marginRight: 6 }} />
+                加载中…
+              </>
+            ) : (
+              "加载更早消息"
+            )}
+          </Button>
+        </div>
+      )}
       {visibleMessages.length === 0 && !viewReady && <MessageListSkeleton />}
       {visibleMessages.length === 0 && viewReady && (
         <div

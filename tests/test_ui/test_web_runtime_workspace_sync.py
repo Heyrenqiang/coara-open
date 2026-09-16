@@ -185,6 +185,7 @@ async def test_handle_chat_leftover_stays_on_origin_session(tmp_path: Path, monk
             image_blocks: list[dict] | None = None,
             *,
             source: str = "",
+            client_msg_id: str = "",
         ) -> None:
             self._continuation_inputs.append(ContinuationInput(text=text, image_blocks=image_blocks, source=source))
 
@@ -389,6 +390,7 @@ async def test_web_followup_injected_into_active_turn(tmp_path: Path, monkeypatc
             image_blocks: list[dict] | None = None,
             *,
             source: str = "",
+            client_msg_id: str = "",
         ) -> None:
             self.submitted.append(text)
 
@@ -446,6 +448,7 @@ async def test_web_followup_injected_into_active_turn(tmp_path: Path, monkeypatc
             image_blocks: list[dict] | None = None,
             *,
             source: str = "",
+            client_msg_id: str = "",
         ) -> None:
             self.submitted.append(text)
 
@@ -486,7 +489,9 @@ async def test_web_followup_reregisters_end_registry_when_stale(
         ) -> None:
             pass
 
-        def submit_continuation_input(self, text: str, image_blocks=None, *, source: str = "") -> None:
+        def submit_continuation_input(
+            self, text: str, image_blocks=None, *, source: str = "", client_msg_id: str = ""
+        ) -> None:
             pass
 
         def drain_continuation_inputs(self) -> list[ContinuationInput]:
@@ -571,7 +576,9 @@ async def test_web_followup_registers_channel_during_awakened_turn(
         ) -> None:
             pass
 
-        def submit_continuation_input(self, text: str, image_blocks=None, *, source: str = "") -> None:
+        def submit_continuation_input(
+            self, text: str, image_blocks=None, *, source: str = "", client_msg_id: str = ""
+        ) -> None:
             pass
 
         def drain_continuation_inputs(self) -> list[ContinuationInput]:

@@ -209,6 +209,8 @@ def _looks_like_gomatrix(exe: Path | None, binary: Path | None = None) -> bool:
             if exe.resolve() == binary.resolve():
                 return True
         except OSError:
+            # 有意静默：路径 resolve 失败只是无法走「同路径」确认，
+            # 回落到下面的按文件名判断
             pass
     return "gomatrix" in exe.name.lower()
 

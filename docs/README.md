@@ -17,7 +17,7 @@
 | Workflow / 事件源 | [工作空间与事项制度](./工作空间与事项制度.md) · [`./WORKFLOW_SPEC.md`](./WORKFLOW_SPEC.md)（格式权威） · [节点即智能体](./节点即智能体.md) · [wdl 执行引擎](../wdl/README.md) |
 | 事件源 | [WORKSPACE_EVENTS_IMPLEMENTATION](./WORKSPACE_EVENTS_IMPLEMENTATION.md)（运维） · [`../skills/event-source/EVENT_SOURCE_SPEC.md`](../skills/event-source/EVENT_SOURCE_SPEC.md)（智能体配置权威） · 技能 `event-source` |
 | 事件 / webhook 运维 | [WORKSPACE_EVENTS_IMPLEMENTATION](./WORKSPACE_EVENTS_IMPLEMENTATION.md) · [TUNNELS_SETUP](./TUNNELS_SETUP.md) |
-| Android / Matrix 链路 | [MATRIX_APP_LINK](./MATRIX_APP_LINK.md)（通信 Canonical）· [Android远程控制与输入交互](./Android远程控制与输入交互.md) · [批复中心与移动端模块化](./批复中心与移动端模块化.md)（现状与推进） · [`../android-app/README.md`](../android-app/README.md) |
+| Android / Matrix 链路 | [MATRIX_APP_LINK](./MATRIX_APP_LINK.md)（通信 Canonical）· [Android远程控制与输入交互](./Android远程控制与输入交互.md) · [`../android-app/README.md`](../android-app/README.md) |
 | 改配置 | [CONFIGURATION](./CONFIGURATION.md)（逐键速查） |
 | 已知问题 | [REMAINING_ISSUES](./REMAINING_ISSUES.md) · [manual/18 §18.9](./manual/18-安全与治理.md)（面向用户的安全限制） |
 
@@ -30,7 +30,9 @@
 | 文档 | 内容 |
 |------|------|
 | [工作空间与目录.md](./工作空间与目录.md) | **概念总览**：四种目录、name/path/workspace_id、cwd、切换 |
-| [空间模型与内容注册表.md](./空间模型与内容注册表.md) | **概念备忘**（2026-09-08 讨论共识，未落地）：一切皆是空间=内容+展示；内容类型注册表、default_content、程序不属于空间、开源布局推论 |
+| [空间切换设计.md](./空间切换设计.md) | **切换 Canonical**：WorkspaceSession 会话切换、边界与状态迁移 |
+| [空间性质模型.md](./空间性质模型.md) | **空间 Canonical**：空间＝数据+投影+写入契约、四正交维度 |
+| [空间模型与内容注册表.md](./archive/空间模型与内容注册表.md) | **已归档概念备忘**（2026-09-08 讨论共识，未落地；§3 已被空间性质模型修订）：一切皆是空间=内容+展示；内容类型注册表、default_content、程序不属于空间、开源布局推论 |
 | [工作空间概况.md](./工作空间概况.md) | **概况 Canonical**：`ws.md` 内容/组织/时机；§8 与代码对照（注入、janitor、idle watcher） |
 | [工作空间概况维护规范.md](./工作空间概况维护规范.md) | janitor 写作规范（骨架、硬规则、首次生成 / 会话边界流程） |
 | [STORAGE_AND_WORKSPACES.md](./STORAGE_AND_WORKSPACES.md) | **存储 Canonical**：coara Home 布局、trace/log/errors/usage 路径、资源上限 |
@@ -56,6 +58,7 @@
 | [CONVENTIONS.md](./CONVENTIONS.md) | 文档分层、标点、用户可见中文文案、文件 I/O 基线、delegate 工作流命名 |
 | [架构契约.md](./架构契约.md) | **四梁八柱一页纸**：分层铁律、core 原语、内核不变量、端接入规矩 |
 | [COARA_ARCHITECTURE.md](./COARA_ARCHITECTURE.md) | 代码对齐的深度架构（22 章 + 源码索引） |
+| [重启机制设计.md](./重启机制设计.md) | **重启 Canonical**：安全交棒协议（落意图 → 让位 → 同模式拉起 → 端口就绪 → 交棒）、`/restart` 静默命令 |
 
 ### 机制专题
 
@@ -100,7 +103,7 @@
 | 文档 | 内容 |
 |------|------|
 | [REMAINING_ISSUES.md](./REMAINING_ISSUES.md) | 剩余问题清单（唯一在册台账）：P0 决策项 1 + P1 问题 7 + 待评估 3 + P3 观察 12（P2 已于 08-20 全部出册） |
-| [PERFORMANCE_REVIEW.md](./PERFORMANCE_REVIEW.md) | 性能调研台账（2026-08）：热路径优化点分级清单，含行号与量级 |
+| [PERFORMANCE_REVIEW.md](./archive/PERFORMANCE_REVIEW.md) | **已归档调研快照**（2026-08，行号已漂移）：热路径优化点分级清单 |
 | [templates/](./templates/) | coara Home `system/.gitignore` 模板；**用户默认配置**见 [`../deploy/gitee/templates/`](../deploy/gitee/templates/) |
 
 ---

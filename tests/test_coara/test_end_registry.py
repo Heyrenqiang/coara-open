@@ -121,6 +121,44 @@ def test_subagent_diff_source_falls_back_to_active_turn_source() -> None:
     assert frames[0]["kind"] == "diff"
 
 
+def test_main_session_diff_with_none_subagent_origin() -> None:
+    """主会话 _subagent_origin=None 时 _route_tool_diff 不得炸（09-16 TypeError 回归）。
+
+    旧实现 getattr(self, "_subagent_origin", ("", None))[0] 在属性存在但为 None
+    （root 主会话初始值）时 None[0] 直接 TypeError，工具完成路由处整回合炸死。
+    """
+    from types import SimpleNamespace
+
+    from src.coara.base import CoaraBase
+
+    reg = EndRegistry()
+    frames = []
+    reg.register("web", lambda f: frames.append(f), "main-sess")
+
+    main = SimpleNamespace(
+        session_id="main-sess",
+        identity=SimpleNamespace(user_facing=True),
+        _session_agent_kind="main",
+        _subagent_parent=None,
+        _subagent_origin=None,
+        _delegate_parent_tool_call_id="",
+        _delegate_parent_session_id="",
+        _delegate_parent_workspace_dir="",
+        _cli_silent=False,
+        _root_ref=SimpleNamespace(end_registry=reg),
+        _OUTPUT_FRAME_DIFF_ENABLED=True,
+        _active_turn_source="web",
+        _segments=SimpleNamespace(source="web", current=None, channel_id=""),
+        _route_session_id=lambda: "main-sess",
+    )
+    CoaraBase._route_tool_diff(
+        main,
+        {"display_blocks": [{"kind": "diff", "lines": ["+z"]}], "tool_name": "edit"},
+    )
+    assert len(frames) == 1
+    assert frames[0]["kind"] == "diff"
+
+
 def test_deliver_session_id_falls_back_to_parent_for_subagent() -> None:
     """_route_session_id：非 user_facing（子智能体）回退父会话 session_id。"""
     from types import SimpleNamespace
@@ -578,8 +616,14 @@ def test_subagent_tool_line_routes_to_delegate_fold() -> None:
     )
     CoaraBase._route_tool_line(
         sub,
-        {"tool_label": "read(D:\\ws\\a.py)", "tool_name": "read", "tool_call_id": "c-sub-1",
-         "duration_ms": 12.5, "source": "web", "subagent_origin": "web"},
+        {
+            "tool_label": "read(D:\\ws\\a.py)",
+            "tool_name": "read",
+            "tool_call_id": "c-sub-1",
+            "duration_ms": 12.5,
+            "source": "web",
+            "subagent_origin": "web",
+        },
     )
 
     assert len(frames) == 1
@@ -1051,4 +1095,3 @@ def test_deliver_reports_miss() -> None:
     outcome = reg.deliver("web", "sess-1", {"kind": "chunk", "text": "x"})
     assert outcome.hit is False
     assert outcome.value is None
-

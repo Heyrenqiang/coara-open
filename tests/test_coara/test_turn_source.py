@@ -11,7 +11,8 @@ from src.coara.turn_source import (
     normalize_launch_source,
     normalize_turn_source,
     resolve_trace_end_source,
-    should_push_matrix,
+    same_turn_family,
+    turn_source_family,
     web_shows_source,
 )
 
@@ -27,11 +28,6 @@ def test_turn_source_helpers() -> None:
     assert normalize_launch_source("matrix") == "matrix"
     assert normalize_launch_source("background") == "cli-attached"
     assert normalize_launch_source("") == "cli-attached"
-
-    assert should_push_matrix("matrix") is True
-    assert should_push_matrix("event") is True
-    assert should_push_matrix("cli") is False
-    assert should_push_matrix("web") is False
 
     # 三端独立零镜像：CLI 端 spinner/活动树只跟随本端（cli/cli-attached）回合
     assert cli_shows_foreground_spinner("cli") is True
@@ -79,16 +75,36 @@ def test_web_shows_source_and_resolve_trace_end_source() -> None:
 def test_cli_attached_source_isolation() -> None:
     """外挂 CLI（coara attach）的 source 是私有前端：
     - 登记进 TURN_SOURCES（不被塌缩成 cli，回投/落盘正确）
-    - 不推手机（should_push_matrix 只认 matrix/event）
     - 一等 launch source（外挂可启动后台任务，origin 保留不塌缩）
     """
     from src.coara.turn_source import TURN_SOURCES
 
     assert "cli-attached" in TURN_SOURCES
     assert normalize_turn_source("cli-attached") == "cli-attached"
-    # 不推手机
-    assert should_push_matrix("cli-attached") is False
     # 一等 launch source：origin 保留为 cli-attached
     assert normalize_launch_source("cli-attached") == "cli-attached"
     # 主 CLI spinner 不跟随模块式 attach（非 web- 前缀返回 True，但 attach 回合
     # 不跑在主 CLI foreground_coara 上——见占用规则，spinner 天然不触发）。
+
+
+def test_turn_source_family() -> None:
+    """族抽象唯一事实源：cli/web- 前缀算本族，matrix 仅精确，event/background 归 system。"""
+    assert turn_source_family("cli") == "cli"
+    assert turn_source_family("cli-attached") == "cli"
+    assert turn_source_family("cli-anything") == "cli"
+    assert turn_source_family("web") == "web"
+    assert turn_source_family("web-flow") == "web"
+    assert turn_source_family("matrix") == "matrix"
+    assert turn_source_family("matrix-anything") == ""
+    assert turn_source_family("event") == "system"
+    assert turn_source_family("background") == "system"
+    assert turn_source_family("") == ""
+    assert turn_source_family(None) == ""
+    assert turn_source_family("unknown") == ""
+
+    assert same_turn_family("cli", "cli-attached") is True
+    assert same_turn_family("web", "web-flow") is True
+    assert same_turn_family("matrix", "matrix") is True
+    assert same_turn_family("web", "matrix") is False
+    assert same_turn_family("", "cli") is False
+    assert same_turn_family("", "") is False

@@ -1,4 +1,4 @@
-// Global app state via Zustand.
+﻿// Global app state via Zustand.
 //
 // Tracks: connection status, chat messages (streaming), current turn state,
 // pending interaction prompts (approval), runtime info, workspace
@@ -6,6 +6,7 @@
 
 import { create } from "zustand";
 import {
+  fetchSessionMessages,
   fetchToolActivityEvents,
   fetchWorkspaceList,
   type SessionSnapshot,
@@ -18,6 +19,8 @@ import type { AccountStatus } from "./account";
 import type {
   CommandResult,
   DisplayBlock,
+  FlowGraphSnapshot,
+  FlowLiveNode,
   ServerMessage,
 } from "./ws";
 
@@ -110,10 +113,29 @@ export interface ChatMessage {
 }
 
 /** 一个模块级独立会话的消息与 turn 状态（按 subject 键控）。 */
-export interface ModuleSessionState {
+interface ModuleSessionState {
   messages: ChatMessage[];
   turnActive: boolean;
   currentTurnId: string | null;
+}
+
+/** 内存态 agentic 工作流图（FlowCoordinator），工作台画布与 live WDL 同步用。 */
+interface FlowLiveGraph {
+  name: string;
+  hops: number;
+  nodes: Record<string, FlowLiveNode>;
+  edges: { from: string; to: string; on?: string }[];
+  /** True 表示该图的 flow_graph_snapshot 应答已到达（含 null 快照——
+   *  图不在内存中）。 */
+  loaded: boolean;
+  updatedAt: string;
+  /** FlowCoordinator 最新 canonical WDL（编辑器实时同步）。 */
+  wdl?: string;
+}
+
+/** flow 图的 store 键：按 subject 分域（主会话图 vs flow 工作台图）。 */
+export function flowGraphKey(flow: string, subject?: string): string {
+  return subject === "flow" ? `flow:${flow}` : flow;
 }
 
 /** Outbound file pushed from the runtime to the browser chat. */
@@ -129,7 +151,7 @@ export interface ChatFileAttachment {
   is_audio?: boolean;
 }
 
-export interface PendingInteraction {
+interface PendingInteraction {
   kind: "approval";
   approval_id: string;
   question: string;
@@ -152,6 +174,8 @@ export interface WorkspaceInfo {
   home_view?: string;
   /** 空间种类：managed=用户对话空间 / internal=系统空间（配置/消息/记录/用量等） */
   kind?: string;
+  /** 目录已被删除（仅用户对话空间会标记）：侧边栏置灰，点击走恢复流程 */
+  missing?: boolean;
 }
 
 export interface RuntimeInfo {
@@ -173,7 +197,7 @@ export interface RuntimeInfo {
 }
 
 /** Vault unlock prompt state — shown as a dedicated card (password never enters LLM). */
-export interface VaultPrompt {
+interface VaultPrompt {
   initialized: boolean;
   locked: boolean;
   title: string;
@@ -182,14 +206,14 @@ export interface VaultPrompt {
 }
 
 /** Vault unlock result — briefly shown after submitting a password. */
-export interface VaultResult {
+interface VaultResult {
   ok: boolean;
   message: string;
   created?: boolean;
 }
 
 /** Trace event entry for StatusSidebar tool activity (+ turn markers). */
-export interface TraceEventEntry {
+interface TraceEventEntry {
   id: string;
   event_type: string;
   timestamp: string;
@@ -253,6 +277,14 @@ interface AppState {
    *  不再参与任何「帧该不该上屏」的裁量——裁量改按「列表里有没有同序号的行」
    *  （见 _hasRowWithSeq），本地不再维护游标。 */
   hydratedSeq: number;
+  /** 向前翻页窗口：头部之前是否可能还有更早的历史（初始 false；loadHistory 的
+   *  commit 按「快照满页」置位，loadEarlier 按「返回不足一页」清零）。 */
+  hasMoreHistory: boolean;
+  /** 当前已加载的最小 view_seq（0＝未知）；prependHistory 后更新为 prepend 后最小值，
+   *  loadEarlier 以它为向前翻页游标。 */
+  earliestSeq: number;
+  /** 「加载更早消息」请求在飞：MessageList 用它防重复点击并显示加载态。 */
+  earlierLoading: boolean;
   /** 当前空间的内容是否已由权威快照落定（「一条入屏通道」的骨架态开关）：
    *  换边界（切空间 / 新会话段 / 首次定界）置 false，loadHistory 的 commit 是
    *  唯一置 true 的点。false 且无消息时渲染骨架——不先把欢迎卡或旧缓存上屏。 */
@@ -308,7 +340,6 @@ interface AppState {
   vaultPrompt: VaultPrompt | null;
   vaultResult: VaultResult | null;
   clearVaultPrompt: () => void;
-  clearVaultResult: () => void;
 
   // Navigation — set by server-pushed navigation messages and consumed by an
   // in-Router effect that calls navigate(). Keeping this in the store avoids
@@ -320,38 +351,34 @@ interface AppState {
   updatesPending: number;
   setUpdatesPending: (n: number) => void;
 
+  // 编排写穿：draft_id → 递增计数（workflow_draft_updated 驱动编辑器/列表刷新）
+  workflowDraftRevisions: Record<string, number>;
+
+  // Flow 工作台 —— 内存态 agentic 工作流图，key 由 flowGraphKey 生成
+  // （工作台主体 "flow" 前缀 `flow:<name>`）。仅保留已被 flow_snapshot 请求
+  // 过的图（视图卸载时 drop），内存有界。
+  flowGraphs: Record<string, FlowLiveGraph>;
+  /** 用全量快照替换某张图（图不存在时登记空图）。 */
+  applyFlowSnapshot: (flow: string, snapshot: FlowGraphSnapshot | null) => void;
+  /** 增量 trace 事件（flow_graph_changed / subagent_*）套用到在看的图；
+   *  未在看的图忽略（subject=flow 的工作台图除外，首个增量即建空图）。 */
+  applyFlowTraceEvent: (msg: ServerMessage) => void;
+  /** 卸载一张在看的图（视图 unmount）。 */
+  dropFlowGraph: (flow: string) => void;
+
   // 模块级独立会话（WS subject 键控）：每个 agentic 模块一份独立消息/turn 状态，
-  // 与主会话互不可见。key = subject（"config" / ...）。
+  // 与主会话互不可见。key = subject（"flow" / "config" / ...）。
   moduleSessions: Record<string, ModuleSessionState>;
   ensureModuleSession: (subject: string) => ModuleSessionState;
   loadModuleHistory: (subject: string, messages: { role: string; text: string }[]) => void;
   addModuleUserMessage: (subject: string, text: string, attachments?: ChatFileAttachment[]) => void;
-  resetModuleSession: (subject: string) => void;
 
   // Actions
   handleServerMessage: (msg: ServerMessage) => void;
   clearInteraction: () => void;
   setWorkspaces: (ws: WorkspaceInfo[], active: string | null) => void;
   loadHistory: (
-    messages: {
-      role: string;
-      text: string;
-      files?: ChatFileAttachment[];
-      diff?: import("./ws").CanonicalDiffLines;
-      /** diff 行的工具归属（产出它的那次工具调用 id，与同工具 tool 行同值） */
-      tool_call_id?: string;
-      tool?: ChatToolLine;
-      divider?: string;
-      divider_time?: string;
-      ts?: number;
-      seq?: number;
-      /** 端上生成的消息标识（随发送上行、服务端落带原样带回）：hydrate 对账按它
-       *  精确配对本端实时气泡，不靠文本猜 */
-      client_msg_id?: string;
-      /** /compact 等会话变更命令落带的结果行：hydrate 仍渲染为命令卡 */
-      is_command_result?: boolean;
-      attachments?: { ref?: string; filename?: string; size?: number; mime?: string; is_image?: boolean; url?: string }[];
-    }[],
+    messages: SnapshotMessageRow[],
     latestSeq?: number,
     opts?: {
       workspaceDir?: string | null;
@@ -370,8 +397,15 @@ interface AppState {
       epoch?: string;
     },
   ) => void;
+  /** 向前翻页：把更早的历史行 prepend 到头部（按 seq 去重）。不动 hydratedSeq /
+   *  viewReady / runtime——向前翻页不影响尾部游标与骨架态。 */
+  prependHistory: (messages: SnapshotMessageRow[], opts?: { workspaceDir?: string | null }) => void;
+  /** 加载更早消息（每页 200 条）：读 earliestSeq 之前的最近一页，prepend 进头部。
+   *  带 workspaceDir 与 hydrateGeneration 守卫（与 loadHistory 同款，防切空间竞态）；
+   *  加载期间 earlierLoading 为 true（防重复点击）；返回行数不足一页 → 到头，
+   *  hasMoreHistory 置 false。 */
+  loadEarlier: () => Promise<void>;
   addUserMessage: (text: string, imageRefs?: string[], attachments?: ChatFileAttachment[], clientMsgId?: string) => void;
-  clearTraceEvents: () => void;
   /** Load recent tool-activity events into the sidebar buffer (WS connect / workspace switch). */
   hydrateToolActivity: () => Promise<void>;
   /** 切工作空间：带上目标空间的会话键、内容清空，然后等 hydrate 权威校正。
@@ -446,6 +480,10 @@ function mergeAdjacentDividers(messages: ChatMessage[]): ChatMessage[] {
   }
   return out;
 }
+
+/** 向前翻页一页的行数：与服务端快照窗口同一把尺（loadEarlier 每次取一页，
+ *  「返回不足一页」＝历史到头的判据；hydrate 满页 ⇒ 头部之前还有更早历史）。 */
+export const HISTORY_PAGE_LIMIT = 200;
 
 /** hydrate 快照融合（手机端 buildChatListItems 同款）：
  *  连续相邻的分隔线合并为一条；分隔线缺时间标签时取下一行的内容时间
@@ -565,8 +603,13 @@ let vaultResultTimer: ReturnType<typeof setTimeout> | null = null;
 const MAX_TRACE_EVENTS = 200;
 
 /** Maximum chat messages kept in memory. Older messages are trimmed
- *  to prevent unbounded memory growth in long sessions. */
-const MAX_MESSAGES = 300;
+ *  to prevent unbounded memory growth in long sessions.
+ *  口径：必须大于「服务端快照窗口（200）+ 一回合实时尾部（工具行/diff/正文）」，
+ *  否则 _capMessages 丢掉的最旧行仍在服务端窗口内，下一次 hydrate 合并会把它们
+ *  当新行追加到列表末尾——中间内容看似消失、随后又在底部冒出（丢数据兼跳变）。
+ *  向前翻页（加载更早消息）会把更早的行 prepend 进来、窗口前移，上限随翻页次数
+ *  放大到 1000（约四次翻页），超上限仍丢最旧端。 */
+const MAX_MESSAGES = 1000;
 
 // Pre-built set for O(1) lookup — avoids creating a new Set on every WS message.
 const TRACE_TYPES = new Set([
@@ -885,6 +928,96 @@ function _sortBySeqAsc(list: ChatMessage[]): ChatMessage[] {
   );
 }
 
+/** 权威快照（/api/session/messages）的一行消息：loadHistory 与 prependHistory
+ *  共用的入参形状（原 loadHistory 内联类型抽出，避免两处漂移）。 */
+interface SnapshotMessageRow {
+  role: string;
+  text: string;
+  files?: ChatFileAttachment[];
+  diff?: import("./ws").CanonicalDiffLines;
+  /** diff 行的工具归属（产出它的那次工具调用 id，与同工具 tool 行同值） */
+  tool_call_id?: string;
+  tool?: ChatToolLine;
+  divider?: string;
+  divider_time?: string;
+  ts?: number;
+  seq?: number;
+  /** 端上生成的消息标识（随发送上行、服务端落带原样带回）：hydrate 对账按它
+   *  精确配对本端实时气泡，不靠文本猜 */
+  client_msg_id?: string;
+  /** /compact 等会话变更命令落带的结果行：hydrate 仍渲染为命令卡 */
+  is_command_result?: boolean;
+  attachments?: { ref?: string; filename?: string; size?: number; mime?: string; is_image?: boolean; url?: string }[];
+}
+
+/** 快照行 → ChatMessage 的映射（原 loadHistory 内联 map 原样抽出）：loadHistory 的
+ *  mapped 与 prependHistory 共用同一个构造函数，两条路径的字段口径不会漂移。
+ *  不做分隔线融合（fuseDividersWithTime）——融合是跨行操作，由调用方对整批行做。 */
+function _mapSnapshotRows(messages: SnapshotMessageRow[]): ChatMessage[] {
+  return messages.map((m) => ({
+    id: nextId(),
+    role: m.role as "user" | "assistant",
+    text: m.text,
+    key: computeMsgKey({
+      role: m.role as "user" | "assistant",
+      text: m.text,
+      diff: m.diff,
+      dividerLabel: m.divider,
+      tool: m.tool,
+      attachments: (m.attachments ?? []).map((a) => ({
+        file_id: String(a.ref ?? a.filename ?? ""),
+        url: String(a.url ?? ""),
+        filename: String(a.filename ?? a.ref ?? ""),
+        mime: String(a.mime ?? ""),
+        size: Number(a.size ?? 0),
+        is_image: Boolean(a.is_image),
+      })),
+    }),
+    ...(m.files && m.files.length > 0 ? { files: m.files } : {}),
+    ...(m.diff ? { diff: m.diff } : {}),
+    // diff 行的工具归属（落带/回放时按它归集到折叠区；主消息流按帧到达序就地落定）
+    ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+    ...(m.tool ? { tool: m.tool } : {}),
+    ...(m.divider ? { dividerLabel: m.divider } : {}),
+    ...(m.divider_time ? { dividerTime: m.divider_time } : {}),
+    ...(m.divider && typeof m.ts === "number" && m.ts > 0 ? { dividerTs: m.ts } : {}),
+    ...(m.seq ? { seq: m.seq } : {}),
+    ...(m.is_command_result ? { isCommandResult: true } : {}),
+    // 端上标识（权威行也带着它）：hydrate 对账的首选配对键
+    ...(typeof m.client_msg_id === "string" && m.client_msg_id.trim()
+      ? { clientMsgId: m.client_msg_id.trim() }
+      : {}),
+    ...(m.attachments && m.attachments.length > 0
+      ? {
+          attachments: m.attachments.map((a) => ({
+            file_id: String(a.ref ?? a.filename ?? ""),
+            url: String(a.url ?? ""),
+            filename: String(a.filename ?? a.ref ?? ""),
+            mime: String(a.mime ?? ""),
+            size: Number(a.size ?? 0),
+            is_image: Boolean(a.is_image),
+          })),
+        }
+      : {}),
+  }));
+}
+
+/** 向前翻页合并：更早的行 prepend 到头部，同 seq 的行不重复 prepend（已有行原样
+ *  保留——它在屏上，id 与位置都不动）。prepend 后超 MAX_MESSAGES 时 _capMessages
+ *  丢最旧端，翻页窗口自然前移。 */
+function _prependSnapshotRows(current: ChatMessage[], rows: ChatMessage[]): ChatMessage[] {
+  if (rows.length === 0) return current;
+  const existing = new Set<number>();
+  for (const m of current) {
+    if (m.seq !== undefined) existing.add(m.seq);
+  }
+  const fresh = rows.filter((r) => r.seq === undefined || !existing.has(r.seq));
+  if (fresh.length === 0) return current;
+  const merged = _capMessages([...fresh, ...current]);
+  _assertFrozenPrefixInvariant(current, merged, "prependSnapshotRows");
+  return merged;
+}
+
 /** 追加落定（内容行唯一入口）：同 seq 已上屏 → 幂等丢弃；否则**追加在尾部**。
  *  返回原引用＝这一帧没有产生新行（顺序与引用都不动，避免无谓重渲染）。 */
 function _appendRow(list: ChatMessage[], row: ChatMessage): ChatMessage[] {
@@ -897,13 +1030,66 @@ function _appendRow(list: ChatMessage[], row: ChatMessage): ChatMessage[] {
  *    序号，**id 与位置都不动**（React key 取服务端键，因此既不重挂也不跳位）
  *  - 未命中 → 追加在尾部（快照内部已是 view_seq 升序；绝不插进屏幕中间）
  *  - 既有行不在这份快照里 → 原地保留（已显示的内容不因对账消失）
+ *  - 比当前已显示最小 seq 更旧的快照行 → 跳过（那是 _capMessages 裁掉的历史，
+ *    复活追加到尾部＝中间内容看似消失、随后又在底部冒出的丢数据兼跳变）
  *  *replace* 只在整条线重建时给 true：那一次整表换成快照，顺序＝view_seq 升序。 */
 function _mergeSnapshotRows(
   current: ChatMessage[],
   rows: ChatMessage[],
   replace: boolean,
 ): ChatMessage[] {
-  if (replace || current.length === 0) return _capMessages(_sortBySeqAsc(rows));
+  if (replace || current.length === 0) {
+    const base = _sortBySeqAsc(rows);
+    if (current.length === 0) return _capMessages(base);
+    // 权威重建 + live 行接管：快照行是基底（顺序权威），本地 live 行按
+    // seq / clientMsgId / 内容 key 与基底配对——配对者保留本地 id（React 不重挂，
+    // 对齐 merge 路径的「认领不换 id」语义）；未配对的孤儿（乐观气泡、服务端
+    // 尚未落带的新帧）本就是最新的，追加尾部。纯丢弃 current 会把乐观气泡抹掉。
+    const bySeq = new Map<number, number>();
+    const byClientId = new Map<string, number>();
+    const byKey = new Map<string, number[]>();
+    base.forEach((m, i) => {
+      if (m.seq !== undefined) bySeq.set(m.seq, i);
+      if (m.clientMsgId) byClientId.set(m.clientMsgId, i);
+      const k = m.key ?? computeMsgKey(m);
+      const bucket = byKey.get(k);
+      if (bucket) bucket.push(i);
+      else byKey.set(k, [i]);
+    });
+    const usedBase = new Set<number>();
+    const orphans: ChatMessage[] = [];
+    const out = base.slice();
+    for (const m of current) {
+      let hit: number | undefined;
+      if (m.seq !== undefined) hit = bySeq.get(m.seq);
+      if (hit === undefined && m.clientMsgId) hit = byClientId.get(m.clientMsgId);
+      if (hit === undefined) {
+        hit = byKey.get(m.key ?? computeMsgKey(m))?.find((i) => !usedBase.has(i));
+      }
+      if (hit === undefined) {
+        orphans.push(m);
+        continue;
+      }
+      usedBase.add(hit);
+      out[hit] = {
+        ...out[hit],
+        id: m.id,
+        // 基底行缺的回合绑定/端上标识从 live 行继承（与 merge 路径同一兜底）
+        ...(out[hit].turn_id === undefined && m.turn_id !== undefined ? { turn_id: m.turn_id } : {}),
+        ...(out[hit].clientMsgId === undefined && m.clientMsgId !== undefined
+          ? { clientMsgId: m.clientMsgId }
+          : {}),
+      };
+    }
+    return _capMessages([...out, ...orphans]);
+  }
+  // 水位地板：当前已显示行的最小 seq。被 _capMessages 裁掉的最旧行 seq 都低于它，
+  // 它们仍在服务端快照窗口内时不得当作新行复活到尾部。
+  let seqFloor = Number.POSITIVE_INFINITY;
+  for (const m of current) {
+    if (m.seq !== undefined && m.seq < seqFloor) seqFloor = m.seq;
+  }
+  if (!Number.isFinite(seqFloor)) seqFloor = -1;
   const bySeq = new Map<number, number>();
   const byClientId = new Map<string, number>();
   const byKey = new Map<string, number[]>();
@@ -918,6 +1104,7 @@ function _mergeSnapshotRows(
   const used = new Set<number>();
   const out = current.slice();
   for (const row of rows) {
+    if (row.seq !== undefined && row.seq < seqFloor) continue;
     let hit: number | undefined;
     if (row.seq !== undefined) hit = bySeq.get(row.seq);
     if (hit === undefined && row.clientMsgId) hit = byClientId.get(row.clientMsgId);
@@ -938,7 +1125,39 @@ function _mergeSnapshotRows(
       ...(row.turn_id === undefined && prev.turn_id !== undefined ? { turn_id: prev.turn_id } : {}),
     };
   }
-  return _capMessages(out);
+  const merged = _capMessages(out);
+  _assertFrozenPrefixInvariant(current, merged, "mergeSnapshotRows:reconcile");
+  return merged;
+}
+
+/** 顺序不变量自检（只读，不改任何行为）：**已显示行的相对顺序不变**——
+ *  「追加即冻结」允许迟到帧落在尾部（设计行为，见迟到帧用例），但绝不允许
+ *  既有行之间的相对次序被重排。判据是前后对比：把合并前已有行按 React key
+ *  投影到合并后的列表里，它们的相对顺序必须与合并前一致。违例打 console.error
+ *  带行集指纹，一次定位，不再靠用户复现。 */
+function _assertFrozenPrefixInvariant(before: ChatMessage[], after: ChatMessage[], caller: string): void {
+  if (before.length < 2) return;
+  const posAfter = new Map<string, number>();
+  after.forEach((m, i) => posAfter.set(chatRowKey(m), i));
+  let prevPos = -1;
+  let prevKey = "";
+  for (const m of before) {
+    const k = chatRowKey(m);
+    const pos = posAfter.get(k);
+    if (pos === undefined) continue; // 被裁掉的旧行不参与（_capMessages 丢最旧是合法）
+    if (pos < prevPos) {
+      const fingerprint = after
+        .slice(Math.max(0, prevPos - 1), pos + 2)
+        .map((x) => `${x.seq ?? "?"}:${(x.text ?? "").slice(0, 16)}`)
+        .join(" | ");
+      console.error(
+        `[seq-order] frozen-prefix violated at ${caller}: row ${k} moved before ${prevKey}. window: ${fingerprint}`,
+      );
+      return;
+    }
+    prevPos = pos;
+    prevKey = k;
+  }
 }
 
 /** 落定一条内容行：追加 +（触顶时）回收折叠区数据。 */
@@ -1004,6 +1223,222 @@ const CONTENT_ROW_FRAME_TYPES = new Set([
   "file",
   "command_result",
 ]);
+
+/* ── Flow 工作台图（内存态 agentic workflow graph）────────────────────
+ * 图状态只维护在这里（单一事实源），工作台画布按其图名选取。
+ * 仅保留经 flow_snapshot 请求过的图；工作台（subject=flow）例外——
+ * 首个增量事件即建空图，画布自动跟随 FlowRoot 主体的图变化。
+ * ─────────────────────────────────────────────────────────────────── */
+
+function emptyFlowGraph(name: string, loaded = false): FlowLiveGraph {
+  return { name, hops: 0, nodes: {}, edges: [], loaded, updatedAt: nowISO() };
+}
+
+function graphFromSnapshot(snap: FlowGraphSnapshot): FlowLiveGraph {
+  const nodes: Record<string, FlowLiveNode> = {};
+  for (const n of snap.nodes || []) {
+    nodes[n.id] = {
+      id: n.id,
+      status: n.status,
+      task: n.task || "",
+      result: n.result || "",
+      activations: typeof n.activations === "number" ? n.activations : 0,
+      agent_id: n.agent_id || `sa-flow-${n.id}`,
+      ...(n.error ? { error: n.error } : {}),
+    };
+  }
+  return {
+    name: snap.name,
+    hops: snap.hops || 0,
+    nodes,
+    edges: (snap.edges || []).map((e) => ({
+      from: e.from,
+      to: e.to,
+      ...(e.on && e.on !== "success" ? { on: e.on } : {}),
+    })),
+    loaded: true,
+    updatedAt: nowISO(),
+    ...(typeof snap.wdl === "string" && snap.wdl.trim() ? { wdl: snap.wdl } : {}),
+  };
+}
+
+/** 把 flow-<flowName>-<nodeId> 形态的 subagent_id 匹配到在看的图。
+ *  最长名优先，图名带 '-' 也能正确解析。 */
+function flowNameFromSubagentId(
+  subagentId: string,
+  watched: string[],
+): string | null {
+  if (!subagentId.startsWith("flow-")) return null;
+  const rest = subagentId.slice("flow-".length);
+  const sorted = [...watched].sort((a, b) => b.length - a.length);
+  for (const name of sorted) {
+    if (rest.startsWith(name + "-")) return name;
+  }
+  return null;
+}
+
+/** 不可变更新一张在看的图；不在看则 no-op。 */
+function updateFlowGraph(
+  graphs: Record<string, FlowLiveGraph>,
+  flow: string,
+  updater: (g: FlowLiveGraph) => FlowLiveGraph,
+): Record<string, FlowLiveGraph> {
+  const g = graphs[flow];
+  if (!g) return graphs;
+  const next = updater(g);
+  return next === g ? graphs : { ...graphs, [flow]: next };
+}
+
+/** flow_graph_changed：spawn → 加节点 + depends_on 边；其余动作只刷新
+ *  已存在节点的状态。 */
+function applyGraphChanged(
+  graphs: Record<string, FlowLiveGraph>,
+  msg: Extract<ServerMessage, { type: "flow_graph_changed" }>,
+): Record<string, FlowLiveGraph> {
+  const flow = flowGraphKey(msg.flow || "", msg.subject);
+  const nodeId = msg.node_id;
+  if (!flow || !nodeId) return graphs;
+  // 工作台（subject=flow）总是 watch FlowRoot 主体的全部图：首个增量事件
+  // 即建立空图（画布自动跟新）；主会话侧维持「已 watch 才更新」语义。
+  if (msg.subject === "flow" && !graphs[flow]) {
+    graphs = { ...graphs, [flow]: emptyFlowGraph(flow) };
+  }
+  const liveWdl =
+    typeof msg.wdl === "string" && msg.wdl.trim() ? msg.wdl : undefined;
+  return updateFlowGraph(graphs, flow, (g) => {
+    const existing = g.nodes[nodeId];
+    if (msg.action === "spawn" || !existing) {
+      const nodes: Record<string, FlowLiveNode> = {
+        ...g.nodes,
+        [nodeId]: {
+          id: nodeId,
+          status: (msg.status as FlowLiveNode["status"]) || "pending",
+          task: "",
+          result: "",
+          activations: 0,
+          agent_id: `sa-flow-${nodeId}`,
+        },
+      };
+      // 重建与该节点相连的边；其余保留。
+      // spawn 增量边无 on 信息，按 success（缺省）处理；快照校准时补齐 error 标记
+      const edges: { from: string; to: string; on?: string }[] = [];
+      const seen = new Set<string>();
+      for (const e of g.edges) {
+        if (e.to !== nodeId) {
+          edges.push(e);
+          seen.add(`${e.from} ${e.to}`);
+        }
+      }
+      for (const dep of msg.depends_on || []) {
+        const key = `${dep} ${nodeId}`;
+        if (!seen.has(key) && nodes[dep]) {
+          edges.push({ from: dep, to: nodeId });
+          seen.add(key);
+        }
+      }
+      return {
+        ...g,
+        nodes,
+        edges,
+        updatedAt: nowISO(),
+        ...(liveWdl ? { wdl: liveWdl } : {}),
+      };
+    }
+    if (msg.status && existing.status !== msg.status) {
+      return {
+        ...g,
+        nodes: {
+          ...g.nodes,
+          [nodeId]: {
+            ...existing,
+            status: msg.status as FlowLiveNode["status"],
+          },
+        },
+        updatedAt: nowISO(),
+        ...(liveWdl ? { wdl: liveWdl } : {}),
+      };
+    }
+    if (liveWdl && liveWdl !== g.wdl) {
+      return { ...g, wdl: liveWdl, updatedAt: nowISO() };
+    }
+    return g;
+  });
+}
+
+/** subagent_start/complete/failed：把 subagent_id flow-<flow>-<node> 映射
+ *  为节点状态更新。错过 spawn 增量时顺带补建节点。 */
+function applySubagentStatus(
+  graphs: Record<string, FlowLiveGraph>,
+  msg: Extract<
+    ServerMessage,
+    { type: "subagent_start" | "subagent_complete" | "subagent_failed" }
+  >,
+): Record<string, FlowLiveGraph> {
+  const subagentId = msg.subagent_id || "";
+  const flow = flowNameFromSubagentId(subagentId, Object.keys(graphs));
+  if (!flow) return graphs;
+  const nodeId = subagentId.slice(`flow-${flow}-`.length);
+  const status: FlowLiveNode["status"] =
+    msg.type === "subagent_start"
+      ? msg.status === "pending"
+        ? "pending"
+        : "running"
+      : msg.type === "subagent_failed"
+        ? "failed"
+        : "done";
+  const agentId = `sa-flow-${nodeId}`;
+  return updateFlowGraph(graphs, flow, (g) => {
+    const existing = g.nodes[nodeId];
+    if (!existing) {
+      return {
+        ...g,
+        nodes: {
+          ...g.nodes,
+          [nodeId]: {
+            id: nodeId,
+            status,
+            task: msg.description || "",
+            result: "",
+            activations: 0,
+            agent_id: agentId,
+            ...(msg.type === "subagent_failed" && msg.error
+              ? { error: msg.error }
+              : {}),
+          },
+        },
+        updatedAt: nowISO(),
+      };
+    }
+    const nextError =
+      msg.type === "subagent_failed" && msg.error ? msg.error : existing.error;
+    const nextResult =
+      msg.type === "subagent_failed" && msg.error
+        ? `[失败] ${msg.error}`
+        : existing.result;
+    if (
+      existing.status === status &&
+      existing.error === nextError &&
+      existing.result === nextResult &&
+      existing.agent_id === agentId
+    ) {
+      return g;
+    }
+    return {
+      ...g,
+      nodes: {
+        ...g.nodes,
+        [nodeId]: {
+          ...existing,
+          status,
+          agent_id: existing.agent_id || agentId,
+          result: nextResult,
+          ...(nextError ? { error: nextError } : {}),
+        },
+      },
+      updatedAt: nowISO(),
+    };
+  });
+}
 
 /* ── 模块级独立会话（按 WS subject 键控）─────────────────────────────
  * 镜像主聊天的流式消息处理，但写入该模块独立的 moduleSessions[subject]，
@@ -1423,6 +1858,9 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
   workspaceDir: null,
   sessionIdByWorkspace: {},
   hydratedSeq: 0,
+  hasMoreHistory: false,
+  earliestSeq: 0,
+  earlierLoading: false,
   viewReady: false,
   skeletonSince: Date.now(),
   needsHydrate: false,
@@ -1479,12 +1917,35 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       },
     });
   },
-  resetModuleSession: (subject) => {
-    set({
-      moduleSessions: {
-        ...get().moduleSessions,
-        [subject]: { messages: [], turnActive: false, currentTurnId: null },
+  workflowDraftRevisions: {},
+  flowGraphs: {},
+  applyFlowSnapshot: (flow, snapshot) => {
+    set((s) => ({
+      flowGraphs: {
+        ...s.flowGraphs,
+        [flow]: snapshot ? graphFromSnapshot(snapshot) : emptyFlowGraph(flow, true),
       },
+    }));
+  },
+  applyFlowTraceEvent: (msg) => {
+    if (msg.type === "flow_graph_changed") {
+      set((s) => ({ flowGraphs: applyGraphChanged(s.flowGraphs, msg) }));
+      return;
+    }
+    if (
+      msg.type === "subagent_start" ||
+      msg.type === "subagent_complete" ||
+      msg.type === "subagent_failed"
+    ) {
+      set((s) => ({ flowGraphs: applySubagentStatus(s.flowGraphs, msg) }));
+    }
+  },
+  dropFlowGraph: (flow) => {
+    set((s) => {
+      if (!s.flowGraphs[flow]) return {};
+      const flowGraphs = { ...s.flowGraphs };
+      delete flowGraphs[flow];
+      return { flowGraphs };
     });
   },
   pendingInteraction: null,
@@ -1501,7 +1962,6 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
   vaultPrompt: null,
   vaultResult: null,
   clearVaultPrompt: () => set({ vaultPrompt: null }),
-  clearVaultResult: () => set({ vaultResult: null }),
   pendingNav: null,
   consumeNav: () => set({ pendingNav: null }),
   account: null,
@@ -2264,6 +2724,36 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
           .catch((err) => console.error("Failed to refresh workspace list:", err));
         break;
 
+      case "open_workflow_editor":
+        // 技能/save_draft 推来的导航请求——NavigationController（Router 内）
+        // 消费 pendingNav 执行真正的 navigate()。
+        set({ pendingNav: `/workflow/editor/${msg.draft_id}` });
+        break;
+
+      case "workflow_draft_updated":
+        // 编排写穿：会话侧改图已落盘——编辑器/列表按 revision 刷新
+        set((s) => ({
+          workflowDraftRevisions: {
+            ...s.workflowDraftRevisions,
+            [msg.draft_id]: (s.workflowDraftRevisions[msg.draft_id] ?? 0) + 1,
+          },
+        }));
+        break;
+
+      // Flow 工作台图：全量快照（flow_snapshot 应答）+ 增量 trace 事件
+      // （flow_graph_changed / subagent_*）。增量只碰在看的图（subject=flow
+      // 的工作台图除外，首个增量即建空图），闲置流量不累积图状态。
+      case "flow_graph_snapshot":
+        get().applyFlowSnapshot(flowGraphKey(msg.flow, msg.subject), msg.snapshot ?? null);
+        break;
+
+      case "flow_graph_changed":
+      case "subagent_start":
+      case "subagent_complete":
+      case "subagent_failed":
+        get().applyFlowTraceEvent(msg);
+        break;
+
       case "state": {
         const data = msg.data as {
           runtime?: RuntimeInfo;
@@ -2442,52 +2932,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
     // 每条已落带消息带磁带 seq——hydrate 内部对账的严格键。
     // 分隔线只由显式动作落帧：历史里的 divider 帧照常渲染（它是那条线的锚点），
     // 不存在自动产生的空档线。
-    const mapped: ChatMessage[] = messages.map((m) => ({
-      id: nextId(),
-      role: m.role as "user" | "assistant",
-      text: m.text,
-      key: computeMsgKey({
-        role: m.role as "user" | "assistant",
-        text: m.text,
-        diff: m.diff,
-        dividerLabel: m.divider,
-        tool: m.tool,
-        attachments: (m.attachments ?? []).map((a) => ({
-          file_id: String(a.ref ?? a.filename ?? ""),
-          url: String(a.url ?? ""),
-          filename: String(a.filename ?? a.ref ?? ""),
-          mime: String(a.mime ?? ""),
-          size: Number(a.size ?? 0),
-          is_image: Boolean(a.is_image),
-        })),
-      }),
-      ...(m.files && m.files.length > 0 ? { files: m.files } : {}),
-      ...(m.diff ? { diff: m.diff } : {}),
-      // diff 行的工具归属（落带/回放时按它归集到折叠区；主消息流按帧到达序就地落定）
-      ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-      ...(m.tool ? { tool: m.tool } : {}),
-      ...(m.divider ? { dividerLabel: m.divider } : {}),
-      ...(m.divider_time ? { dividerTime: m.divider_time } : {}),
-      ...(m.divider && typeof m.ts === "number" && m.ts > 0 ? { dividerTs: m.ts } : {}),
-      ...(m.seq ? { seq: m.seq } : {}),
-      ...(m.is_command_result ? { isCommandResult: true } : {}),
-      // 端上标识（权威行也带着它）：hydrate 对账的首选配对键
-      ...(typeof m.client_msg_id === "string" && m.client_msg_id.trim()
-        ? { clientMsgId: m.client_msg_id.trim() }
-        : {}),
-      ...(m.attachments && m.attachments.length > 0
-        ? {
-            attachments: m.attachments.map((a) => ({
-              file_id: String(a.ref ?? a.filename ?? ""),
-              url: String(a.url ?? ""),
-              filename: String(a.filename ?? a.ref ?? ""),
-              mime: String(a.mime ?? ""),
-              size: Number(a.size ?? 0),
-              is_image: Boolean(a.is_image),
-            })),
-          }
-        : {}),
-    }));
+    const mapped: ChatMessage[] = _mapSnapshotRows(messages);
     // 时间隔断融合（手机端同款）：同一消息行的「会话/模型切换 + 时间」合并
     // 到一条分隔线。时间取下一行的内容时间（分隔发生的位置）。
     const fused = fuseDividersWithTime(mapped);
@@ -2495,9 +2940,14 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
     const cursor = latestSeq ?? mapped.reduce((acc, m) => Math.max(acc, m.seq ?? 0), 0);
     // 线重建时本地列表整体作废：不参与配对、也不保留实时尾（它们都属旧线）。
     const current = lineRebuilt ? [] : get().messages;
-    // 整表重建的唯一判据：epoch 变了（线已重建）、或本地还没有任何已显示行
-    // （刷新首屏、切空间清空后第一份快照）。除这两条外一律「只追加 + 只改内容」。
-    const replace = lineRebuilt || current.length === 0;
+    // 整表重建的判据：epoch 变了（线已重建）、或权威快照从未落定（viewReady 为假——
+    // 刷新首屏/切空间清空后第一份快照）且不是 /new 的同边界增量补拉。不用「本地
+    // 还没有任何已显示行」：刷新瞬间先于快照到达的 live 帧会让 messages 非空，但
+    // 它们不是权威内容——这份首屏快照才是。判据错了的后果＝增量路径按水位地板丢
+    // 旧行、未命中行追加尾部，消息乱序。/new 补拉（incremental）例外：同一条线上
+    // 的分段，已显示行一律不动，只走合并。live 行不单独保留：它们都在服务端快照
+    // 窗口内（落带与实时帧同源、seq 连续），权威快照按 seq 完整覆盖，吸收而非丢失。
+    const replace = lineRebuilt || current.length === 0 || (!st.viewReady && !opts?.incremental);
     // hydrate 是权威：每次 loadHistory 后把当前空间的会话键记进映射（切回来时
     // 第一帧就用对键）。键 = workspaceDir；内容不存——本地那份随时可能过期。
     const syncCache = () => {
@@ -2554,6 +3004,21 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
         patch.turnStartedAt = webTurn ? (get().turnStartedAt ?? Date.now()) : null;
       }
       if (!webTurn) patch.subagentRows = [];
+      // 向前翻页窗口维护：满页快照 ⇒ 头部之前大概率还有更早历史，亮入口；
+      // 增量补拉只补后缀，头部不变（hasMoreHistory 维持原值）。已加载最小 seq 记进
+      // earliestSeq，作为 loadEarlier 的翻页游标（取快照与已显示行两侧的最小值——
+      // 已 prepend 过更早历史时不会被新快照回推）。
+      if (!opts?.incremental) {
+        patch.hasMoreHistory = messages.length >= HISTORY_PAGE_LIMIT;
+      }
+      let minSeq = Number.POSITIVE_INFINITY;
+      for (const m of mapped) {
+        if (m.seq !== undefined && m.seq > 0 && m.seq < minSeq) minSeq = m.seq;
+      }
+      for (const m of msgs) {
+        if (m.seq !== undefined && m.seq > 0 && m.seq < minSeq) minSeq = m.seq;
+      }
+      if (Number.isFinite(minSeq)) patch.earliestSeq = minSeq;
       set(patch);
       // 折叠区数据随事件裁剪联动回收：快照可能把老的 delegate 行挤出窗口，那些
       // call 的产出/答复/指令/过程帧再留着也没人渲染。
@@ -2565,6 +3030,71 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
     // 快照里没有的既有行原地保留。已显示行的相对顺序因此永不变化。
     commit(_mergeSnapshotRows(current, fused, replace));
   },
+
+  prependHistory: (messages, opts) => {
+    const st = get();
+    // 与 loadHistory 同款边界守卫：响应回来时空间已切走就整体丢弃。
+    if (
+      opts?.workspaceDir !== undefined &&
+      opts.workspaceDir !== null &&
+      st.workspaceDir !== opts.workspaceDir
+    ) {
+      return;
+    }
+    // 映射与 loadHistory 同一构造函数（_mapSnapshotRows）；分隔线融合只对这批
+    // 更早行内部做——跨已有行的融合不动（已显示行冻结，只许尾部追加与就地改内容）。
+    const mapped = fuseDividersWithTime(_mapSnapshotRows(messages));
+    const next = _prependSnapshotRows(st.messages, mapped);
+    if (next === st.messages) return;
+    let minSeq = st.earliestSeq;
+    for (const m of next) {
+      if (m.seq !== undefined && m.seq > 0 && (minSeq <= 0 || m.seq < minSeq)) minSeq = m.seq;
+    }
+    // 只动 messages 与翻页游标：hydratedSeq / viewReady / runtime 一律不碰
+    // （向前翻页不影响尾部游标与骨架态）。
+    set({ messages: next, earliestSeq: minSeq });
+  },
+
+  loadEarlier: async () => {
+    const st = get();
+    if (st.earlierLoading) return;
+    const dir = st.workspaceDir;
+    if (!dir) return;
+    // 翻页游标：已加载的最小 seq（earliestSeq 未维护到时退回现算）。游标都拿
+    // 不到（消息还没有 seq）就无从向前翻，直接按到头处理。
+    let earliest = st.earliestSeq;
+    if (earliest <= 0) {
+      for (const m of st.messages) {
+        if (m.seq !== undefined && m.seq > 0 && (earliest <= 0 || m.seq < earliest)) earliest = m.seq;
+      }
+    }
+    if (earliest <= 1) {
+      set({ hasMoreHistory: false });
+      return;
+    }
+    const generation = st.hydrateGeneration;
+    set({ earlierLoading: true });
+    try {
+      const data = await fetchSessionMessages(HISTORY_PAGE_LIMIT, undefined, {
+        workspaceDir: dir,
+        beforeViewSeq: earliest,
+      });
+      const now = get();
+      // 切空间 / 换边界竞态守卫（与 loadHistory 同款）：过期响应整体丢弃。
+      if (now.workspaceDir !== dir) return;
+      if (now.hydrateGeneration !== generation) return;
+      const rows = Array.isArray(data.messages) ? data.messages : [];
+      get().prependHistory(rows, { workspaceDir: dir });
+      // 不足一页＝历史到头，收起「加载更早消息」入口。
+      if (rows.length < HISTORY_PAGE_LIMIT) set({ hasMoreHistory: false });
+    } catch (err) {
+      console.error("Failed to load earlier messages:", err);
+    } finally {
+      const now = get();
+      if (now.workspaceDir === dir) set({ earlierLoading: false });
+    }
+  },
+
   addUserMessage: (text, _imageRefs, attachments, clientMsgId) => {
     // 回合进行中发送的是接续输入（排队等注入 LLM 上下文）：标 pendingInject，
     // 气泡显「待注入」徽标，注入事件到达后清除。新回合首条输入不带此标。
@@ -2583,7 +3113,6 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       }),
     });
   },
-  clearTraceEvents: () => set({ traceEvents: [], activityEpoch: get().activityEpoch + 1 }),
   hydrateToolActivity: async () => {
     try {
       const { events } = await fetchToolActivityEvents(80);
@@ -2664,6 +3193,10 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       // 空线上屏：目标空间的内容一律等 hydrate 权威给（宁可慢一拍，不铺旧料）。
       messages: [],
       hydratedSeq: 0,
+      // 向前翻页窗口属旧空间：换边界一律清回初始，由目标空间的 hydrate 重算。
+      hasMoreHistory: false,
+      earliestSeq: 0,
+      earlierLoading: false,
       // 换边界即退回骨架态：目标空间的内容还没被权威快照落定。
       viewReady: false,
       skeletonSince: Date.now(),

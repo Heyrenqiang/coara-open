@@ -88,6 +88,56 @@ def test_build_messages_since_seq_returns_delta_only(coara_home: Path, tmp_path:
     assert empty == []
     assert cursor3 == cursor2
 
+
+def test_build_messages_source_filter_hides_other_end_frames(coara_home: Path, tmp_path: Path) -> None:
+    """显示与录制分离：root 线按端过滤，他端（matrix）落带帧不投影到 web 聊天区。
+
+    录制仍全端统一进带——他端帧的 view_seq 照常占号（latest_seq 覆盖它们），
+    只是不聚合成 web 的消息行。缺 source 的历史帧按本端放行（老数据不丢）。
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sess = "sess-1"
+    path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id=sess)
+    store = WebViewStore()
+
+    def ev(kind: str, source: str, turn: str, **payload: object) -> None:
+        store.append_event(
+            path, kind=kind, turn_id=turn, source=source, subject="root", session_id=sess, payload=payload
+        )
+
+    # web 自己的回合
+    ev("turn_start", "web", "t1")
+    ev("user_message", "web", "t1", content="web 问")
+    ev("chunk", "web", "t1", text="web 答")
+    ev("turn_end", "web", "t1")
+    # 手机端（matrix）的回合：输入与输出都落带，但都不该上 web 的屏
+    ev("turn_start", "matrix", "t2")
+    ev("user_message", "matrix", "t2", content="手机问")
+    ev("chunk", "matrix", "t2", text="手机答")
+    ev("turn_end", "matrix", "t2")
+    # 无 source 的历史帧：按本端放行
+    store.append_event(path, kind="turn_start", turn_id="t3", source="", subject="root", session_id=sess)
+    store.append_event(path, kind="chunk", turn_id="t3", source="", subject="root", session_id=sess,
+                       payload={"text": "历史答"})
+    store.flush(timeout=2.0)
+    store.close()
+
+    # 无过滤（模块线 / 旧调用）：全量可见
+    all_msgs, _t, all_latest = WebViewStore.build_messages(path, limit=50)
+    assert [m["text"] for m in all_msgs] == ["web 问", "web 答", "手机问", "手机答", "历史答"]
+
+    # 按 web 过滤：只见本端与无 source 历史帧
+    msgs, _t2, latest = WebViewStore.build_messages(path, limit=50, source_filter="web")
+    assert [m["text"] for m in msgs] == ["web 问", "web 答", "历史答"]
+    # latest_seq 仍覆盖被过滤的他端帧（线上最大序号），增量游标才能推进
+    assert latest == all_latest
+
+    # 折叠映射同样不吸他端帧
+    sub_out: dict[str, str] = {}
+    WebViewStore.build_messages(path, limit=50, source_filter="web", subagent_out=sub_out)
+    assert sub_out == {}
+
 def test_subagent_chunk_not_persisted_result_kept_as_marked_frame(coara_home: Path, tmp_path: Path) -> None:
     """子智能体过程帧（subagent_chunk）不入带；最终答复入带但只作折叠映射。
 
@@ -258,9 +308,12 @@ def test_reset_line_changes_epoch(coara_home: Path, tmp_path: Path) -> None:
 
     assert generation == 1
     assert view_line_epoch(ws, "root", generation=generation) == f"{ws}::root#1"
-    # 新线：序号从头开始（epoch 已变，端上不会拿旧前缀比对）
+    # 新线：epoch 已变（世代 +1），端上不会拿旧前缀比对。
+    # jsonl 落帧是异步的：旧帧（view_seq 1/2）此刻尚未落盘，但 sidecar 高水位
+    # 是同步落盘的（序号分配在跨进程文件锁内直写）——重估读到高水位 2，新帧
+    # 从 3 起，与旧线序号不回退的单调契约一致（gen 变了，端上视为新线重取）。
     assert store.append_event(path, kind="chunk", turn_id="t2", source="web", subject="root",
-                              session_id=sess, payload={"text": "新线一"}) == 1
+                              session_id=sess, payload={"text": "新线一"}) == 3
     store.flush(timeout=2.0)
     store.close()
     assert WebViewStore().line_generation(path) == 1

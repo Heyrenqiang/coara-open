@@ -97,12 +97,17 @@ def test_message_action_unknown_action_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_message_unknown_task_id_auto_resume() -> None:
-    """message 发给已结束/不存在的子智能体：自动按 resume 处理，不报动作错误。"""
+async def test_execute_message_unknown_task_id_reports_error() -> None:
+    """message 发给不在运行中的子智能体：明确报错并指向 resume。
+
+    「补一句话」与「追加任务再跑一轮」代价不同（后者会再花一轮 LLM），落空时不
+    静默替换动作——这正是 09-13 的修正点。
+    """
     inv = DelegateToolInvocation({"action": "message", "task_id": "sa-coaras-gone", "prompt": "停"}, None)
     result = await inv._execute_message()
     assert result.is_error
-    assert "需要父 Coara 上下文" in result.content
+    assert "不在运行中" in result.content
+    assert "resume" in result.content
 
 
 @pytest.mark.asyncio
@@ -309,7 +314,7 @@ def test_coaras_md_contains_channel_and_no_intermediate() -> None:
     from src.coara.builtin_agents import _load_from_md
 
     sp = _load_from_md("coaras").system_prompt
-    assert "输出与交付规范" in sp
+    assert "输出规范" in sp
     assert "interact" in sp
     assert "{{INCLUDE" not in sp
 

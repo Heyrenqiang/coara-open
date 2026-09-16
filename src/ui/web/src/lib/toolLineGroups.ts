@@ -57,7 +57,7 @@ export interface ProcessEntry {
  *  权威版本（带耗时、最终 ✓/✗），树行只是「帧还没到」时的实时替身。
  *  diff 帧本身没有 call_id（它对应的是同一次 edit/write 调用），因此那次调用的去重
  *  由它的工具行帧完成，diff 只作为额外一条内容块追加，不会造成重复行。 */
-export function buildProcessEntries(frames: ChatMessage[], work: TreeRow[]): ProcessEntry[] {
+function buildProcessEntries(frames: ChatMessage[], work: TreeRow[]): ProcessEntry[] {
   // 同步点（`delegate wait`）不画：与聊天流同一条规则（见 lib/toolVisibility）。
   // 只在这里过滤 → 计数提示（项数）也随之把它排除，数据本身不动。
   const entries: ProcessEntry[] = frames
@@ -83,7 +83,7 @@ export function buildProcessEntries(frames: ChatMessage[], work: TreeRow[]): Pro
   });
 }
 
-export type ToolLineGroupId = "brief" | "process" | "result";
+type ToolLineGroupId = "brief" | "process" | "result";
 
 export interface ToolLineGroup {
   id: ToolLineGroupId;

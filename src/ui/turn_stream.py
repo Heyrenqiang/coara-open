@@ -122,6 +122,14 @@ class TurnStream:
     def emit(self, kind: str, **payload: Any) -> None:
         """记录一帧并调度广播。text chunk 与子智能体正文走微批，其余即时。"""
         if kind == "chunk":
+            if payload.get("block"):
+                # 独立显示块（计划审阅等）：先冲刷在批文本，再独占一帧一个气泡——
+                # 否则与前驱文本无分隔拼接（如 …---\n\n + # 标题），Markdown 块级
+                # 语法被黏连失效。前导换行保证它在任何已落气泡内也起新块。
+                self._flush_pending()
+                text = str(payload.get("text") or "")
+                self._record({"type": "chunk", "text": f"\n\n{text}"})
+                return
             self._pending_text.append(str(payload.get("text") or ""))
             self._schedule_flush()
             return

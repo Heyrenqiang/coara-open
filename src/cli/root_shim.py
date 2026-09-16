@@ -470,6 +470,15 @@ class ForegroundCoaraShim:
         # 回放帧按 (turn_id, seq) 去重：本地流已终结的重放帧走 _replay_callback 渲染，
         # 该表记每个服务端 turn_id 已消费的最大 seq（防双显/漏帧）。
         self._replay_seq: dict[str, int] = {}
+        # 显示回调：由 attached_chat_runner 装配时注入；未注入保持 None（非 attach 形态）。
+        # 在 RootShim.__init__ 也声明了同名位——两边都能直接读，构造后替换对象不失配
+        self._diff_callback: Any | None = None
+        self._replay_callback: Any | None = None
+        self._subagent_frame_callback: Any | None = None
+        self._display_resync_callback: Any | None = None
+        self._display_chrome_resync_callback: Any | None = None
+        self._approval_callback: Any | None = None
+        self._approval_resolved_callback: Any | None = None
 
     # --- 快照 ---
 
@@ -671,7 +680,7 @@ class ForegroundCoaraShim:
             self._continuation_inputs = []
             return
         drained = {" ".join(str(text or "").split()) for text in texts}
-        self._injected_texts = getattr(self, "_injected_texts", set()) | drained
+        self._injected_texts = self._injected_texts | drained
         self._continuation_inputs = [
             item for item in self._continuation_inputs if " ".join(str(item.text or "").split()) not in drained
         ]
@@ -816,9 +825,9 @@ class ForegroundCoaraShim:
             return False
         if frame_type == "diff":
             # diff 不依赖回合流队列：即使 turn 已结束或映射缺失也要投递 callback。
-            cb = getattr(self, "_diff_callback", None)
+            cb = self._diff_callback
             if cb is None:
-                shim = getattr(self, "_shim", None)
+                shim = self._shim
                 cb = getattr(shim, "_diff_callback", None) if shim is not None else None
             if cb is not None:
                 try:
@@ -855,9 +864,9 @@ class ForegroundCoaraShim:
             # 重放帧且本地无活跃流（断连时已终结）：走独立回放回调渲染，
             # 服务端权威帧不丢尾（重建的流无本地消费者，直接交给展示层）。
             if frame.get("replayed"):
-                cb = getattr(self, "_replay_callback", None)
+                cb = self._replay_callback
                 if cb is None:
-                    shim = getattr(self, "_shim", None)
+                    shim = self._shim
                     cb = getattr(shim, "_replay_callback", None) if shim is not None else None
                 if cb is not None and server_turn_id:
                     seq = int(frame.get("seq") or 0)
@@ -966,9 +975,7 @@ class ForegroundCoaraShim:
         本地镜像同步入队供显示，权威回执经 continuation_input_received 事件
         （服务端须去重或与本镜像一致）。"""
         await self._send({"type": "continuation", "text": text, "image_blocks": image_blocks or []})
-        self._continuation_inputs.append(
-            ContinuationInput(text=text.strip(), image_blocks=image_blocks, source=source)
-        )
+        self._continuation_inputs.append(ContinuationInput(text=text.strip(), image_blocks=image_blocks, source=source))
 
     async def cancel_queued_continuation(self, text: str = "") -> bool:
         """撤回队尾跟话（透传 type=cancel_continuation，带目标文本精确删除）。
@@ -1063,6 +1070,14 @@ class RootShim:
         self._subagent_frame_seq: dict[str, int] = {}
         # 重连续接：二次握手携带的 conn_id（服务端换回后重放在飞回合 buffer）。
         self._resume_channel_id: str = ""
+        # 显示回调：由 attached_chat_runner 装配时注入；未注入保持 None
+        self._diff_callback: Any | None = None
+        self._replay_callback: Any | None = None
+        self._subagent_frame_callback: Any | None = None
+        self._display_resync_callback: Any | None = None
+        self._display_chrome_resync_callback: Any | None = None
+        self._approval_callback: Any | None = None
+        self._approval_resolved_callback: Any | None = None
 
         transport.register_handler(self._on_frame)
         self.event_bus.subscribe(self._mirror_event, topic=None)
@@ -1249,7 +1264,7 @@ class RootShim:
         同 (turn_id, seq) 至多重放一次，重连后服务端重发 buffer 不会把过程正文
         与结果灌两份。seq 缺失（跟话直投/旧协议）时不去重，宁多勿丢。
         """
-        cb = getattr(self, "_subagent_frame_callback", None)
+        cb = self._subagent_frame_callback
         if cb is None:
             return
         turn_id = str(frame.get("turn_id") or "")
@@ -1279,9 +1294,9 @@ class RootShim:
         self.foreground_coara._end_all_turns("与内核连接断开")
         # 活动树丢 subagent_complete 等帧后子树僵死：断连后整树清重建，
         # 与服务端权威状态对齐（_prune_inactive 的超长静默兜底之外的双保险）。
-        cb = getattr(self, "_display_resync_callback", None)
+        cb = self._display_resync_callback
         if cb is None:
-            shim = getattr(self, "_shim", None)
+            shim = self._shim
             cb = getattr(shim, "_display_resync_callback", None) if shim is not None else None
         if cb is not None:
             try:
@@ -1382,9 +1397,9 @@ class RootShim:
                 entry.session_id = session_id
             self._sessions[ws_id] = entry
         # attach 跳过 workspace_switched：此处补活动树/chrome 重建（与事件路径对齐）。
-        cb = getattr(self, "_display_chrome_resync_callback", None)
+        cb = self._display_chrome_resync_callback
         if cb is None:
-            cb = getattr(self, "_display_resync_callback", None)
+            cb = self._display_resync_callback
         if cb is not None:
             try:
                 cb()
@@ -1451,7 +1466,7 @@ class RootShim:
         回调由 attached_chat_runner 注入（它持有 modal/spinner 渲染上下文）；
         未注入（瘦客户端等无界面路径）时记 WARNING——服务端 300s 超时兜底拒绝，
         不静默放行。"""
-        cb = getattr(self, "_approval_callback", None)
+        cb = self._approval_callback
         if cb is None:
             logger.warning(
                 "attach approval frame received but no consumer registered "
@@ -1468,7 +1483,7 @@ class RootShim:
 
         回调由 attached_chat_runner 注入（持有 approval_id→任务映射）；未注入
         或无对应任务时静默跳过（服务端已按超时/取消收口，无需补偿动作）。"""
-        cb = getattr(self, "_approval_resolved_callback", None)
+        cb = self._approval_resolved_callback
         if cb is None:
             return
         try:

@@ -15,7 +15,7 @@ from rich.prompt import Prompt
 
 from src.cli.matrix_connect import build_matrix_settings, matrix_config_incomplete, prepare_matrix_connection
 from src.core.config import config_manager
-from src.core.logger import setup_logger
+from src.core.logger import logger, setup_logger
 
 # pythonw（双击桌面图标的 tray 路径）无控制台：stdout/stderr 为 None，
 # 任何 print/console 输出都会抛错。先换成丢弃流，再建 Console（显式接管流，
@@ -140,6 +140,7 @@ def _wait_daemon_ready(workspace: Path, *, timeout_s: float = 30.0) -> bool:
                 with socket.create_connection(("localhost", port), timeout=0.5):
                     return True
             except OSError:
+                # 有意静默轮询：daemon 就绪前端口未开放是预期状态，0.4s 后重试
                 pass
         time.sleep(0.4)
     return False
@@ -317,8 +318,8 @@ def _run_attached_chat_command(
 
         _logger.remove()
         _logger.add(sys.stderr, level="WARNING", format="<level>{message}</level>")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"重配置 loguru 失败，沿用默认日志配置：{exc}")
 
     async def _run() -> None:
         url = f"ws://{host}:{port}/ws/attach?token={token}"
@@ -406,8 +407,9 @@ def _resolve_matrix_config(ctx: click.Context, enable_matrix: bool) -> tuple[boo
         coara_home = resolve_coara_home(ctx.obj["workspace"], getattr(config, "coara_home", None) if config else None)
         port = int(getattr(matrix_cfg, "port", 8008) or 8008) if matrix_cfg else 8008
         ensure_matrix_bot_credentials(coara_home, port=port)
-    except Exception:
-        pass
+    except Exception as exc:
+        # 补全失败不阻塞启动；下方配置不完整时已有黄色降级提示对用户可见
+        logger.debug(f"补全 matrix bot 凭证失败：{exc}")
 
     settings = build_matrix_settings(matrix_cfg)
     if matrix_config_incomplete(settings):
@@ -533,18 +535,18 @@ async def _run_frontends(ctx: click.Context) -> None:
     )
 
     root, provider_name, model_name = await bootstrap_runtime(ctx)
-    coara_home = getattr(ctx.obj.get("config"), "coara_home", None)
+    config_coara_home = getattr(ctx.obj.get("config"), "coara_home", None)
 
     _trace_holder: list[Any] = []
     install_multi_workspace_trace_persistence(
         root,
         workspace,
-        coara_home=coara_home,
+        coara_home=config_coara_home,
         trace_holder=_trace_holder,
     )
 
     root.event_bus.subscribe(
-        make_workspace_switched_handler(root, coara_home, _trace_holder),
+        make_workspace_switched_handler(root, config_coara_home, _trace_holder),
         topic="workspace_switched",
     )
 
@@ -569,12 +571,14 @@ async def _run_frontends(ctx: click.Context) -> None:
     # Matrix frontend — connect to already-running GoMatrix server
     if actual_matrix and matrix_config:
         actual_matrix, matrix_config = await _connect_matrix_if_ready(matrix_config)
-        if not actual_matrix:
+        if not actual_matrix or matrix_config is None:
             pass
         else:
             from src.cli.matrix_runner import run_matrix_client
 
-            matrix_task = asyncio.create_task(run_matrix_client(root, matrix_config, coara_home=coara_home))
+            matrix_task = asyncio.create_task(
+                run_matrix_client(root, matrix_config, coara_home=config_coara_home)
+            )
             tasks.append(matrix_task)
             console.print(f"[cyan][Matrix] 正在连接 {matrix_config['homeserver']}…[/cyan]")
 
@@ -688,6 +692,7 @@ def cli(
                 console_level="DEBUG" if debug else "WARNING",
             )
         except Exception:
+            # setup_logger 本身失败说明 logger 多半已坏，记日志也多半丢失，保持静默
             pass
         _set_console_title("coara")
         _ensure_kernel_and_attach(ctx.obj["workspace"])
@@ -784,10 +789,21 @@ def tray(ctx: click.Context) -> None:
         except Exception:
             token = ""
         port = int(os.environ.get("COARA_WEB_PORT", "8080"))
+        # 未配置任何可用模型时直落配置页：新用户装完第一屏就是填 key 的地方，
+        # 配好即对话（配置概况注入的 config-assistant 浮窗同页可继续加 provider）。
+        path = "/"
+        try:
+            from src.core.config import config_manager as _cfg_mgr
+            from src.llm.model_catalog import _enabled_provider_names
+
+            if not _enabled_provider_names(_cfg_mgr):
+                path = "/config"
+        except Exception:
+            path = "/"
         # 带上目标路径：已有标签时内核推 focus_window(path)，端上定向导航过去
         # （SPA 内跳转，不开新标签、不刷新）。不带 path 时前端只剩 window.focus()，
         # 而浏览器对无用户手势的 focus() 基本忽略 → 体感「点了没反应」。
-        open_or_focus_web_ui(host="127.0.0.1", port=port, token=token, path="/")
+        open_or_focus_web_ui(host="127.0.0.1", port=port, token=token, path=path)
 
     def _open_mobile() -> None:
         # 手机连接二维码做到托盘：取 gomatrix qr.png 存临时文件，用系统默认程序
@@ -901,6 +917,60 @@ def llm_profiles_cmd() -> None:
             )
 
     asyncio.run(run_profiles())
+
+
+@cli.group(name="config")
+def config_group() -> None:
+    """查看当前生效配置（脱敏后）。"""
+
+
+@config_group.command("show")
+@click.pass_context
+def config_show(ctx: click.Context) -> None:
+    """显示当前生效配置的来源链与关键值（密钥一律脱敏为 ***）。"""
+
+    async def run_show() -> None:
+        from src.core.coara_home import resolve_coara_home
+        from src.core.config import _iter_config_yaml_paths, _iter_env_file_paths, mask_secrets
+
+        await config_manager.load()
+        cfg = config_manager.config
+
+        console.print("[bold cyan]生效配置[/bold cyan]")
+        home = resolve_coara_home(ctx.obj["workspace"], cfg.coara_home)
+        console.print(f"coara_home：{home}")
+
+        env_files = [str(p) for p in _iter_env_file_paths(config_manager._raw_config) if p.is_file()]
+        yaml_files = [str(p) for p in _iter_config_yaml_paths(config_manager._raw_config) if p.is_file()]
+        if env_files:
+            console.print("env 文件（按加载顺序）：")
+            for p in env_files:
+                console.print(f"  {p}")
+        if yaml_files:
+            console.print("YAML 文件（按优先级由低到高）：")
+            for p in yaml_files:
+                console.print(f"  {p}")
+
+        if cfg.default_provider:
+            console.print(f"默认供应商：{cfg.default_provider} · 默认模型：{cfg.default_model or '无'}")
+        else:
+            console.print("默认供应商：（未设置）")
+        vault_on = "开" if cfg.vault_enabled else "关"
+        skills_on = "开" if cfg.skills_enabled else "关"
+        console.print(f"日志级别：{cfg.log_level} · vault：{vault_on} · 技能：{skills_on}")
+
+        if config_manager._load_errors:
+            console.print(f"[yellow]加载告警 {len(config_manager._load_errors)} 条：[/yellow]")
+            for err in config_manager._load_errors:
+                console.print(f"  {err}")
+
+        import json as _json
+
+        masked = mask_secrets(config_manager._raw_config)
+        console.print("[dim]合并后原始配置（脱敏）：[/dim]")
+        console.print(_json.dumps(masked, ensure_ascii=False, indent=2, default=str))
+
+    asyncio.run(run_show())
 
 
 def _vault_service_for_cli(ctx: click.Context):
@@ -1071,8 +1141,12 @@ def errors_cmd(
     import json
 
     from src.core.config import config_manager
-    from src.core.error_log import resolve_error_log_paths
-    from src.core.error_log_query import format_error_summary_text, summarize_errors, summary_to_dict
+    from src.core.error_log_query import (
+        format_error_summary_text,
+        resolve_error_log_paths,
+        summarize_errors,
+        summary_to_dict,
+    )
 
     try:
         coara_home = config_manager.config.coara_home

@@ -42,9 +42,9 @@ def _dir_mtime(path: Path) -> float:
             try:
                 latest = max(latest, child.stat().st_mtime)
             except OSError:
-                continue
+                continue  # 单个文件 stat 失败：跳过该项，mtime 指纹照旧累计
     except OSError:
-        pass
+        pass  # 目录遍历失败（权限/坏链接）：沿用已收集的 mtime 指纹
     return latest
 
 

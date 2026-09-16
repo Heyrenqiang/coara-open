@@ -46,11 +46,3 @@ export function formatDateGroupLabel(dateKey: string): string {
   if (dateKey === formatDateGroupKey(yesterday.toISOString())) return "昨天";
   return dateKey;
 }
-
-/** 时钟：HH:mm:ss（本地时区，实时侧栏用）；空值 "—"，非法值回退原串。 */
-export function formatClock(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = parseLocal(iso);
-  if (!d) return iso;
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
-}

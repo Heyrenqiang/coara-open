@@ -19,7 +19,7 @@
 /** 与 CLI builtin_agents.CLI_SILENT_SUBAGENT_TYPES 对齐：系统维护 agent 静默。 */
 const SILENT_SUBAGENT_TYPES = new Set(["janitor", "daily"]);
 
-export interface TreeNode {
+interface TreeNode {
   nodeId: string;
   parentId: string;
   label: string;

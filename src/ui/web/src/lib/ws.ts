@@ -31,6 +31,40 @@ export interface CanonicalDiffLines {
   hunks: { kind: "add" | "delete" | "context"; oldNum: number; newNum: number; code: string }[][];
 }
 
+/** Flow 工作台 —— 内存态 agentic 工作流图节点（FlowCoordinator 快照）。 */
+export type FlowLiveNodeStatus = "pending" | "running" | "done" | "failed";
+
+export interface FlowLiveNode {
+  id: string;
+  status: FlowLiveNodeStatus;
+  task: string;
+  result: string;
+  /** Fan-in 激活计数（FlowCoordinator 快照）。 */
+  activations?: number;
+  /** LLM log agent_id —— 缺省 ``sa-flow-{id}``。 */
+  agent_id?: string;
+  /** 失败时的最近一条错误。 */
+  error?: string;
+}
+
+interface FlowLiveEdge {
+  from: string;
+  to: string;
+  /** success（缺省）| error（失败兜底路由） */
+  on?: string;
+}
+
+/** flow_snapshot 请求的全图快照应答。 */
+export interface FlowGraphSnapshot {
+  name: string;
+  schedule: unknown | null;
+  hops: number;
+  nodes: FlowLiveNode[];
+  edges: FlowLiveEdge[];
+  /** Canonical kernel WDL —— 工作台编辑器实时同步源。 */
+  wdl?: string;
+}
+
 export type ServerMessage =
   | { type: "turn_start"; turn_id: string; source?: string; subject?: string; replayed?: boolean; workspace_dir?: string; session_id?: string }
   | { type: "turn_queued"; turn_id: string; source?: string; subject?: string; replayed?: boolean; workspace_dir?: string; session_id?: string }
@@ -60,6 +94,106 @@ export type ServerMessage =
   | { type: "info"; text: string }
   | { type: "focus_window"; path?: string }
   | { type: "workspaces_changed"; action?: string; workspace_name?: string }
+  | { type: "open_workflow_editor"; draft_id: string; workflow_name?: string }
+  | { type: "workflow_draft_updated"; draft_id: string; workflow_name?: string }
+  // Flow 工作台图协议：
+  // - flow_graph_snapshot：客户端 flow_snapshot 请求的全图应答。
+  // - flow_graph_changed / subagent_*：增量 trace 事件（单发或随 trace_batch
+  //   到达），驱动工作台画布实时更新。
+  | { type: "flow_graph_snapshot"; flow: string; snapshot: FlowGraphSnapshot | null; subject?: string }
+  | {
+      type: "flow_graph_changed";
+      flow?: string;
+      action?: string;
+      node_id?: string;
+      depends_on?: string[];
+      routes_to?: string[];
+      status?: string;
+      subject?: string;
+      /** 变更后全图 canonical WDL（FlowRoot 工作台）。 */
+      wdl?: string;
+    }
+  | {
+      type: "subagent_start";
+      subagent_type?: string;
+      subagent_id?: string;
+      description?: string;
+      /** Flow spawn 先按 pending 登记；真正 _run_node 起跳省略或置 running。 */
+      status?: string;
+      child_coara_id?: string;
+      child_session_id?: string;
+      session_id?: string;
+      subject?: string;
+      workspace_dir?: string;
+    }
+  | {
+      type: "subagent_complete";
+      subagent_type?: string;
+      subagent_id?: string;
+      description?: string;
+      child_coara_id?: string;
+      child_session_id?: string;
+      session_id?: string;
+      subject?: string;
+      workspace_dir?: string;
+    }
+  | {
+      type: "subagent_failed";
+      subagent_type?: string;
+      subagent_id?: string;
+      description?: string;
+      error?: string;
+      child_coara_id?: string;
+      child_session_id?: string;
+      session_id?: string;
+      subject?: string;
+      workspace_dir?: string;
+    }
+  | {
+      type: "background_agent_start";
+      task_id?: string;
+      subagent_type?: string;
+      description?: string;
+      child_coara_id?: string;
+      parent_tool_call_id?: string;
+      parent_activity_id?: string;
+      session_id?: string;
+      subject?: string;
+      workspace_dir?: string;
+    }
+  | {
+      type: "background_agent_complete";
+      task_id?: string;
+      subagent_type?: string;
+      description?: string;
+      has_error?: boolean;
+      error?: string;
+      result_preview?: string;
+      child_coara_id?: string;
+      origin_source?: string;
+      origin_channel?: string;
+      session_id?: string;
+      subject?: string;
+      workspace_dir?: string;
+    }
+  | {
+      type: "background_task_complete";
+      task_id?: string;
+      kind?: string;
+      status?: string;
+      description?: string;
+      terminal_reason?: string;
+      has_error?: boolean;
+      error?: string;
+      exit_code?: number;
+      result_preview?: string;
+      result_full?: string;
+      log_path?: string;
+      origin_source?: string;
+      session_id?: string;
+      subject?: string;
+      workspace_dir?: string;
+    }
   | { type: "vault_prompt"; initialized: boolean; locked: boolean; title: string; question: string; hint: string }
   | { type: "vault_result"; ok: boolean; message: string; created?: boolean }
   | {
@@ -76,14 +210,15 @@ export type ServerMessage =
     }
   | { type: "pong" };
 
-export type ClientMessage =
+type ClientMessage =
   | { type: "chat"; text: string; image_refs?: string[]; file_refs?: string[]; subject?: string; workspace_dir?: string; client_msg_id?: string }
   | { type: "interrupt"; subject?: string; workspace_dir?: string }
   | { type: "command"; text: string; subject?: string; workspace_dir?: string }
   | { type: "approval_reply"; approval_id: string; approved: boolean }
   | { type: "vault_reply"; password: string }
   | { type: "vault_cancel" }
-  | { type: "ping" };
+  | { type: "ping" }
+  | { type: "flow_snapshot"; flow: string; subject?: string };
 
 export interface CommandResult {
   output: string;
@@ -92,7 +227,7 @@ export interface CommandResult {
   exit_session: boolean;
 }
 
-export interface ApprovalOption {
+interface ApprovalOption {
   label: string;
   description: string;
 }
@@ -141,7 +276,7 @@ const SUPERSEDED_ERROR = "界面已在另一标签页打开，本标签页已断
 const NO_TOKEN_ERROR = "未授权：请从 coara 启动入口（或桌面图标）打开 Web 界面";
 const AUTH_FAILURE_ERROR = "认证失败，请从 coara 启动入口（或桌面图标）重新打开";
 
-export class CoaraWS {
+class CoaraWS {
   private ws: WebSocket | null = null;
   private url: string;
   private handlers: Set<MessageHandler> = new Set();

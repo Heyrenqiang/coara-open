@@ -28,7 +28,7 @@ export function parentFsPath(path: string): string | null {
   return parts.slice(0, -1).join(sep);
 }
 
-export interface PathCrumb {
+interface PathCrumb {
   label: string;
   path: string;
 }
@@ -68,7 +68,7 @@ export function tryPrettyJson(content: string): string | null {
   }
 }
 
-export interface CsvPreview {
+interface CsvPreview {
   headers: string[];
   rows: string[][];
   truncatedRows: boolean;

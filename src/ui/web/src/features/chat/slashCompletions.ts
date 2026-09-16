@@ -1,12 +1,12 @@
 /** Slash autocomplete matching CLI ``slash_pickers`` / ``SlashCommandCompleter``. */
 
-export interface SlashCommandInfo {
+interface SlashCommandInfo {
   name: string;
   description: string;
   category: string;
 }
 
-export interface SlashPickerOption {
+interface SlashPickerOption {
   insert: string;
   display: string;
   meta: string;

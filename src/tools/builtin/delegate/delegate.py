@@ -178,8 +178,8 @@ def _snapshot_cancellable_delegates() -> list[tuple[str, str]]:
     for task_id in list(_ACTIVE_SUBAGENTS):
         _add(task_id, _RUNNING_FG_DESCRIPTIONS.get(task_id, ""))
 
-    for task_id, task in list(BackgroundAgentManager()._tasks.items()):
-        if task is not None and task.done():
+    for task_id, bg_task in list(BackgroundAgentManager()._tasks.items()):
+        if bg_task is not None and bg_task.done():
             continue
         desc = ""
         try:
@@ -189,7 +189,7 @@ def _snapshot_cancellable_delegates() -> list[tuple[str, str]]:
             if record is not None:
                 desc = getattr(record, "description", "") or ""
         except Exception:
-            pass
+            logger.debug(f"后台任务描述查询失败（interrupt note 缺描述）: {task_id}")
         _add(task_id, desc)
 
     return items
@@ -245,7 +245,7 @@ def hard_cancel_all_running_delegates(*, reason: str = "user_interrupt") -> dict
                     if subagent.provider is not None:
                         subagent.provider.abort()
                 except Exception:
-                    pass
+                    pass  # 外层 except 的 debug 已覆盖本子智能体，这里有意静默
         except Exception as exc:
             logger.debug(f"hard_cancel interrupt {subagent_id} failed: {exc}")
 
@@ -645,6 +645,7 @@ class DelegateToolInvocation(ToolInvocation):
         差异只在输入：spawn 允许本次调用覆盖 provider/model 并以全新历史启动；
         resume 固定沿用父级 provider/model，断点历史随后由调用方恢复。
         """
+        assert self._parent is not None
         persona_template, persona_yaml_config = self._resolve_persona_parts(subagent_config)
         subagent = CoaraBase(
             name=subagent_id,
@@ -714,6 +715,7 @@ class DelegateToolInvocation(ToolInvocation):
 
     def _wire_subagent(self, subagent: CoaraBase, subagent_config: Any) -> set[str]:
         """计算并应用子代理工具白名单，并把子智能体 trace 事件接入父级 trace sink。"""
+        assert self._parent is not None
         tool_whitelist = self._resolve_tool_whitelist(subagent_config.tools)
         subagent._tool_manager.set_whitelist(tool_whitelist)
         # Wire subagent trace events into parent's trace sink so CLI/Dashboard see them
@@ -765,6 +767,8 @@ class DelegateToolInvocation(ToolInvocation):
         resumed=True 为断点恢复：返回文案/元数据带恢复语义。
         """
         # 后台模式：将子代理执行放到 BackgroundAgentManager，立即返回
+        assert self._parent is not None
+
         if self.background:
 
             async def _bg_coro() -> ToolResult:
@@ -809,10 +813,20 @@ class DelegateToolInvocation(ToolInvocation):
         _RUNNING_FG_TASKS[subagent_id] = fg_task
         _RUNNING_FG_DESCRIPTIONS[subagent_id] = description
         self._parent.register_foreground_delegate(subagent_id, fg_task, description)
-        fg_task.add_done_callback(
-            lambda t, sid=subagent_id, desc=description: self._parent.on_foreground_delegate_done(sid, desc, t)
-        )
-        fg_task.add_done_callback(lambda t, sid=subagent_id: _cleanup_fg_registries(sid))
+
+        def _on_fg_done(t: asyncio.Task[Any], sid: str = subagent_id, desc: str = description) -> None:
+            assert self._parent is not None
+            self._parent.on_foreground_delegate_done(sid, desc, t)
+
+        def _forget_fg(sid: str = subagent_id) -> None:
+            _cleanup_fg_registries(sid)
+
+        fg_task.add_done_callback(_on_fg_done)
+
+        def _forget_fg_done(t: asyncio.Task[Any], sid: str = subagent_id) -> None:
+            _forget_fg(sid)
+
+        fg_task.add_done_callback(_forget_fg_done)
 
         if resumed:
             return ToolResult.success(
@@ -982,14 +996,20 @@ class DelegateToolInvocation(ToolInvocation):
         at its next iteration boundary. Stop intent is cooperative by prompt
         convention; hard cancel stays with ``delegate(action="stop")``.
 
-        已收官/被打断的子智能体：断点持久化保留，消息即追加任务，自动按
-        resume 在原上下文续跑——调用方无需感知动作差异（治本：不报错）。
+        已收官/被打断的子智能体不在本动作范围内：那属于「追加任务」，请显式用
+        ``resume``——本动作绝不静默替换成续跑（会多花一轮 LLM，且与调用方意图
+        不符），查不到活实例即明确报错。
         """
         from src.core.message_tags import midrun_message
 
-        subagent = lookup_running_subagent(self.task_id)
-        if subagent is None:
-            return await self._execute_resume(signal)
+        subagent = lookup_running_subagent(self.task_id) or _ACTIVE_SUBAGENTS.get(self.task_id)
+        if subagent is None or not hasattr(subagent, "submit_continuation_input"):
+            # 动作不静默替换：message 是「给运行中的它补一句话」，resume 是「追加
+            # 任务再跑一轮」——两者代价不同，落空时直接报错让调用方显式选
+            return ToolResult.error(
+                f"子智能体 {self.task_id} 不在运行中，途中消息未投递。"
+                "若它已结束、要追加任务并在原上下文继续，请用 resume。"
+            )
         subagent.submit_continuation_input(midrun_message(self.prompt))
         return ToolResult.success(
             content=f"消息已送达 {self.task_id} 的输入队列，将在其下一迭代边界生效。",
@@ -1299,7 +1319,7 @@ class DelegateToolInvocation(ToolInvocation):
                     # 状态以免 finally 把 store 覆盖回 FAILED。
                     if not result.is_error:
                         final_status = SubagentStatus.IDLE
-                        result_preview = result.content or ""
+                        result_preview = str(result.content or "")
                         error_msg = None
                     else:
                         result_preview = str(result.content or "")
@@ -1383,7 +1403,7 @@ class DelegateToolInvocation(ToolInvocation):
                 )
                 if not result.is_error:
                     final_status = SubagentStatus.IDLE
-                    result_preview = result.content or ""
+                    result_preview = str(result.content or "")
                     error_msg = None
                 else:
                     result_preview = str(result.content or "")
@@ -1459,13 +1479,13 @@ class DelegateToolInvocation(ToolInvocation):
                 }
                 if existing:
                     record = SubagentRecord(
-                        **common_fields,
+                        **common_fields,  # type: ignore[arg-type]  # 公共字段是联合类型字典，字段名与类型由赋值保证
                         created_at=existing.created_at,
                         parent_coara_id=existing.parent_coara_id,
                     )
                 else:
                     record = SubagentRecord(
-                        **common_fields,
+                        **common_fields,  # type: ignore[arg-type]  # 同上
                         created_at=now,
                         parent_coara_id=self._parent.identity.coara_id if self._parent else None,
                     )
@@ -1977,17 +1997,47 @@ class DelegateToolInvocation(ToolInvocation):
             # 投递/兜底落带异常：不阻断交付，但会在端上表现为结果看不见——WARNING
             logger.warning("route subagent result failed", exc_info=True)
 
-    def _persist_subagent_result_view(self, subagent: CoaraBase, text: str) -> None:
-        """web 端无通道时把子智能体最终答复直接落视图带（刷新后折叠里仍有）。
+    def _push_matrix_subagent_result(self, subagent: CoaraBase, body: str) -> None:
+        """matrix 无在线通道时的兜底：发子智能体信封，端上折进 delegate 行。
 
-        与 ``_persist_delegate_task_view`` 同款落盘口径：只在 web 源回合落
-        （他端派发的子智能体不进 web 视图），只落帧不投递——端下次 hydrate 经
-        快照的 ``subagent_results`` 把它并回 delegate 折叠。任何失败只记日志，
-        绝不阻断交付。
+        形态与 sender 通道完全一致（同 kind、同父标识）——兜底只换传输，不换形状，
+        端上不会因为走了兜底就把它铺成主会话正文。
+        """
+        origin = getattr(subagent, "_subagent_origin", None)
+        room_id = str(origin[1] or "") if isinstance(origin, tuple) and len(origin) > 1 else ""
+        if not room_id:
+            return
+        try:
+            import json as _json
+
+            from src.matrix_client.diff_bridge import push_matrix_text
+
+            payload = {
+                "kind": "subagent_result",
+                "text": body,
+                "parent_tool_call_id": str(getattr(self, "tool_call_id", "") or ""),
+            }
+            envelope = f"[COARA_SUBAGENT]{_json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
+            asyncio.ensure_future(push_matrix_text(room_id=room_id, body=envelope))
+        except Exception:  # noqa: BLE001 — 兜底失败只记日志，不阻断结果交付
+            logger.warning("matrix subagent result fallback push failed", exc_info=True)
+
+    def _persist_subagent_result_view(self, subagent: CoaraBase, text: str) -> None:
+        """没有端通道时的兜底落地：按发起端各落各的，结果不丢。
+
+        与 ``_route_subagent_result`` 是一对：那条走通道投递，命中即不补落；这里
+        只在未命中时执行，绝不制造第二落点。web 落视图带（刷新后由快照的
+        ``subagent_results`` 并回折叠），matrix 发子智能体信封（与 sender 同形态）。
+        任何失败只记日志，绝不阻断交付。
         """
         body = str(text or "").strip()
         parent = self._parent
         if not body or parent is None:
+            return
+        from src.coara.base import _subagent_origin_source
+
+        if _subagent_origin_source(subagent) == "matrix":
+            self._push_matrix_subagent_result(subagent, body)
             return
         try:
             from src.coara.turn_source import current_turn_source, web_shows_source

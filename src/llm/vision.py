@@ -72,7 +72,7 @@ def _find_model_entry(config_manager: Any, provider_name: str, model_id: str) ->
     try:
         cfg = get_provider(provider_name)
     except Exception:
-        return None
+        return None  # 配置读取回落：拿不到证据返回 None，交上层按「未知放行」处理
     models = getattr(cfg, "models", None) or {}
     available = models.get("available") or []
     if not isinstance(available, list):

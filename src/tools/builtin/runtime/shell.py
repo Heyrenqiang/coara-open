@@ -67,12 +67,11 @@ _EXEC_PROMPT_COMMANDS = frozenset(
         "regsvcs",
         "msbuild",
         "dotnet",
-        # Windows 系统破坏/账户操作
+        # Windows 系统破坏/账户操作（net/net1 不在此列：查询无害、改账户才拦，
+        # 见下方 _DANGEROUS_PATTERNS 的 net 修改型模式）
         "vssadmin",
         "bcdedit",
         "reg",
-        "net",
-        "net1",
         "sc",
         "taskkill",
         "shutdown",
@@ -86,6 +85,11 @@ _DANGEROUS_PATTERNS = (
     re.compile(r"\b(curl|wget)\b[^|]*\|\s*(bash|sh|zsh|python|python3|perl|ruby|node|php)\b", re.IGNORECASE),
     re.compile(r"\b(iex|invoke-expression)\b", re.IGNORECASE),
     re.compile(r"\b(iwr|irm|invoke-webrequest)\b[^|]*\|\s*(iex|invoke-expression|powershell|pwsh)\b", re.IGNORECASE),
+    # net 是双面命令：`net user` / `net share`（不带开关）是查询，`net user x /add`、
+    # `net share d=C:\…`、`net stop` 才改系统状态——按修改型判，不按基名判死
+    re.compile(r"\bnet(?:1)?\s+(?:user|localgroup|group|accounts)\b[^|;]*?/(?:add|delete|del)\b", re.IGNORECASE),
+    re.compile(r"\bnet(?:1)?\s+(?:share|use|session|file)\b\s*[^|;]", re.IGNORECASE),
+    re.compile(r"\bnet(?:1)?\s+(?:stop|start|pause|continue|config|computer|statistics|time)\b", re.IGNORECASE),
 )
 
 # 管道/链式分隔符：分段后逐段检查首 token（堵 pipe-downstream 绕过）。
@@ -295,6 +299,8 @@ class ShellToolInvocation(WorkspaceBoundToolInvocation):
             )
 
         env = dict(os.environ)
+        # 有意 getattr 防御：_trust_level 由 executor 经 object.__setattr__ 外注，
+        # 生命周期内合法缺席（默认 owner，不误伤非可信场景）
         if getattr(self, "_trust_level", "owner") == "untrusted":
             from src.tools.sandbox import get_sandbox
 

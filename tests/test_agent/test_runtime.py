@@ -1102,13 +1102,15 @@ async def test_process_message_todo_park_ends_turn_immediately(tmp_path: Path) -
 async def test_process_message_stops_consecutive_empty_replies_when_todo_incomplete(
     tmp_path: Path,
 ) -> None:
-    """Empty / short text-only continues must not stack forever under open todos.
+    """待办未完成时的空回复不会叠加：空响应在 provider 边界判死，回合立即收束。
 
-    Provider 层有 EMPTY_RESPONSE 保护：finish_reason=stop 的空响应被
-    ``_ensure_non_empty_response`` 拦截抛 LLMError，触发 ReAct 回退重试
-    （_complete_with_provider 320 行），空响应不会到达 turn 层。turn 层的
-    todo_incomplete_stalled 处理"非空短文本无进展"：一次 continue 后第二次
-    无进展即停止。
+    ReAct 文本协议已删除，``_complete_with_provider`` 不再有「空响应 → 回退重试」。
+    现设计：finish_reason=stop 且零内容（无文本/工具/思考）由
+    ``_ensure_non_empty_response`` 抛 EmptyResponseError（仅流式零 delta 会回退
+    非流式重发一次），turn 层按不可重试的 LLM 错误收尾——status=FAILED、注入
+    「该轮未产出回复」系统注记、给用户一行中文指引并结束回合。因此空回复既不会
+    连续叠加，也不会留下空白 assistant 消息。turn 层的 todo_incomplete_stalled
+    仍负责「非空短文本无进展」的停止判定。
     """
     provider = CapturingProvider(
         [
@@ -1135,10 +1137,9 @@ async def test_process_message_stops_consecutive_empty_replies_when_todo_incompl
             ),
             # Short non-empty → continue once (todo_incomplete) + stall nudge
             LLMResponse(content="先记一笔"),
-            # Empty reply → provider EMPTY_RESPONSE 拦截 → ReAct 回退重试
+            # Empty reply → provider EMPTY_RESPONSE 判死 → 回合收束（不备第 4 条：
+            # 多一次请求即 Provider 池空，用例立即炸出）
             LLMResponse(content=""),
-            # ReAct 回退重试返回的第二次无进展短回复 → stalled stop
-            LLMResponse(content="should-not-be-called"),
         ]
     )
     coara = make_test_coara(tmp_path, name="TodoEmptyLoop", provider=provider)
@@ -1147,10 +1148,16 @@ async def test_process_message_stops_consecutive_empty_replies_when_todo_incompl
     chunks = [chunk async for chunk in coara.process_message("开始")]
 
     assert "先记一笔" in "".join(chunks)
-    assert len(provider.calls) == 4  # 空响应被 provider 层重试吞掉，未到达 turn 层
-    # 回合在重试后的第二次无进展短回复触发 todo_incomplete_stalled
-    assert chunks[-1].strip() == "should-not-be-called"
-    # No stacked blank assistants left in history（空响应以重试取代，不入史）
+    # 空响应即终局：无重试，也不会再发第 4 次请求
+    assert len(provider.calls) == 3
+    assert chunks[-1].strip() == "Error: 模型返回了空内容。请重试，如果持续出现请尝试切换模型。"
+    assert coara.status.value == "failed"
+    # 失败注记入史：下一轮知道这条用户消息尚未被处理
+    assert any(
+        m.role == MessageRole.USER and isinstance(m.content, str) and "该轮未产出回复" in m.content
+        for m in coara.message_history
+    )
+    # No stacked blank assistants left in history（空响应不落史）
     blank = [
         m
         for m in coara.message_history

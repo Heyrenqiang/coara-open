@@ -86,7 +86,8 @@ console = Console()
 
 
 # App key for storing the server instance on the aiohttp Application.
-WEB_SERVER_APP_KEY = web.AppKey("web_server", "WebServer")
+# AppKey 要真实类型对象（传字符串过不了类型检查），存储值在读取处按需 cast。
+WEB_SERVER_APP_KEY: web.AppKey[Any] = web.AppKey("web_server", object)
 
 # 模块会话（FlowRoot 构建对话等）里支持作用在模块主体上的会话级命令；
 # 其余命令维持原语义（作用在主会话前台实例）。
@@ -110,14 +111,10 @@ def _diff_frame_kwargs(frame: dict[str, Any]) -> dict[str, str]:
     那次工具调用之后（相邻关系不可靠：中间可能夹正文，或同一回合有多个工具）。
     非空才带，主会话 diff 也因此拿到这个 id。
     """
-    return {
-        key: str(frame.get(key))
-        for key in ("parent_tool_call_id", "tool_call_id")
-        if str(frame.get(key) or "")
-    }
+    return {key: str(frame.get(key)) for key in ("parent_tool_call_id", "tool_call_id") if str(frame.get(key) or "")}
 
 
-class WebServer(*HANDLER_MIXINS):
+class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mixin 元组，静态展不开
     """Embedded web server that holds RootCoara and serves the SPA + WS + REST.
 
     The REST API handlers come from :class:`~src.ui.dashboard_handlers.DashboardRestHandlers`,
@@ -470,7 +467,7 @@ class WebServer(*HANDLER_MIXINS):
         await self.site.start()
 
         # 托盘线程推 focus 用；跨进程 open_or_focus 也能找到本实例。
-        self._loop = asyncio.get_running_loop()
+        self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         global _ACTIVE_WEB_SERVER
         _ACTIVE_WEB_SERVER = self
 
@@ -500,6 +497,7 @@ class WebServer(*HANDLER_MIXINS):
 
     def _run_open_decision_sync(self, path: str = "") -> dict[str, Any]:
         """同步桥：把决策协程丢回内核 loop 跑（托盘在独立线程）。"""
+        # 有意 getattr 防御：托盘线程可在 start()（赋 _loop）之前调用本方法，None 是合法态
         loop = getattr(self, "_loop", None)
         if loop is not None and loop.is_running():
             try:
@@ -524,9 +522,9 @@ class WebServer(*HANDLER_MIXINS):
         except RuntimeError:
             loop = None
         if loop is not None and loop.is_running():
-            loop.create_task(self.registry.send_to_active(msg))
+            self._spawn_bg_task(self.registry.send_to_active(msg))
             return
-        # 托盘等外线程：把协程丢进内核 loop
+        # 托盘等外线程：把协程丢进内核 loop（有意 getattr 防御：start 前 _loop 未赋，None 合法）
         stored = getattr(self, "_loop", None)
         if stored is not None and getattr(stored, "is_running", lambda: False)():
             asyncio.run_coroutine_threadsafe(self.registry.send_to_active(msg), stored)
@@ -540,10 +538,12 @@ class WebServer(*HANDLER_MIXINS):
         path = str(request.query.get("path") or "").strip()
         result = await self.open_or_focus_decision(path, allow_open=False)
         # focused 语义（与旧外进程调用者兼容）：是否找到了已有标签并唤起过它。
-        return web.json_response({
-            "focused": result.get("action") != web_tab_presence.ACTION_OPEN,
-            **result,
-        })
+        return web.json_response(
+            {
+                "focused": result.get("action") != web_tab_presence.ACTION_OPEN,
+                **result,
+            }
+        )
 
     async def _handle_ui_open(self, request: web.Request) -> web.Response:
         """GET /api/ui/open — 打开或唤起 Web UI 的唯一入口（托盘/协议/外进程都走它）。"""
@@ -719,6 +719,7 @@ class WebServer(*HANDLER_MIXINS):
             await asyncio.wait_for(asyncio.to_thread(self.trace_store.close), timeout=2.0)
 
         # Close web 会话视图存储 writer（flush 剩余帧）。
+        # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，_view_store 可能不存在
         view_store = getattr(self, "_view_store", None)
         if view_store is not None:
             with contextlib.suppress(Exception):
@@ -1087,7 +1088,7 @@ class WebServer(*HANDLER_MIXINS):
             return
         text = str(frame.get("text") or "")
         if text.strip():
-            stream.emit("chunk", text=text)
+            stream.emit("chunk", text=text, block=bool(frame.get("block")))
 
     def _web_end_sender(self, stream: TurnStream) -> Any:
         """本回合的端通道 sender（精确槽 (web, session) → 这一条回合流）。
@@ -1181,6 +1182,7 @@ class WebServer(*HANDLER_MIXINS):
         from src.ui.turn_stream import TurnStream
 
         session_id = str(frame.get("session_id") or "")
+        # 有意 getattr 防御：standby 帧可在夹具/异常态到达，两个归属字段都可能缺席
         workspace = str(frame.get("workspace_dir") or "") or str(
             getattr(self, "_view_store_workspace", None) or getattr(self, "workspace_dir", "") or ""
         )
@@ -1213,6 +1215,7 @@ class WebServer(*HANDLER_MIXINS):
         if end_registry is None:
             return
         try:
+            # 有意 getattr 防御：夹具/异常态下 _turns property 也可能抛错
             turns = list(getattr(self, "_turns", {}).values())
         except Exception:  # noqa: BLE001 — 夹具/异常态下不阻断连接
             return
@@ -1340,7 +1343,11 @@ class WebServer(*HANDLER_MIXINS):
                 # Pending /report 只属于主会话
                 task = asyncio.create_task(self._handle_chat(data, ws, conn_id, subject=subject))
                 self._chat_tasks.setdefault(conn_id, set()).add(task)
-                task.add_done_callback(lambda t, cid=conn_id: self._chat_tasks.get(cid, set()).discard(t))
+
+                def _forget_module_chat_task(t: asyncio.Task[Any], cid: str = conn_id) -> None:
+                    self._chat_tasks.get(cid, set()).discard(t)
+
+                task.add_done_callback(_forget_module_chat_task)
                 return
             # Pending /report descriptions must NOT refresh idle clocks (like slash).
             from src.coara.commands.report import has_pending_report
@@ -1358,7 +1365,11 @@ class WebServer(*HANDLER_MIXINS):
             # (prevents orphaned turns from holding _process_lock forever).
             task = asyncio.create_task(self._handle_chat(data, ws, conn_id))
             self._chat_tasks.setdefault(conn_id, set()).add(task)
-            task.add_done_callback(lambda t, cid=conn_id: self._chat_tasks.get(cid, set()).discard(t))
+
+            def _forget_chat_task(t: asyncio.Task[Any], cid: str = conn_id) -> None:
+                self._chat_tasks.get(cid, set()).discard(t)
+
+            task.add_done_callback(_forget_chat_task)
         elif msg_type == "interrupt":
             module_root = self._module_roots.get(subject) if subject != "root" else None
             if module_root is not None:
@@ -1376,9 +1387,7 @@ class WebServer(*HANDLER_MIXINS):
                         if bound is not None:
                             target = bound
                     except Exception:  # noqa: BLE001
-                        logger.warning(
-                            "interrupt frame workspace_dir unresolved: %s", frame_dir, exc_info=True
-                        )
+                        logger.warning("interrupt frame workspace_dir unresolved: %s", frame_dir, exc_info=True)
                 target.interrupt_current_turn("user_stop", interrupt_source="stop_command")
         elif msg_type == "flow_snapshot":
             # Flow 实时视图：请求指定 flow 的全量图快照
@@ -1623,7 +1632,7 @@ class WebServer(*HANDLER_MIXINS):
                 return
         except Exception:
             # 校验本身失败不拦消息（fail-open，避免误判阻断正常对话）
-            pass
+            logger.debug("provider key gate check failed, message allowed through (fail-open)", exc_info=True)
 
         # 视觉门控：当前模型不支持图像时，图片省略并提示，避免误导"已附加 N 张图"。
         if image_blocks:
@@ -1722,9 +1731,7 @@ class WebServer(*HANDLER_MIXINS):
                     # 注入窗口内回合已结束/换号：turn_end 可能已错过，当场收尾，避免流永挂
                     _live = getattr(turn_coara, "_active_turn", None)
                     _live_tid = str(getattr(_live, "turn_id", "") or "") if _live is not None else ""
-                    if (not turn_coara.has_active_turn()) or (
-                        _turn_id and _live_tid and _live_tid != _turn_id
-                    ):
+                    if (not turn_coara.has_active_turn()) or (_turn_id and _live_tid and _live_tid != _turn_id):
                         _target_stream.emit("turn_end", reason="complete")
                         _target_stream.finish()
                         self._web_followup_view_turns.discard(_key)
@@ -1733,7 +1740,9 @@ class WebServer(*HANDLER_MIXINS):
                 if _target_stream is not None:
                     # 已有 web 流时也要确保 ("web", session) 指向它——stale sender
                     # 或它端回合无通道时段切到 web 会静默丢 chunk。
-                    def _route_sender(frame: dict, _stream: TurnStream = _target_stream) -> None:
+                    _follow_stream: TurnStream = _target_stream
+
+                    def _route_sender(frame: dict, _stream: TurnStream = _follow_stream) -> None:
                         if frame.get("kind") == "diff":
                             _stream.emit(
                                 "diff",
@@ -1756,7 +1765,7 @@ class WebServer(*HANDLER_MIXINS):
                             return
                         chunk_text = str(frame.get("text") or "")
                         if chunk_text.strip():
-                            _stream.emit("chunk", text=chunk_text)
+                            _stream.emit("chunk", text=chunk_text, block=bool(frame.get("block")))
 
                     end_registry.register("web", _route_sender, _sess_id)
                     _target_stream.emit_user_message(
@@ -1764,7 +1773,9 @@ class WebServer(*HANDLER_MIXINS):
                         attachments=attachments or [],
                         client_msg_id=client_msg_id,
                     )
-            turn_coara.submit_continuation_input(text, image_blocks=image_blocks, source="web")
+            turn_coara.submit_continuation_input(
+                text, image_blocks=image_blocks, source="web", client_msg_id=client_msg_id
+            )
             return
 
         # Turn-chain registration. Every full-turn _handle_chat registers its
@@ -1797,8 +1808,15 @@ class WebServer(*HANDLER_MIXINS):
                 from src.coara.continuation_leftover import dispatch_leftover_item
 
                 for cont_item in leftover:
+                    # 跟话时已按 client_msg_id 回过乐观气泡的项：leftover 重开回合
+                    # 时把标识原样带回权威帧，端上认领原气泡——同一句话不再铺第二条
+                    _item_cmid = (
+                        str(getattr(cont_item, "client_msg_id", "") or "").strip()
+                        if not isinstance(cont_item, str)
+                        else ""
+                    )
 
-                    async def _run_web(text: str, images: list | None) -> None:
+                    async def _run_web(text: str, images: list | None, _cmid: str = _item_cmid) -> None:
                         await self._stream_chat_turn(
                             text,
                             ws,
@@ -1807,6 +1825,7 @@ class WebServer(*HANDLER_MIXINS):
                             bind_coara=turn_coara,
                             bind_ws_id=turn_ws_id,
                             subject=subject,
+                            client_msg_id=_cmid,
                         )
 
                     async def _run_matrix(text: str, images: list | None) -> None:
@@ -2263,7 +2282,7 @@ class WebServer(*HANDLER_MIXINS):
         if (
             parsed is not None
             and parsed.name in _MODULE_SESSION_COMMANDS
-            and getattr(result, "output", "")
+            and getattr(result, "output", "")  # type: ignore[arg-type]  # aiohttp 的 getattr 存根签名与内置不一致
             and getattr(result, "data", None)
             and result.data.get("compressed")
         ):
@@ -2329,6 +2348,7 @@ class WebServer(*HANDLER_MIXINS):
         线上多一条带时间的线是给它的锚点。其余触发（切空间、发消息、模型切换、
         时间空档）都不落线。
         """
+        # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，_view_store 可能不存在
         view_store = getattr(self, "_view_store", None)
         label = (label or "").strip()
         if view_store is None or not label:
@@ -2336,6 +2356,7 @@ class WebServer(*HANDLER_MIXINS):
         try:
             # 归属本端视图空间，不读全局前台（单例指针）：分隔帧要落在你正在看的
             # 那个空间的线上，会话键也用它自己的。
+            target: Any
             try:
                 target = self.root.resolve_web_view_coara()
             except Exception:  # noqa: BLE001
@@ -2366,6 +2387,7 @@ class WebServer(*HANDLER_MIXINS):
         跳过）。chunk 带 ``is_command_result``，hydrate 仍渲染为命令卡。
         返回 chunk 的 view_seq（供实时 command_result 回填，失败返回 0）。
         """
+        # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，_view_store 可能不存在
         view_store = getattr(self, "_view_store", None)
         target = coara if coara is not None else getattr(self.root, "foreground_coara", None)
         sess_id = str(getattr(target, "session_id", "") or "")
@@ -2579,7 +2601,7 @@ class WebServer(*HANDLER_MIXINS):
                 try:
                     return resolver()
                 except Exception:
-                    pass
+                    logger.debug("web view coara resolver failed, falling back to foreground", exc_info=True)
         return self.root.foreground_coara
 
     def _current_runtime(self) -> dict[str, Any]:
@@ -2857,7 +2879,7 @@ def _resolve_banner_provider_model(
         fg_provider = getattr(fg, "provider_name", "") or ""
         fg_model = getattr(fg, "model_name", "") or ""
     except Exception:
-        pass
+        logger.debug("startup banner: foreground provider/model probe failed, using bootstrap defaults")
     return fg_provider or provider or "", fg_model or model or ""
 
 

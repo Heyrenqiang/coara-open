@@ -76,7 +76,7 @@ async def test_save_config_strips_providers_domain_and_underscore_keys(
 
 @pytest.mark.asyncio
 async def test_resolve_image_refs_skips_non_images(tmp_path: Path) -> None:
-    uploads = tmp_path / ".coara" / "uploads"
+    uploads = tmp_path / "uploads"
     uploads.mkdir(parents=True)
     (uploads / "note.txt").write_text("hello", encoding="utf-8")
     (uploads / "pic.png").write_bytes(
@@ -96,7 +96,7 @@ async def test_resolve_image_refs_skips_non_images(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_append_text_file_refs_inlines_text(tmp_path: Path) -> None:
-    uploads = tmp_path / ".coara" / "uploads"
+    uploads = tmp_path / "uploads"
     uploads.mkdir(parents=True)
     (uploads / "note.txt").write_text("line1\nline2", encoding="utf-8")
     (uploads / "blob.bin").write_bytes(b"\x00\x01\x02")

@@ -78,7 +78,7 @@ class CoaraMatrixBot:
             user_id=user_id,
             device_id=device_id,
         )
-        self.root = None
+        self.root: Any = None  # create_root_coara 之后赋值；用前必已初始化
         self._started_at: float = 0.0
         self._coara_home: Path | str | None = None
 
@@ -134,7 +134,7 @@ class CoaraMatrixBot:
 
         resp = await login_and_prepare_sync_token(
             self.client,
-            password=self.password,
+            password=self.password or "",
             device_name=self.device_name,
             token_path=self.token_path,
             label="Matrix Agent",
@@ -506,7 +506,10 @@ class CoaraMatrixBot:
             send_room_text=lambda rid, body: self._send_response(rid, body),
             deliver_batch=_deliver_batch,
         )
-        task = asyncio.create_task(handler(room, event))
+        async def _run_media_batch() -> None:
+            await handler(room, event)
+
+        task: asyncio.Task[Any] = asyncio.create_task(_run_media_batch())
         self._media_batch_tasks.add(task)
         task.add_done_callback(self._media_batch_tasks.discard)
 
@@ -526,7 +529,7 @@ class CoaraMatrixBot:
         # 正文 chunk 失败计数：批次正文走 stats.send，结束信封带 chunk_lost 标记
         raw_send_chunk = self._ingress_host.send_chunk
         turn_stats = turn_send_stats(raw_send_chunk)
-        turn_send = turn_stats.send if turn_stats is not None else raw_send_chunk
+        turn_send: Any = turn_stats.send if turn_stats is not None else raw_send_chunk
         async with matrix_turn_scope(
             room_id,
             send_chunk=raw_send_chunk,

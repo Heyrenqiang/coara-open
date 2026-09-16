@@ -545,9 +545,10 @@ def enrich_llm_log_detail(
         for it in round_obj.get("iterations") or []:
             if not isinstance(it, dict):
                 continue
-            usage = it.get("usage")
-            if not isinstance(usage, dict):
+            raw_usage = it.get("usage")
+            if not isinstance(raw_usage, dict):
                 continue
+            usage = raw_usage
             enrich_usage_with_cost(usage, provider=provider, model=model, coara_home=coara_home)
             round_cost += float(usage.get("cost_total") or 0)
             # 与计费一致：有效输入 = total_prompt_tokens（含 cache_read/creation）
@@ -1052,7 +1053,7 @@ def summarize_usage_dashboard(
             model_key_for_cost = f"{provider}/{model}" if provider and model else (model or provider)
             pricing = pricing_map.get(model_key_for_cost) if pricing_map else None
             cost = compute_turn_cost(usage, pricing)
-            recent_row = {
+            recent_row: dict[str, Any] = {
                 "ts": record.get("ts") or "",
                 "agent_kind": kind,
                 "agent_label": AGENT_KIND_LABELS.get(kind, kind),

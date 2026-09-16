@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.json_store import write_json_atomic
+from src.core.logger import logger
 
 MAX_ATTEMPTS = 3
 _TERMINAL = frozenset({"done", "failed", "cancelled"})
@@ -67,12 +68,12 @@ def _runtime_root() -> Path:
             if isinstance(raw, dict) and raw:
                 return Path(resolve_config_home(raw)).expanduser().resolve() / "runtime"
         except Exception:
-            pass
+            logger.debug("config coara_home 读取失败，回落 bootstrap 解析")
         bootstrap = resolve_bootstrap_coara_home()
         if bootstrap is not None:
             return Path(bootstrap).expanduser().resolve() / "runtime"
     except Exception:
-        pass
+        logger.debug("coara_home 解析失败，回落 COARA_HOME env / cwd/.coara")
     home = os.environ.get("COARA_HOME", "").strip()
     if home:
         return Path(home).expanduser().resolve() / "runtime"

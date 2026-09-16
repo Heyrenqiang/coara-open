@@ -19,6 +19,8 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
+from src.core.logger import logger
+
 DEFAULT_AGNES_BASE = "https://api.agnes-ai.cn/v1"
 DEFAULT_AGNES_IMAGE_MODEL = "agnes-image-2.1-flash"
 DEFAULT_AGNES_VIDEO_MODEL = "agnes-video-2.5-flash"
@@ -40,7 +42,7 @@ def _coara_home() -> Path | None:
         if isinstance(raw, dict) and raw:
             return resolve_config_home(raw)
     except Exception:
-        pass
+        logger.debug("config coara_home 读取失败，回落 bootstrap 解析")
     return resolve_bootstrap_coara_home()
 
 

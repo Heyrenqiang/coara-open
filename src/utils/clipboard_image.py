@@ -24,6 +24,7 @@ import platform
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Literal, overload
 
 from src.core.logger import logger
 from src.utils.win_proc import no_window_creationflags
@@ -226,6 +227,26 @@ async def _get_image_linux() -> Path | None:
 # ── Utility functions ───────────────────────────────────────────
 
 
+@overload
+async def _run_command(
+    cmd: list[str] | str,
+    timeout: int = CLIPBOARD_TIMEOUT,
+    shell: bool = False,
+    *,
+    raw: Literal[False] = False,
+) -> str | None: ...
+
+
+@overload
+async def _run_command(
+    cmd: list[str] | str,
+    timeout: int = CLIPBOARD_TIMEOUT,
+    shell: bool = False,
+    *,
+    raw: Literal[True],
+) -> bytes | None: ...
+
+
 async def _run_command(
     cmd: list[str] | str,
     timeout: int = CLIPBOARD_TIMEOUT,
@@ -291,7 +312,7 @@ def _validate_temp_image(path: Path) -> Path | None:
         if header[:4] == b"\x89PNG" or header[:3] == b"\xff\xd8\xff" or header[:4] == b"GIF8":
             return path
     except OSError:
-        pass
+        pass  # 魔数读取失败：无法校验时按下方大小判据放行，有意静默
     # If we can't verify, still return the path (might be valid)
     if path.stat().st_size > 100:  # At least 100 bytes
         return path

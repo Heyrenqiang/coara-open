@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.coara_home import workspace_id_for
+from src.core.logger import logger
 
 # Known callers that appear on the usage dashboard. No residual 「其他」 bucket.
 KNOWN_AGENT_KINDS: frozenset[str] = frozenset({"root", "coaras", "aide", "janitor", "daily"})
@@ -76,7 +77,9 @@ def attribution_from_coara(coara: Any) -> dict[str, Any]:
                 if entry is not None:
                     workspace_name = str(getattr(entry, "name", "") or "")
         except Exception:
-            pass
+            logger.debug(
+                f"usage attribution: match workspace for {workspace_dir} failed; degrade to empty", exc_info=True
+            )
 
     return {
         "agent_kind": resolve_agent_kind(persona=persona, user_facing=user_facing),

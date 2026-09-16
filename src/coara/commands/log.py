@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.coara.commands.registry import CommandArgs, register, resolve_target_coara
@@ -21,13 +22,12 @@ if TYPE_CHECKING:
     from src.coara.root import RootCoara
 
 _MAX_LIST = 20
-_MAX_HEAD_LINES = 40
 
 
-def _coara_home(root: RootCoara) -> str | None:
+def _coara_home(root: RootCoara) -> Path | None:
     try:
         wm = getattr(root, "workspace_manager", None)
-        return str(wm.coara_home) if wm is not None else None
+        return Path(str(wm.coara_home)) if wm is not None else None
     except Exception:
         return None
 
@@ -58,7 +58,7 @@ def _read_tool_execs(root: RootCoara, coara, *, all_sessions: bool = False) -> l
 
 
 def _format_exec_head(event: dict) -> str:
-    payload = event.payload or {}
+    payload = event.get("payload") or {}
     tool = str(payload.get("tool_name") or "?")
     mark = "✗" if payload.get("is_error") else "✓"
     lines = int(payload.get("lines") or 0)
@@ -73,7 +73,7 @@ def _format_exec_head(event: dict) -> str:
 
 def _load_exec_output(root: RootCoara, coara, event: dict) -> str | None:
     """取工具执行完整输出：spill 读存档，否则从历史消息找。"""
-    payload = event.payload or {}
+    payload = event.get("payload") or {}
     spill_ref = str(payload.get("spill_ref") or "")
     if spill_ref:
         try:

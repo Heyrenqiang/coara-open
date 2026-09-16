@@ -327,6 +327,30 @@ class WorkspaceRegistry:
         logger.info(f"Renamed workspace {entry.id} -> {chosen}")
         return entry
 
+    def rebind_path(self, workspace_id: str, new_path: str) -> WorkspaceEntry | None:
+        """改绑目录（项目挪了位置）：id 不变，coara_home 侧历史档案不断链。
+
+        目标路径必须已存在且是目录；不与他条目的路径冲突。改名/改绑分离：
+        目录被删后用户确认「项目搬走了」时走这里，不重建空目录。
+        """
+        from pathlib import Path
+
+        entry = self.resolve_name_or_id(workspace_id)
+        if entry is None:
+            return None
+        resolved = Path(new_path).expanduser().resolve()
+        if not resolved.is_dir():
+            raise ValueError(f"目录不存在：{resolved}")
+        for other in self.document.workspaces.values():
+            if other.id != entry.id and other.resolved_path() == resolved:
+                raise ValueError(f"该目录已登记为空间：{other.name}")
+        if entry.resolved_path() == resolved:
+            return entry
+        entry.path = str(resolved)
+        self.save()
+        logger.info(f"Rebound workspace {entry.id} -> {resolved}")
+        return entry
+
     def set_default(self, workspace_id: str) -> bool:
         entry = self.resolve_name_or_id(workspace_id)
         if entry is None:

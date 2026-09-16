@@ -9,7 +9,7 @@ const { Text } = Typography;
  * - `variant="label"`（默认）：小号大写字重标签 + 内容，轻薄分隔（原 ToolDetailSection 样式）
  * - `variant="card"`：带边框与圆角的卡片容器
  */
-export interface SectionCardProps {
+interface SectionCardProps {
   title?: ReactNode;
   /** 标题右侧的附加内容（操作、计数…） */
   extra?: ReactNode;

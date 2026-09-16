@@ -420,3 +420,59 @@ async def test_workspaces_add_missing_dir_rejected(settings_env) -> None:
             json={"path": "D:/does/not/exist/anywhere"},
         )
         assert resp.status == 400
+
+
+# ----------------------------------------------------------------------
+# /api/fs/browse 目录浏览
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fs_browse_lists_dirs_only(settings_env, tmp_path: Path) -> None:
+    handlers, app, _ = settings_env
+    token = handlers.auth_token
+    root_dir = tmp_path / "browse-me"
+    (root_dir / "alpha").mkdir(parents=True)
+    (root_dir / "beta").mkdir()
+    (root_dir / "notes.txt").write_text("x", encoding="utf-8")
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/fs/browse?token={token}&path={root_dir}")
+        assert resp.status == 200, await resp.text()
+        data = await resp.json()
+        names = [d["name"] for d in data["dirs"]]
+        assert names == ["alpha", "beta"]  # 只列目录，按名称排序
+        assert Path(data["path"]) == root_dir
+        assert data["parent"] is not None
+        for d in data["dirs"]:
+            assert Path(d["path"]).is_absolute()
+
+
+@pytest.mark.asyncio
+async def test_fs_browse_rejects_relative_path(settings_env) -> None:
+    handlers, app, _ = settings_env
+    token = handlers.auth_token
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/fs/browse?token={token}&path=some/relative/dir")
+        assert resp.status == 400
+        # token 守卫
+        no_token = await client.get("/api/fs/browse")
+        assert no_token.status in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_fs_browse_empty_path_uses_recommended_root(settings_env, tmp_path: Path) -> None:
+    handlers, app, root = settings_env
+    token = handlers.auth_token
+    # 登记两个空间 → 推荐根目录 = 最长公共父目录
+    ws_a = tmp_path / "common" / "proj-a"
+    ws_b = tmp_path / "common" / "proj-b"
+    ws_a.mkdir(parents=True)
+    ws_b.mkdir(parents=True)
+    root.workspace_manager.add_workspace(ws_a, name="proj-a")
+    root.workspace_manager.add_workspace(ws_b, name="proj-b")
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/fs/browse?token={token}")
+        assert resp.status == 200, await resp.text()
+        data = await resp.json()
+        assert Path(data["path"]) == (tmp_path / "common").resolve()
+        assert {d["name"] for d in data["dirs"]} == {"proj-a", "proj-b"}

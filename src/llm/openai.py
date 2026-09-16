@@ -28,6 +28,7 @@ from src.llm.endpoints import (
     is_mimo_openai_endpoint,
     is_zhipu_openai_endpoint,
 )
+from src.llm.errors import wrap_unexpected_error
 from src.llm.message_content import openai_assistant_content
 from src.llm.orphan_repair import close_orphan_tool_calls
 from src.llm.provider import LLMProvider, LLMResponse, StreamChunk, ToolCallDelta
@@ -523,7 +524,7 @@ class OpenAIProvider(HTTPProviderMixin, LLMProvider):
                 try:
                     await stream.close()
                 except Exception as close_exc:
-                    logger.debug(f"OpenAI stream close error: {close_exc}")
+                    logger.debug(f"OpenAI stream close error: {close_exc}", exc_info=True)
 
         except openai.APIStatusError as e:
             if "maximum context length" in str(e).lower():
@@ -532,7 +533,7 @@ class OpenAIProvider(HTTPProviderMixin, LLMProvider):
                 ) from e
             raise LLMError(f"OpenAI API error: {e}") from e
         except Exception as e:
-            raise LLMError(f"Unexpected error: {e}") from e
+            raise wrap_unexpected_error(e) from e
 
     def get_context_window(self, model: str | None = None) -> int:
         """获取上下文窗口大小（与 max_tokens 输出上限无关）。"""

@@ -101,19 +101,19 @@ def format_tool_call_label(tool_name: str, arguments: Any, *, max_len: int | Non
             return f"{tool_name}({_truncate(' '.join(bits), max_len)})"
 
     if tool_name == "ws":
-        action = args.get("action")
+        ws_action = args.get("action")
         name = args.get("name") or args.get("workspace")
-        if action is not None and str(action).strip():
-            label = str(action)
+        if ws_action is not None and str(ws_action).strip():
+            label = str(ws_action)
             if name is not None and str(name).strip():
                 label = f"{label} {name}"
             return f"{tool_name}({_truncate(label, max_len)})"
 
     if tool_name == "skill":
-        action = args.get("action")
+        skill_action = args.get("action")
         name = args.get("name")
-        if action is not None and str(action).strip():
-            label = str(action)
+        if skill_action is not None and str(skill_action).strip():
+            label = str(skill_action)
             if name is not None and str(name).strip():
                 label = f"{label} {name}"
             return f"{tool_name}({_truncate(label, max_len)})"
@@ -126,7 +126,7 @@ def format_tool_call_label(tool_name: str, arguments: Any, *, max_len: int | Non
         name = str(args.get("name") or "").strip()
         query = str(args.get("query") or "").strip()
         action_cn = {"search": "搜索", "activate": "装载"}.get(action, action)
-        bits: list[str] = []
+        bits = []
         if action_cn:
             bits.append(action_cn)
         if action == "activate" and name:
@@ -147,7 +147,7 @@ def format_tool_call_label(tool_name: str, arguments: Any, *, max_len: int | Non
         action = str(args.get("action") or "spawn").strip()
         flow = str(args.get("flow") or "").strip()
         node_id = str(args.get("node_id") or "").strip()
-        bits: list[str] = []
+        bits = []
         if sub:
             bits.append(sub)
         if args.get("background"):

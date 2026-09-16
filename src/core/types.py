@@ -147,6 +147,10 @@ class ContinuationInput:
     # mid-turn 远端 defer 时绑定的审批/回投上下文（room/send/channel/source/actor）。
     # 按条挂在队列项上，禁止单槽覆盖——同回合 web+matrix 先后跟话各跟各的门。
     deferred_remote_ctx: tuple[Any, ...] | None = None
+    # 端上消息标识：web 跟话时已按它回过乐观气泡；若本条沦为 leftover 重开
+    # 回合，权威 user_message 帧须原样带回——端上按它认领既有气泡，而不是
+    # 把同一句话再铺一条（重复显示的根因）。
+    client_msg_id: str = ""
 
 
 def unpack_continuation_item(item: str | ContinuationInput) -> tuple[str, list[dict[str, Any]] | None]:

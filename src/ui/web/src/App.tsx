@@ -29,6 +29,10 @@ const LoginView = lazy(() =>
 const PersonalView = lazy(() =>
   import("./views/PersonalView").then((m) => ({ default: m.PersonalView }))
 );
+const WorkflowView = lazy(() =>
+  import("./views/WorkflowView").then((m) => ({ default: m.WorkflowView }))
+);
+const WorkflowEditorView = lazy(() => import("./views/WorkflowEditorView"));
 const UsageView = lazy(() =>
   import("./views/UsageView").then((m) => ({ default: m.UsageView }))
 );
@@ -117,6 +121,8 @@ export default function App() {
                   <Route path="/review" element={<ReviewView />} />
                   <Route path="/file" element={<FileView />} />
                   <Route path="/records" element={<RecordsView />} />
+                  <Route path="/workflow" element={<WorkflowView />} />
+                  <Route path="/workflow/editor/:draftId" element={<WorkflowEditorView />} />
                   {/* 旧链接兜底：最近文件已并入记录页「最近」Tab */}
                   <Route path="/recent" element={<Navigate to="/records?tab=recent" replace />} />
                   <Route path="/usage" element={<UsageView />} />

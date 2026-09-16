@@ -199,6 +199,19 @@ class WorkspaceManager:
         self._notify_registry_changed("renamed", renamed)
         return renamed
 
+    def rebind_workspace(self, workspace_id: str, new_path: str) -> WorkspaceEntry | None:
+        """改绑目录（目录被删、项目挪位后的恢复路径）：id 不变，历史档案不断链。"""
+        entry = self.registry.resolve_name_or_id(workspace_id)
+        if entry is None:
+            return None
+        rebound = self.registry.rebind_path(entry.id, new_path)
+        if rebound is None:
+            return None
+        if self._active_id:
+            self._apply_active(self._active_id)
+        self._notify_registry_changed("renamed", rebound)
+        return rebound
+
     def list_workspaces(self) -> list[WorkspaceEntry]:
         return list(self.registry.document.workspaces.values())
 

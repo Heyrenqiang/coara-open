@@ -13,15 +13,19 @@ import type { ToolLineGroup } from "../../lib/toolLineGroups";
 const MONO_FONT =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 
-/** 勾叉改走正文那套 UI 字体：等宽字体里它是全角单元格、墨迹居中，左右自带留白，
- *  看着像又多缩进一截；比例字体墨迹贴边。 */
-const UI_FONT =
-  'system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif';
+/** 把内核的 `tool(args)` 改成 `tool - args`，少一层括号噪音（对齐手机端
+ *  `formatToolLabelForDisplay`）。已是 `tool - …` / `delegate …:` 等非括号
+ *  形态时原样返回。 */
+const TOOL_PAREN_LABEL_RE = /^([A-Za-z_][\w.]*)\((.*)\)$/s;
 
-/** 工具行的耗时括注：与 CLI 的 `120ms` / `1.2s` 同款读法。 */
-export function formatToolDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
+export function formatToolLabelForDisplay(label: string): string {
+  const trimmed = label.trim();
+  if (!trimmed) return trimmed;
+  const match = TOOL_PAREN_LABEL_RE.exec(trimmed);
+  if (!match) return trimmed;
+  const name = match[1];
+  const args = match[2].trim();
+  return args ? `${name} - ${args}` : name;
 }
 
 /** 该工具行是否还在跑：按完整后代判——子智能体刚起步、工具行还没出时也要亮 spinner。
@@ -34,12 +38,14 @@ export function toolRunning(rows: TreeRow[], callId: string): boolean {
   );
 }
 
-/** 工具行的「行」本身（不含展开面板）：调用方负责外层的间距与排布。 */
+/** 工具行的「行」本身（不含展开面板）：调用方负责外层的间距与排布。
+ *  形态对齐手机端 ToolLineRow：行首 `·`（比正文略大），label 括号改 `-` 分隔，
+ *  不显示耗时；运行中行首换成单点呼吸脉动（ToolRunningDots 同款）。
+ *  失败整行（点与标签）用红字，前缀仍是 ·。 */
 export const ToolLineRow = memo(function ToolLineRow({
   label,
   ok,
   running,
-  elapsed,
   expandable,
   open,
   onToggle,
@@ -48,19 +54,19 @@ export const ToolLineRow = memo(function ToolLineRow({
   label: string;
   ok: boolean;
   running: boolean;
-  elapsed: string;
   expandable: boolean;
   open: boolean;
   onToggle: () => void;
   paddingLeft?: number;
 }) {
+  const textColor = ok ? "var(--coara-text-secondary)" : "var(--coara-danger)";
   return (
     <div
       role={expandable ? "button" : undefined}
       onClick={expandable ? onToggle : undefined}
       style={{
         display: "inline-flex",
-        alignItems: "baseline",
+        alignItems: "center",
         gap: 6,
         maxWidth: "100%",
         // 时间要不要溢出，取决于这行的宽度算不算内边距：content-box 下
@@ -73,35 +79,42 @@ export const ToolLineRow = memo(function ToolLineRow({
         fontFamily: MONO_FONT,
         fontSize: 12.5,
         lineHeight: 1.7,
-        color: ok ? "var(--coara-text-secondary)" : "var(--coara-danger)",
+        color: textColor,
         cursor: expandable ? "pointer" : "default",
         userSelect: expandable ? "none" : undefined,
       }}
     >
-      <span
-        style={{
-          flexShrink: 0,
-          fontFamily: UI_FONT,
-          color: running
-            ? "var(--coara-progress)"
-            : ok
-              ? "var(--coara-success)"
-              : "var(--coara-danger)",
-        }}
-      >
-        {running ? <span className="coara-spin">◌</span> : ok ? "✓" : "✗"}
-      </span>
+      {running ? (
+        <ToolRunningDot color={textColor} />
+      ) : (
+        // 静态点与运行中点同一形态（CSS 圆点）：不用 · 字符——字符墨迹位置由字体
+        // 设计决定，放大后字框几何中心与墨迹中心错开，怎么对都不居中；圆点则
+        // 天然随 flex 居中，与运行中态只差一个呼吸动画。
+        <span
+          style={{
+            flexShrink: 0,
+            width: 3,
+            height: 3,
+            borderRadius: "50%",
+            background: textColor,
+          }}
+        />
+      )}
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-        {label}
+        {formatToolLabelForDisplay(label)}
       </span>
       {expandable ? (
         <span style={{ flexShrink: 0, opacity: 0.45 }}>{open ? "▾" : "▸"}</span>
-      ) : elapsed ? (
-        <span style={{ flexShrink: 0, opacity: 0.6 }}>{elapsed}</span>
       ) : null}
     </div>
   );
 });
+
+/** 执行中的工具指示：单点呼吸脉动（对齐手机端 ToolRunningDots）。
+ *  透明度与缩放逐帧起伏，一眼看出这条还在跑，动感清楚又不抢注意力。 */
+function ToolRunningDot({ color }: { color: string }) {
+  return <span className="tool-running-dot" style={{ background: color }} aria-label="执行中" />;
+}
 
 /** 展开面板外壳：缩进、字体、排版——工具行的展开内容统一走这里。 */
 export function ToolLinePanel({ children }: { children: ReactNode }) {

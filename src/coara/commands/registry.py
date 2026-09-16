@@ -362,23 +362,17 @@ def _same_turn_family(a: str, b: str) -> bool:
     """两个来源标签是否同一端族：cli/cli-attached 同族、web/web-<x> 同族。
 
     子智能体/后台继承父 source 或为 background/event，均视为与交互端不同。
+    转发自 turn_source.same_turn_family（族抽象唯一事实源）。
     """
-    fa = _turn_family(a)
-    fb = _turn_family(b)
-    return bool(fa) and fa == fb
+    from src.coara.turn_source import same_turn_family
+
+    return same_turn_family(a, b)
 
 
 def _turn_family(source: str) -> str:
-    s = str(source or "").strip().lower()
-    if s in ("cli", "cli-attached") or s.startswith("cli-"):
-        return "cli"
-    if s == "web" or s.startswith("web-"):
-        return "web"
-    if s == "matrix":
-        return "matrix"
-    if s in ("event", "background"):
-        return "system"
-    return ""
+    from src.coara.turn_source import turn_source_family
+
+    return turn_source_family(source)
 
 
 def _turn_family_label(source: str) -> str:

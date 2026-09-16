@@ -30,6 +30,21 @@ def test_source_predicates() -> None:
     assert is_cli_source("cli")
 
 
+def test_dispatch_predicates_intentional_divergence() -> None:
+    """分派门与族判定的有意差异钉成测试（防漂移，非行为变更）：
+
+    - is_cli_source 不认 cli- 前缀：cli-* leftover 落「跟收尾端走」兜底分支
+    - is_matrix_source 不含 event：event leftover 不能开成 matrix 回合
+    - 空来源恒 False（分派门无 unknown 放行档）
+    """
+    assert not is_cli_source("cli-x")
+    assert not is_matrix_source("event")
+    assert not is_matrix_source("matrix-x")
+    assert not is_web_source("")
+    assert not is_matrix_source("")
+    assert not is_cli_source("")
+
+
 @pytest.mark.asyncio
 async def test_dispatch_calls_native_by_source() -> None:
     seen: list[tuple[str, str]] = []

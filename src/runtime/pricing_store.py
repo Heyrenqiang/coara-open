@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.core.json_store import write_text_atomic
+from src.core.json_store import interprocess_file_lock, write_text_atomic
 
 _OVERRIDE_FILENAME = "pricing_override.json"
 _PRICING_KEYS = ("input", "cache_hit", "output")
@@ -77,27 +77,30 @@ def save_override(
     返回覆盖文件路径。
     """
     key = _model_key(provider, model)
-    overrides = load_overrides(coara_home)
-    if pricing is None or (isinstance(pricing, dict) and not pricing):
-        overrides.pop(key, None)
-    else:
-        # 字段级合并：只更新传入字段，其余保留现有覆盖值（避免单字段编辑误伤其它）
-        entry: dict[str, float] = dict(overrides.get(key) or {})
-        for field in _PRICING_KEYS:
-            if field not in pricing:
-                continue  # 未提供 → 保留现有覆盖值
-            raw = pricing.get(field)
-            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-                entry[field] = float(raw)
-            else:
-                entry.pop(field, None)  # 显式 null/非数值 → 清除该字段，回退默认
-        if entry:
-            overrides[key] = entry
-        else:
-            overrides.pop(key, None)
     path = override_path(coara_home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_text_atomic(path, json.dumps(overrides, ensure_ascii=False, indent=2) + "\n")
+    # 读改写整段持跨进程锁：web 配置页与 CLI 同时改价时，后写者不会拿旧快照覆盖
+    # 先写者刚落的字段（锁文件仅作互斥，不承载数据）
+    with interprocess_file_lock(path.with_name(f"{path.name}.lock")):
+        overrides = load_overrides(coara_home)
+        if pricing is None or (isinstance(pricing, dict) and not pricing):
+            overrides.pop(key, None)
+        else:
+            # 字段级合并：只更新传入字段，其余保留现有覆盖值（避免单字段编辑误伤其它）
+            entry: dict[str, float] = dict(overrides.get(key) or {})
+            for field in _PRICING_KEYS:
+                if field not in pricing:
+                    continue  # 未提供 → 保留现有覆盖值
+                raw = pricing.get(field)
+                if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                    entry[field] = float(raw)
+                else:
+                    entry.pop(field, None)  # 显式 null/非数值 → 清除该字段，回退默认
+            if entry:
+                overrides[key] = entry
+            else:
+                overrides.pop(key, None)
+        write_text_atomic(path, json.dumps(overrides, ensure_ascii=False, indent=2) + "\n")
     return path
 
 

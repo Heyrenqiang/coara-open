@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from src.core.text import normalize_lock_key
 from src.core.tool_base import ToolKind, ToolResult
@@ -45,6 +45,7 @@ class DeleteToolInvocation(WorkspaceBoundFileToolInvocation):
         path, path_error = self._resolve_delete_path()
         if path_error:
             return ToolResult.error(path_error)
+        path = cast(Path, path)
 
         if path.is_dir():
             return ToolResult.error(f"目标是一个目录，本工具仅支持删除文件: {path}")

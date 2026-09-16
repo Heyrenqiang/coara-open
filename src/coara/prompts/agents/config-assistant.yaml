@@ -11,6 +11,7 @@ agent:
       - edit
       - grep
       - glob
+      - reload_providers
   skills:
     include: []
     exclude: []

@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from src.core.config import config_manager
+from src.core.logger import logger
 
 _MAIN_CONTENT_PATTERNS = (
     re.compile(r"<article\b[^>]*>(.*?)</article>", re.IGNORECASE | re.DOTALL),
@@ -175,7 +176,7 @@ def extract_readable_text(html: str) -> str:
         if extracted and len(extracted.strip()) >= 120:
             return extracted.strip()
     except Exception:
-        pass
+        logger.debug("trafilatura 正文抽取失败，回落正则抽取")
 
     markup = _SCRIPT_STYLE_RE.sub(" ", html)
     markup = _NAV_ASIDE_RE.sub(" ", markup)

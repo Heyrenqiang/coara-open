@@ -2,7 +2,7 @@ agent:
   name: flow-root
   role: 工作流构建教练
   when_to_use: >-
-    WebUI 工作流页面专属会话主体；不经 delegate 委派，由 FlowRoot 直接加载
+    WebUI 工作流示例空间专属会话主体；不经 delegate 委派，由 FlowRoot 直接加载
   tools:
     include: ["*"]
   skills:

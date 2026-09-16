@@ -91,6 +91,24 @@ def _load_builtin_subagents() -> list[SubAgentConfig]:
 
 BUILTIN_SUBAGENTS: list[SubAgentConfig] = _load_builtin_subagents()
 
+# 模块/系统空间专属 persona 的惰性缓存（flow-root、config-assistant 等）。
+# 与 delegate 可委派名单分离：它们不是可委派类型，只作空间会话主体。
+_PERSONA_CACHE: dict[str, SubAgentConfig | None] = {}
+
+
+def get_module_persona(name: str) -> SubAgentConfig | None:
+    """惰性加载模块空间的专属 persona（flow-root、config-assistant 等）。
+
+    与 :data:`BUILTIN_SUBAGENTS` 分离：这些 persona 不作 delegate 候选，
+    只在创建对应空间的会话主体时按名加载（文件齐备即得，不进可委派名单）。
+    """
+    key = (name or "").strip().lower()
+    if not key:
+        return None
+    if key not in _PERSONA_CACHE:
+        _PERSONA_CACHE[key] = _load_from_md(key)
+    return _PERSONA_CACHE[key]
+
 # Removed built-in types — delegate rejects these at runtime (see docs/子智能体重构.md)
 REMOVED_SUBAGENT_TYPES: frozenset[str] = frozenset({"research", "explore"})
 

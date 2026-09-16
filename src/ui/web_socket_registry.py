@@ -8,7 +8,12 @@ chat chunks and trace events.
 Design:
 - Single active connection model. coara is a personal assistant — only one
   browser tab drives Root at a time. New connections supersede old ones.
-- Thread-safe via asyncio (single event loop, no locks needed).
+- All coroutines run on the single event loop of the embedded web server, but
+  connection-table mutation (register/unregister) still goes through an
+  ``asyncio.Lock``: both are async, and without the lock a second coroutine
+  could interleave between the supersede check and the active-pointer swap.
+  The lock guards ``_connections`` and ``_active_conn_id`` only; send paths
+  are lock-free and tolerate a concurrent unregister.
 - Connection lifecycle is managed by the WS handler in ``web_server.py``.
 """
 

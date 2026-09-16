@@ -34,6 +34,7 @@ import aiohttp
 from aiohttp import ClientSession, WSMsgType, WSServerHandshakeError
 from aiohttp.client_exceptions import ClientConnectorError, ClientResponseError
 
+from src.core.logger import logger
 from src.ui.web_link import (  # noqa: F401
     load_web_token,
     resolve_web_coara_home,
@@ -253,8 +254,8 @@ def run_attach_command(
 
         _logger.remove()
         _logger.add(sys.stderr, level="WARNING", format="<level>{message}</level>")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"重配置 loguru 失败，沿用默认日志配置：{exc}")
     try:
         asyncio.run(attach_session(workspace, host=host, port=port, token=token, out=out))
     except AttachAuthError as exc:

@@ -8,7 +8,7 @@
  * 纯函数 + 可泛型：折叠区的过程条目与主消息流的消息行都用它，规则只有一份。
  */
 
-export interface DiffPairingAccessors<T> {
+interface DiffPairingAccessors<T> {
   /** 该条目所属的工具调用 id：工具行取自自身（tool.tool_call_id / nodeId），diff 取自身 */
   callId: (item: T) => string;
   isTool: (item: T) => boolean;

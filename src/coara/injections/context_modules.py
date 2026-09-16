@@ -381,6 +381,29 @@ def build_prefix_seed_messages(
     return messages
 
 
+# 补注入认领扫描上界：只看历史头部这么多条。种子永远注入在历史头部
+# （inject_environment_seed 插到 [:0]，压缩的头部保护只覆盖开头连续系统消息），
+# 更靠后出现的模块字样只可能是对话正文/压缩摘要复述，不算种子。
+SEED_SCAN_HEAD_LIMIT = 10
+
+
+def _seed_body_startswith_marker(text: str, marker: str) -> bool:
+    """判据与 ``is_context_module_seed`` 同源：剥掉包裹标签后按 ``startswith`` 认领。"""
+    if not text:
+        return False
+    body = text.strip()
+    for open_tag, close_tag in (
+        ("<系统消息>", "</系统消息>"),
+        ("<系统提醒>", "</系统提醒>"),
+    ):
+        if body.startswith(open_tag):
+            body = body[len(open_tag) :].lstrip("\n")
+            if body.endswith(close_tag):
+                body = body[: -len(close_tag)].rstrip("\n")
+            break
+    return body.startswith(marker)
+
+
 def build_missing_prefix_messages(
     history_texts: list[str],
     workspace_dir: Path | str,
@@ -393,13 +416,18 @@ def build_missing_prefix_messages(
 
     不能「历史里有任一种子就整批跳过」：那样一旦只剩概况（压缩、恢复、或任何
     原因让某条丢过），环境上下文与 AGENTS.md 就再也不会回来。
+
+    认领判据与 ``is_context_module_seed`` 同源：只在历史头部
+    ``SEED_SCAN_HEAD_LIMIT`` 条里按 ``startswith`` 认领（剥包裹标签后）。
+    旧的「前缀出现在整段拼接文本里」判据会被压缩摘要复述模块标题（如
+    ``AGENTS.md：``）误判成「已存在」，该模块从此静默缺失、永不补注入。
     """
     prefix, _ = _slots_around_conversation(order)
-    joined = "\n".join(history_texts)
+    head = history_texts[:SEED_SCAN_HEAD_LIMIT]
     messages: list[Message] = []
     for slot in prefix:
         marker = MODULE_CONTENT_PREFIX_BY_ID.get(slot.id)
-        if marker and marker in joined:
+        if marker and any(_seed_body_startswith_marker(text, marker) for text in head):
             continue
         body = _build_module_body(
             slot.id,

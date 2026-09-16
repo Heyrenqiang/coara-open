@@ -8,6 +8,7 @@ from typing import Any
 from src.core.coara_home import current_coara_home
 from src.core.config import config_manager
 from src.core.events import TraceEvent
+from src.core.logger import logger
 from src.runtime.usage_attribution import parse_agent_kind, resolve_agent_kind
 from src.runtime.usage_query import resolve_usage_path_for_root
 from src.runtime.usage_store import UsageStore, load_usage_store_config, resolve_usage_events_path
@@ -48,7 +49,9 @@ def _events_path_for_payload(payload: dict[str, Any], store: UsageStore) -> Path
         try:
             return resolve_usage_events_path(Path(raw_dir), coara_home=current_coara_home())
         except Exception:
-            pass
+            logger.warning(
+                f"resolve usage events path for workspace_dir {raw_dir!r} failed; using store default", exc_info=True
+            )
     return store.events_path
 
 

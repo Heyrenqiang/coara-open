@@ -58,6 +58,10 @@ class WebFileBridge:
         self._delivery_dir.mkdir(parents=True, exist_ok=True)
         # file_id → absolute path on disk (in-memory index for the HTTP handler).
         self._files: dict[str, Path] = {}
+        # 目录内容惰性索引（iterdir() 返回序），只用于 resolve_file 的前缀兜底段；
+        # 以目录签名（count + mtime_ns）失效重建，不碰精确命中路径。
+        self._dir_index: list[Path] | None = None
+        self._dir_index_signature: tuple[int, int] | None = None
         self._persist = persist
         self._coara_home = coara_home
         self._workspace_id = workspace_id
@@ -90,12 +94,37 @@ class WebFileBridge:
             if candidate.is_file():
                 self._files[key] = candidate
                 return self._contained(candidate)
-        if self._delivery_dir.is_dir():
-            for candidate in self._delivery_dir.iterdir():
-                if candidate.is_file() and candidate.name.startswith(key):
-                    self._files[key] = candidate
-                    return self._contained(candidate)
+        if not self._delivery_dir.is_dir():
+            return None
+        for candidate in self._indexed_delivery_files():
+            if candidate.is_file() and candidate.name.startswith(key):
+                self._files[key] = candidate
+                return self._contained(candidate)
         return None
+
+    def _indexed_delivery_files(self) -> list[Path]:
+        """投递目录内容快照，目录签名（count + mtime_ns）变化时重建。
+
+        前缀兜底与现状 iterdir() 同序——索引直接记录 iterdir 返回序，
+        命中优先级与逐次扫描完全一致。
+        """
+        signature = self._delivery_signature()
+        if self._dir_index is not None and signature == self._dir_index_signature:
+            return self._dir_index
+        entries = list(self._delivery_dir.iterdir())
+        self._dir_index = entries
+        self._dir_index_signature = signature
+        return entries
+
+    def _delivery_signature(self) -> tuple[int, int] | None:
+        try:
+            stat = self._delivery_dir.stat()
+        except OSError:
+            return None
+        count = 0
+        for _ in self._delivery_dir.iterdir():
+            count += 1
+        return count, stat.st_mtime_ns
 
     def _contained(self, path: Path) -> Path | None:
         try:

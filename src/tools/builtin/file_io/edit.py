@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from src.coara.tool_output import build_diff_display, count_diff_stats
 from src.core.text import normalize_lock_key
@@ -58,6 +58,7 @@ class EditToolInvocation(WorkspaceBoundFileToolInvocation):
         path, path_error = self._resolve_edit_path()
         if path_error:
             return ToolResult.error(path_error)
+        path = cast(Path, path)
 
         office_editor = get_office_editor(path.suffix)
         if office_editor is not None:

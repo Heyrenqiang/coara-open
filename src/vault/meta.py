@@ -150,7 +150,7 @@ def create_meta(password: str) -> VaultMeta:
     return VaultMeta(version=1, salt=salt, verifier=build_verifier(dek), kdf=current_kdf_params())
 
 
-def unlock_dek(password: str, meta: VaultMeta) -> bytes:
+def unlock_dek(password: str, meta: VaultMeta) -> bytearray:
     n, r, p = resolve_kdf(meta)
     dek = derive_key(password, meta.salt, n=n, r=r, p=p)
     if not verify_dek(dek, meta.verifier):

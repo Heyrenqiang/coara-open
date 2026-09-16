@@ -25,6 +25,7 @@ from src.cli.product_defaults import (
     MATRIX_PORT,
     MATRIX_SERVER_NAME,
 )
+from src.core.logger import logger
 from src.core.types import MatrixConfig
 
 DEFAULT_GOMAX_PORT = MATRIX_PORT
@@ -143,8 +144,9 @@ def persist_matrix_bot_credentials(user: str, password: str) -> None:
         env_path = system_env_path()
         write_api_key(env_path, "COARA_MATRIX_USER", user)
         write_api_key(env_path, "COARA_MATRIX_PASSWORD", password)
-    except Exception:
-        pass
+    except Exception as exc:
+        # 持久化失败会导致重启后 matrix 凭证丢失，用户可感知，至少 warning
+        logger.warning(f"matrix 凭证写入 system/.env 失败，重启后凭证将丢失：{exc}")
     os.environ["COARA_MATRIX_USER"] = user
     os.environ["COARA_MATRIX_PASSWORD"] = password
 

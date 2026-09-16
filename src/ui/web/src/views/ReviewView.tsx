@@ -441,8 +441,8 @@ export function ReviewView() {
       {reviewViewActive && (
         <Suspense fallback={null}>
           <ModuleChatFloat
-            subject="root"
-            title="与消息空间对话"
+            subject="review"
+            title="与消息助手对话"
             emptyHint="问消息：今天有哪些待过目动态、帮我汇总高优先级"
           />
         </Suspense>

@@ -19,6 +19,25 @@ from src.core.logger import logger
 _STATUS_PUSH_MIN_INTERVAL_S = 60.0
 _last_status_push_mono: float = 0.0
 
+# fire-and-forget 推送任务登记：防引用被 GC 提前回收，异常经 done_callback
+# 记 debug（与 Root._bg_tasks / web_server._bg_tasks 同款模式，模块级宿主）
+_pending_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _spawn_sync_task(awaitable: Any) -> None:
+    task = asyncio.ensure_future(awaitable)
+    _pending_tasks.add(task)
+    task.add_done_callback(_pending_tasks.discard)
+
+    def _on_done(done: asyncio.Task[Any]) -> None:
+        if done.cancelled():
+            return
+        exc = done.exception()
+        if exc is not None:
+            logger.debug(f"mobile sync push task failed: {exc}", exc_info=exc)
+
+    task.add_done_callback(_on_done)
+
 MODELS_START = "[COARA_MODELS]"
 MODELS_END = "[/COARA_MODELS]"
 WORKSPACES_START = "[COARA_WORKSPACES]"
@@ -186,7 +205,7 @@ def _view_coara(root: Any) -> Any:
             try:
                 return resolver()
             except Exception:
-                pass
+                logger.debug("resolve matrix view coara failed; fall back to foreground", exc_info=True)
     try:
         return root.foreground_coara
     except Exception:
@@ -221,9 +240,11 @@ def _push_built_payload(root: Any, build: Any, *, fallback_room_id: str, label: 
         logger.warning(f"mobile {label} push: build failed: {exc}")
         return
     try:
-        asyncio.get_running_loop().create_task(_SYNC_SENDER(target, payload))
+        asyncio.get_running_loop()
     except RuntimeError:
         logger.warning(f"mobile {label} push: no running loop")
+        return
+    _spawn_sync_task(_SYNC_SENDER(target, payload))
 
 
 def push_workspaces_payload(root: Any, *, fallback_room_id: str = "") -> None:
@@ -306,12 +327,12 @@ def push_status_payload(
         logger.warning(f"mobile status push: build failed: {exc}")
         return
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         logger.debug("mobile status push: no running loop")
         return
     _last_status_push_mono = now
-    loop.create_task(_SYNC_SENDER(target, payload))
+    _spawn_sync_task(_SYNC_SENDER(target, payload))
 
 
 def maybe_push_status_for_activity(root: Any) -> None:
@@ -351,7 +372,7 @@ def push_mobile_sync_payloads(root: Any, room_id: str) -> None:
     if not room_id or _SYNC_SENDER is None:
         return
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         # 与 push_status_payload 同防护：无运行中的事件循环（如同步线程调用）
         # 时无从派发任务，静默跳过即可，不该直接崩
@@ -369,7 +390,7 @@ def push_mobile_sync_payloads(root: Any, room_id: str) -> None:
         except Exception as exc:
             logger.warning(f"mobile sync startup push: {build.__name__} skipped: {exc}")
             continue
-        loop.create_task(_SYNC_SENDER(room_id, payload))
+        _spawn_sync_task(_SYNC_SENDER(room_id, payload))
 
 
 def is_mobile_sync_query(body: str) -> bool:
@@ -408,9 +429,11 @@ def try_handle_mobile_sync_query(root: Any, room_id: str, body: str) -> bool:
         logger.warning(f"mobile sync query payload build failed: {exc}")
         return True
     try:
-        asyncio.get_running_loop().create_task(_SYNC_SENDER(room_id, payload))
+        asyncio.get_running_loop()
     except RuntimeError:
         logger.warning("mobile sync query: no running loop, payload not sent")
+        return True
+    _spawn_sync_task(_SYNC_SENDER(room_id, payload))
     return True
 
 
@@ -454,6 +477,10 @@ def build_workspaces_payload(root: Any) -> str:
     workspaces = []
     for raw in data.get("workspaces") or []:
         if not isinstance(raw, dict):
+            continue
+        # 服务端按端过滤：web_only 空间（工作流画布等）手机端渲染不了，
+        # 不下发——与切换入口的 end_allowed 同一把尺，listing 不该比切换更宽。
+        if str(raw.get("view") or "all") == "web_only":
             continue
         ws = dict(raw)
         wid = str(ws.get("id") or "")
@@ -577,7 +604,7 @@ def build_status_payload(
         cfg = config_manager.config
         idle_timeout = float(getattr(getattr(cfg, "session", None), "idle_timeout_seconds", 7200) or 7200)
     except Exception:
-        pass
+        logger.debug("read idle_timeout config for mobile sync failed; using 7200s default", exc_info=True)
 
     model = (model_label or "").strip()
     if not model and session_event == "model_switch":

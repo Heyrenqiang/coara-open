@@ -9,6 +9,8 @@ from pygments.lexers import TextLexer, get_lexer_by_name, guess_lexer_for_filena
 from pygments.token import Token
 from rich.text import Text
 
+from src.core.logger import logger
+
 _EXT_LEXER = {
     "py": "python",
     "js": "javascript",
@@ -61,7 +63,7 @@ def _lexer_for_path(path: str):
         try:
             return get_lexer_by_name(_EXT_LEXER[ext])
         except Exception:
-            pass
+            logger.debug(f"pygments lexer {_EXT_LEXER[ext]!r} unavailable; fall back to guess")
     try:
         return guess_lexer_for_filename(path, "")
     except Exception:

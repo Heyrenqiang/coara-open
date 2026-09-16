@@ -13,6 +13,9 @@ from src.ui.trace_store import TraceStore
 
 
 class WorkspaceHandlers(HandlerMixinBase):
+    # 宿主 WebServer 提供的 trace 持久化订阅句柄（组合后才有）
+    _trace_persistence_sub: Any | None
+
     async def _handle_workspace_list(self, request: web.Request) -> web.Response:
         """List all registered workspaces with active marker = **web view**."""
         self._check_token(request)
@@ -44,9 +47,15 @@ class WorkspaceHandlers(HandlerMixinBase):
             if entry.storefront:
                 storefront = entry.storefront
             else:
-                storefront = resolve_home_view(
-                    entry.resolved_path(), content_type=entry.content_type
-                ).value
+                storefront = resolve_home_view(entry.resolved_path(), content_type=entry.content_type).value
+            # 目录被删检测：internal 系统空间的目录是占位（.internal 槽位，永远该在），
+            # missing 只标记用户对话空间——侧边栏据此置灰并引导恢复。
+            missing = False
+            if entry.kind.value != "internal":
+                try:
+                    missing = not entry.resolved_path().is_dir()
+                except OSError:
+                    missing = True
             workspaces.append(
                 {
                     "name": entry.name or "",
@@ -57,6 +66,7 @@ class WorkspaceHandlers(HandlerMixinBase):
                     "active": entry.id == view_id,
                     "storefront": storefront,
                     "home_view": entry.home_view or "",
+                    "missing": missing,
                 }
             )
         return web.json_response(
@@ -83,9 +93,7 @@ class WorkspaceHandlers(HandlerMixinBase):
             delivery_dir = self.workspace_dir / ".coara" / "outbound_files"
 
         def _web_view_ws_id() -> str | None:
-            ws = getattr(self.root, "web_view_workspace_id", None) or getattr(
-                self.root, "_foreground_session_id", None
-            )
+            ws = getattr(self.root, "web_view_workspace_id", None) or getattr(self.root, "_foreground_session_id", None)
             return str(ws) if ws else None
 
         bridge = WebFileBridge(
@@ -130,6 +138,25 @@ class WorkspaceHandlers(HandlerMixinBase):
             limit = max(1, min(_MAX_HISTORY_LIMIT, int(body.get("limit", _DEFAULT_HISTORY_LIMIT))))
         except (TypeError, ValueError):
             limit = _DEFAULT_HISTORY_LIMIT
+
+        # 目录被删的空间禁止切入：对着幽灵目录开会话是静默事故。返回 missing 标记，
+        # 前端据此走恢复流程（改绑路径 / 从登记册移除），internal 系统空间豁免。
+        entry = None
+        ws_mgr = getattr(self.root, "workspace_manager", None)
+        if ws_mgr is not None:
+            entry = ws_mgr.registry.resolve_name_or_id(workspace)
+        if entry is not None and entry.kind.value != "internal":
+            try:
+                if not entry.resolved_path().is_dir():
+                    return web.json_response(
+                        {"error": f"空间目录不存在：{entry.path}", "missing": True, "workspace": entry.name},
+                        status=409,
+                    )
+            except OSError:
+                return web.json_response(
+                    {"error": f"空间目录不可访问：{entry.path}", "missing": True, "workspace": entry.name},
+                    status=409,
+                )
 
         # web 独立视图（D6）：浏览器切空间只换本端视图，不动全局前台（不影响
         # CLI/matrix）。set_web_view_workspace 无前台副作用（vault/占用/cwd）。
@@ -181,6 +208,7 @@ class WorkspaceHandlers(HandlerMixinBase):
         if not turn_id and not session_id:
             return
 
+        # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，_view_store 可能不存在
         view_store = getattr(self, "_view_store", None)
         reason = str(payload.get("reason") or "complete")
         ended_via_stream = False
@@ -193,6 +221,7 @@ class WorkspaceHandlers(HandlerMixinBase):
 
         exact: list[Any] = []
         by_session: list[Any] = []
+        # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，_turns 可能不存在
         for stream in list(getattr(self, "_turns", {}).values()):
             if not _is_open_followup(stream):
                 continue
@@ -211,6 +240,7 @@ class WorkspaceHandlers(HandlerMixinBase):
             if sid:
                 closed_sids.add(sid)
 
+        # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，该集合可能不存在
         for sess, tid in list(getattr(self, "_web_followup_view_turns", set())):
             clear = bool(turn_id and tid == turn_id or not exact and session_id and sess == session_id)
             if not clear:
@@ -218,6 +248,7 @@ class WorkspaceHandlers(HandlerMixinBase):
             if view_store is not None and not ended_via_stream and turn_id:
                 try:
                     tape_ws = getattr(self, "workspace_dir", None)
+                    # 有意 getattr 防御：同上（__new__ 测试夹具）
                     for stream in getattr(self, "_turns", {}).values():
                         if str(getattr(stream, "session_id", "") or "") != sess:
                             continue
@@ -240,7 +271,9 @@ class WorkspaceHandlers(HandlerMixinBase):
                         coara_home=self.coara_home,
                     )
                 except Exception:
-                    pass
+                    logger.warning(
+                        "turn_end follow-up frame failed to record to view tape, tape may miss a frame", exc_info=True
+                    )
             self._web_followup_view_turns.discard((sess, tid))
             closed_sids.add(sess)
 
@@ -392,5 +425,6 @@ class WorkspaceHandlers(HandlerMixinBase):
             self._dash_ref.reset_state_cache()
         self._last_runtime_snapshot = None
         # 视图存储跟随视图空间：后续回合帧落到新空间的 web_views 文件。
+        # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，_view_store 可能不存在
         if getattr(self, "_view_store", None) is not None:
             self._bind_view_store(view_dir)

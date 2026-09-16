@@ -204,7 +204,7 @@ async def process_matrix_text_message(
         raw_send_chunk = host.send_chunk
         turn_stats = turn_send_stats(raw_send_chunk)
         if turn_stats is not None:
-            host.send_chunk = turn_stats.send
+            host.send_chunk = turn_stats.send  # type: ignore[assignment]  # 统计包装后的发送函数签名更宽
         async with matrix_turn_scope(
             room.room_id,
             send_chunk=raw_send_chunk,
@@ -295,7 +295,7 @@ async def process_matrix_media_message(
         raw_send_chunk = host.send_chunk
         turn_stats = turn_send_stats(raw_send_chunk)
         if turn_stats is not None:
-            host.send_chunk = turn_stats.send
+            host.send_chunk = turn_stats.send  # type: ignore[assignment]  # 统计包装后的发送函数签名更宽
         async with matrix_turn_scope(
             room.room_id,
             send_chunk=raw_send_chunk,

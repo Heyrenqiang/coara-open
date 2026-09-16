@@ -32,13 +32,21 @@ class AgentDefinition:
 class AgentRegistry:
     """Singleton to manage agent definitions from Markdown and YAML files."""
 
-    _instance = None
-    _agents: dict[str, AgentDefinition] = {}
+    _instance: AgentRegistry | None = None
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            instance = super().__new__(cls)
+            # 实例属性在 __new__ 里创建：绕过 __init__ 的构造路径
+            # （如 copy/pickle）也能拿到属于自己的 _agents，不再落回共享类属性
+            instance._agents = {}
+            cls._instance = instance
         return cls._instance
+
+    @classmethod
+    def reset_for_tests(cls) -> None:
+        """Drop the singleton and its cached definitions (tests only)."""
+        cls._instance = None
 
     def scan(self, directories: list[Path | str] | None = None) -> None:
         """Scan directories for agent definitions (*.md and *.yaml files).

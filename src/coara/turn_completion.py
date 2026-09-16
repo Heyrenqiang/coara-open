@@ -118,7 +118,8 @@ async def _collect_stream_interruptible(
                 except TimeoutError:
                     _raise_budget_exceeded()
             else:
-                chunk_task = asyncio.create_task(anext(stream_iter))
+                # anext() 给出的是 asend 可等待对象，ensure_future 与 create_task 等价且类型可推断
+                chunk_task: asyncio.Task[StreamChunk] = asyncio.ensure_future(anext(stream_iter))
                 signal_task: asyncio.Task | None = None
                 try:
                     signal_task = asyncio.create_task(signal.wait())
@@ -152,13 +153,13 @@ async def _collect_stream_interruptible(
             await _emit_assistant_delta(on_assistant_delta, chunk)
     except LLMError as exc:
         # 失败断点信息随异常带出：上层仅在零 delta 时才允许整 prompt 重发；
-        # provider 已返回的部分 usage 供 usage 收集以 partial 形态入账
-        exc.stream_received_delta = received_delta
+        # provider 已返回的部分 usage 供 usage 收集以 partial 形态入账；断点信息动态挂载
+        exc.stream_received_delta = received_delta  # type: ignore[attr-defined]
         if aggregator.usage:
-            exc.partial_usage = dict(aggregator.usage)
+            exc.partial_usage = dict(aggregator.usage)  # type: ignore[attr-defined]
         # 流式续传用：已聚合的部分内容随异常带出
         partial = aggregator.build_response(wire_blocks=wire_blocks)
-        exc.partial_content = partial.content or ""
+        exc.partial_content = partial.content or ""  # type: ignore[attr-defined]
         raise
 
     response = aggregator.build_response(wire_blocks=wire_blocks)
@@ -205,7 +206,8 @@ async def _complete_with_provider_streaming(
         # 单次调用全程硬上限（连接 + 首字节 + 分片消费），滴漏式响应也逃不掉
         deadline = _time.monotonic() + llm_total_timeout_seconds()
         return await _collect_stream_interruptible(
-            stream,
+            # provider.stream_complete 运行时是 async generator（基类签名标成了 coroutine）
+            stream,  # type: ignore[arg-type]
             signal,
             on_assistant_delta,
             wire_blocks=wire_blocks,

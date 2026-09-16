@@ -684,7 +684,7 @@ export function RecordsView() {
       )}
       {recordsViewActive && (
         <Suspense fallback={null}>
-          <ModuleChatFloat subject="root" title="与 daily 对话" emptyHint="问 daily：这条记录哪来的、本周记了什么" />
+          <ModuleChatFloat subject="records" title="与记录助手对话" emptyHint="问记录：这条记录哪来的、本周记了什么" />
         </Suspense>
       )}
     </PageShell>

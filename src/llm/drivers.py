@@ -48,6 +48,7 @@ def create_provider_from_config(name: str, config: LLMProviderConfig, api_key: s
     # 注入 provider 转换层，使配置的视觉模型真正透传图片（而不只走白名单）。
     vision_model_ids = vision_model_ids_from_config(config)
 
+    provider: LLMProvider
     if driver == "openai":
         provider = OpenAIProvider(
             name=name,
@@ -76,5 +77,6 @@ def create_provider_from_config(name: str, config: LLMProviderConfig, api_key: s
             vision_model_ids=vision_model_ids,
         )
     # 标记协议驱动：switch_llm 据此判断跨协议切换（清历史 reasoning_content）
-    provider.driver = driver
+    # 运行时挂载的驱动标记，三个 provider 类都未声明（读取侧 provider.driver）
+    provider.driver = driver  # type: ignore[union-attr]
     return provider

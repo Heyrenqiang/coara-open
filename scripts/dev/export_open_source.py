@@ -50,6 +50,7 @@ INCLUDE_TOP = (
 EXCLUDE_DIRS = (
     "src/telemetry",
     "src/account",
+    "docs/open-source",
     "scripts/soft-copyright",
     "scripts/tunnels",
     "deploy/gitee",
@@ -256,13 +257,19 @@ def _scan(root: Path) -> list[tuple[str, str, int, str]]:
             line = text.count("\n", 0, match.start()) + 1
             rows = text.splitlines()
             snippet = rows[line - 1].strip()[:110] if rows else ""
+            if "镜像仓" in snippet:
+                continue  # README 有意保留的 Gitee 镜像说明，不算残留
             hits.append((path.relative_to(root).as_posix(), label, line, snippet))
     return hits
 
 
 README = """# coara
 
+[![CI](https://github.com/Heyrenqiang/coara-open/actions/workflows/ci.yml/badge.svg)](https://github.com/Heyrenqiang/coara-open/actions/workflows/ci.yml)
+
 多智能体运行时，个人 AI 助手的内核。Python 3.11+ / asyncio。
+
+> 镜像仓：[Gitee coara-open](https://gitee.com/huang-renqiang_admin/coara-open)（内容一致，主仓在 GitHub）
 
 ## 它是什么
 
@@ -357,7 +364,7 @@ SOFTWARE.
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="导出一份开源仓库快照")
+    parser = argparse.ArgumentParser(description="导出白名单开源副本到目标目录")
     parser.add_argument("--target", required=True, help="目标目录，例如 D:\\code_ws\\coara")
     parser.add_argument("--force", action="store_true", help="目标已存在时先清空")
     args = parser.parse_args()
@@ -388,8 +395,16 @@ def main() -> int:
     _apply_replacements(target)
     _drop_sections(target)
 
-    (target / "README.md").write_text(README, encoding="utf-8")
-    (target / "CONTRIBUTING.md").write_text(CONTRIBUTING, encoding="utf-8")
+    readme_template = REPO / "docs" / "open-source" / "README.md"
+    contributing_template = REPO / "docs" / "open-source" / "CONTRIBUTING.md"
+    (target / "README.md").write_text(
+        readme_template.read_text(encoding="utf-8") if readme_template.is_file() else README,
+        encoding="utf-8",
+    )
+    (target / "CONTRIBUTING.md").write_text(
+        contributing_template.read_text(encoding="utf-8") if contributing_template.is_file() else CONTRIBUTING,
+        encoding="utf-8",
+    )
     (target / "LICENSE").write_text(LICENSE, encoding="utf-8")
 
     print(f"\n共复制 {total} 个文件，剔除 {skipped} 个；已写入 README / CONTRIBUTING / LICENSE")

@@ -24,8 +24,14 @@ from src.agent.hooks import (
 )
 from src.agent.loop import LoopDetector, ShellFailureStreakGuard
 from src.agent.output_truncation import settings_from_config
-from src.coara.display import format_tool_call_label
-from src.coara.injections import wrap_tool_result
+from src.coara.base_mixins import (
+    ContinuationMixin,
+    ForegroundDelegateMixin,
+    PersistenceMixin,
+    PromptSkillsMixin,
+    ToolsRegistryMixin,
+    TraceMixin,
+)
 from src.coara.llmlog import (
     DAILY_WORKSPACE_KEY,
     FLOW_WORKSPACE_KEY,
@@ -34,17 +40,15 @@ from src.coara.llmlog import (
     log_llm_call,
 )
 from src.coara.tool_manager import ToolManager
-from src.coara.trace_emitter import TraceEmitter, serialize_messages_for_trace
+from src.coara.trace_emitter import TraceEmitter
 from src.coara.turn_completion import CoaraRunCancelledError
 from src.coara.turn_phase import TurnPhase
 from src.coara.turn_timing import TurnTimingRecorder
 from src.context.window import LlmUsageSnapshot, context_window_manager, payload_fingerprint_cached
 from src.core.abort import AbortController
-from src.core.coara_home import resolve_coara_home
 from src.core.logger import logger
 from src.core.message_tags import TASK_INSTRUCTION_OPEN
 from src.core.time import now_iso
-from src.core.tool_base import BaseTool, ToolResult
 from src.core.types import (
     CoaraIdentity,
     CoaraPersona,
@@ -58,7 +62,6 @@ from src.llm.profiles import Profile
 from src.llm.provider import LLMProvider, LLMResponse
 from src.llm.request import LLMRequest
 from src.llm.service import llm_service
-from src.prompt.builder import PromptBuilder
 from src.skills.manager import SkillManager
 from src.skills.session import SkillSessionState
 from src.todos.turn_control import TurnController
@@ -123,6 +126,28 @@ def _sanitize_outbound_text(text: str) -> str:
     cleaned = _REACT_TOOLCALL_BLOCK_RE.sub("", cleaned)
     cleaned = _REACT_INVOKE_BLOCK_RE.sub("", cleaned)
     return cleaned.strip()
+
+
+def _track_fire_and_forget(host: Any, awaitable: Any, *, what: str) -> None:
+    """登记 fire-and-forget 任务，防引用丢失与「Task exception never retrieved」。
+
+    宿主有 ``_bg_tasks`` 集合（root / web_server 同款模式）就登记进去，
+    停用时宿主统一取消；没有则只挂 done_callback 取异常记 debug。
+    """
+    task = asyncio.ensure_future(awaitable)
+    bg_tasks = getattr(host, "_bg_tasks", None)
+    if isinstance(bg_tasks, set):
+        bg_tasks.add(task)
+        task.add_done_callback(bg_tasks.discard)
+
+    def _on_done(done: asyncio.Task[Any]) -> None:
+        if done.cancelled():
+            return
+        exc = done.exception()
+        if exc is not None:
+            logger.debug(f"{what} task failed: {exc}", exc_info=exc)
+
+    task.add_done_callback(_on_done)
 
 
 def _delegated_parent_tool_call_id(coara: Any) -> str:
@@ -229,7 +254,7 @@ def _route_tool_frame(coara: Any, frame: dict[str, Any], *, payload: dict[str, A
             )
         if asyncio.iscoroutine(outcome.value) or asyncio.isfuture(outcome.value):
             # fire-and-forget：帧投递不阻塞工具执行（sender 内部 self-throttle）
-            asyncio.ensure_future(outcome.value)
+            _track_fire_and_forget(root, outcome.value, what=f"route tool frame ({what})")
     except Exception:
         logger.debug(f"route tool frame ({what}) failed", exc_info=True)
 
@@ -272,9 +297,9 @@ def _route_subagent_tool_frame(coara: Any, payload: dict[str, Any], frame: dict[
     try:
         outcome = registry.deliver(source, parent_session, frame, channel_id=channel_id)
         if asyncio.iscoroutine(outcome.value) or asyncio.isfuture(outcome.value):
-            asyncio.ensure_future(outcome.value)
+            _track_fire_and_forget(root, outcome.value, what="route subagent tool frame")
     except Exception:  # noqa: BLE001 — 子智能体工具帧投递失败不影响它干活
-        logger.debug("route subagent tool frame failed", exc_info=True)
+        logger.warning("route subagent tool frame failed", exc_info=True)
 
 
 def _route_subagent_tool_line(coara: Any, payload: dict[str, Any], label: str) -> None:
@@ -305,8 +330,27 @@ def _route_subagent_tool_line(coara: Any, payload: dict[str, Any], label: str) -
     )
 
 
-class CoaraBase:
+class CoaraBase(
+    ForegroundDelegateMixin,
+    ContinuationMixin,
+    PromptSkillsMixin,
+    ToolsRegistryMixin,
+    TraceMixin,
+    PersistenceMixin,
+):
     """A single coara unit with tools, skills, and an LLM backend."""
+
+    # delegate 派发时写入的归属字段：运行时由 delegate 工具赋值，这里只声明类型，
+    # 让类型检查看得见这些动态属性（初值在 __init__ 统一给）。
+    _delegate_background: bool
+    _delegate_parent_session_id: str
+    _delegate_parent_workspace_dir: str
+    _delegate_parent_tool_call_id: str
+    _delegate_subagent_id: str
+    _delegate_vfs: Any
+    _subagent_parent: Any | None
+    _subagent_origin: tuple[str, str | None] | None
+    _cli_silent: bool
 
     def __init__(
         self,
@@ -367,6 +411,27 @@ class CoaraBase:
         self._session_llm_call_count = 0
         # 本会话累计工具调用次数（一轮 LLM 可带多个 tool_calls；/new 归零）
         self._session_tool_call_count = 0
+        # 当前回合运行时与发起端标识：回合内赋值、回合结束清空（None/空串是合法态）
+        self._active_turn: Any | None = None
+        self._active_turn_source: str = ""
+        # 已推送至流式钩子的 assistant 正文字符数（回合内累计）
+        self._streamed_assistant_chars: int = 0
+        # 正文流式钩子：回合消费方登记，回合结束归 None
+        self._assistant_stream_hook: Any | None = None
+        # LLM 调试快照：回合元信息与用户输入（磁盘镜像用，回合结束清空）
+        self._llm_debug_turn_meta: dict[str, Any] | None = None
+        self._llm_debug_user_input: str = ""
+        # 会话事件记录器：_rebuild_session_log 建/清；None 是合法态（构建失败静默降级）
+        self._session_log: Any | None = None
+        # delegate 派发回填的归属字段（非委派实例保持默认）
+        self._delegate_background = False
+        self._delegate_parent_session_id = ""
+        self._delegate_parent_workspace_dir = ""
+        self._delegate_parent_tool_call_id = ""
+        self._delegate_subagent_id = ""
+        self._subagent_parent = None
+        self._subagent_origin = None
+        self._cli_silent = False
 
         self.llm_profile = Profile.AGENT_MAIN
         if provider is not None:
@@ -541,67 +606,6 @@ class CoaraBase:
         self._emit_trace("initialized", "coara initialized")
         logger.info(f"coara initialized: {self.identity.name}")
 
-    def _emit_final_turn_traces(
-        self,
-        final_content: str,
-        *,
-        completed_message: str = "Message processing completed",
-    ) -> None:
-        """Emit assistant + completed trace events so Dashboard marks the turn OK."""
-        text = (final_content or "").strip()
-        if text:
-            active_turn = getattr(self, "_active_turn", None)
-            turn_id = str(getattr(active_turn, "turn_id", "") or "")
-            source = str(getattr(self, "_active_turn_source", "") or "")
-            self._emit_trace(
-                "conversation_message",
-                text,
-                payload={
-                    "role": "assistant",
-                    "content": text,
-                    "turn_id": turn_id,
-                    "source": source,
-                },
-            )
-            self._emit_trace(
-                "final_response",
-                "Produced final response",
-                # 全文刚由 conversation_message 记录 这里只留预览
-                payload={"content_preview": text[:200]},
-            )
-        self._emit_trace("completed", completed_message)
-
-    def _emit_turn_timing(self, timing: TurnTimingRecorder) -> None:
-        if timing.finished:
-            return
-        timing.finished = True
-        payload = timing.to_payload()
-        self._emit_trace(
-            "turn_timing",
-            "Turn timing summary",
-            payload=payload,
-        )
-        logger.debug(
-            "Turn timing turn_id={} total={:.0f}ms llm={:.0f}ms tools={:.0f}ms overhead={:.0f}ms",
-            timing.turn_id,
-            payload["total_ms"],
-            sum(item["llm_ms"] for item in payload["iterations"]),
-            sum(item["tools_ms"] for item in payload["iterations"]),
-            payload["overhead_ms"],
-        )
-
-    def _format_tool_summary(self, tool_name: str, arguments: Any) -> str:
-        """Full single-line tool call label for CLI scrollback (``✓ tool(...)``)."""
-        return format_tool_call_label(tool_name, arguments, max_len=None)
-
-    def _wrap_tool_result(self, tool_name: str, result: ToolResult) -> list[dict[str, Any]]:
-        """Wrap tool result for message history.
-
-        Delegates to the lightweight injections module. <结果> tag has been
-        removed in favor of <系统消息> (informational) and direct content.
-        """
-        return wrap_tool_result(tool_name, result)
-
     def note_history_rewrite(self) -> None:
         """Stamp rollback floor after ``message_history`` was replaced (compress).
 
@@ -609,7 +613,7 @@ class CoaraBase:
         swaps in a shorter list; subsequent rollback must keep the rewritten
         prefix and only strip messages appended after this stamp.
         """
-        self._history_epoch = int(getattr(self, "_history_epoch", 0) or 0) + 1
+        self._history_epoch = int(self._history_epoch or 0) + 1
         self._rollback_floor = len(self.message_history)
 
     def clear_rollback_floor(self) -> None:
@@ -617,7 +621,7 @@ class CoaraBase:
         self._rollback_floor = None
 
     def _rollback_partial_turn_history(self, turn_history_start: int) -> None:
-        floor = getattr(self, "_rollback_floor", None)
+        floor = self._rollback_floor
         start = int(floor) if floor is not None else int(turn_history_start)
         if start < 0:
             start = 0
@@ -630,7 +634,7 @@ class CoaraBase:
         """Return assistant text not yet pushed through the CLI stream hook."""
         if not full_text:
             return ""
-        streamed = getattr(self, "_streamed_assistant_chars", 0)
+        streamed = self._streamed_assistant_chars
         if streamed >= len(full_text):
             return ""
         return full_text[streamed:]
@@ -719,7 +723,9 @@ class CoaraBase:
                                 source_kind="internal_report",
                             )
                 except Exception:
-                    pass
+                    logger.warning(
+                        "persist blocked background-completion notice to updates store failed", exc_info=True
+                    )
             yield f"[系统] {gate.reason or '账户状态无法确认，请登录后使用'}"
             return
 
@@ -784,7 +790,7 @@ class CoaraBase:
                 channel_id=str(_get_ch_id() or ""),
             )
             self._stamp_segment_model(_seg0)
-            _rec_seg = getattr(getattr(self, "_session_log", None), "record_segment_open", None)
+            _rec_seg = getattr(self._session_log, "record_segment_open", None)
             if _rec_seg is not None:
                 _rec_seg(seq=_seg0.seq, source=_seg0.source, turn_id=resolved_turn_id, mid_turn=False)
             turn_runtime = TurnRuntime(turn_id=resolved_turn_id, controller=AbortController())
@@ -918,7 +924,7 @@ class CoaraBase:
                 self._llm_debug_user_input = ""
                 self._streamed_assistant_chars = 0
                 # 回合结束：应用延迟的 LLM 切换（/model 在回合中执行时标记的）
-                pending_switch = getattr(self, "_pending_llm_switch", None)
+                pending_switch = self._pending_llm_switch
                 if pending_switch is not None:
                     self._pending_llm_switch = None
                     try:
@@ -952,10 +958,12 @@ class CoaraBase:
         source = _subagent_origin_source(self)
         if not source:
             return
-        root = getattr(self, "_root_ref", None)
+        root = self._root_ref
         registry = getattr(root, "end_registry", None) if root is not None else None
         if registry is None:
             return
+        # 有意 getattr 防御（本方法被测试绑到 SimpleNamespace 替身调用，替身只带
+        # 用例相关字段；真实实例这些字段在 __init__ 均已初始化）
         parent_session = str(getattr(self, "_delegate_parent_session_id", "") or "")
         frame = {
             "kind": "subagent_chunk",
@@ -1007,6 +1015,7 @@ class CoaraBase:
             # 的边界守卫对「无字段帧」只能放行——切空间后就可能把别的空间的输出
             # 画到眼前的对话里（显示互串）。
             "workspace_dir": str(getattr(self, "workspace_dir", "") or ""),
+            # 有意 getattr 防御：本方法被测试绑到 SimpleNamespace 替身调用（替身不带该字段）
             "turn_id": str(getattr(getattr(self, "_active_turn", None), "turn_id", "") or ""),
         }
         outcome = registry.deliver(
@@ -1022,6 +1031,7 @@ class CoaraBase:
             session_origin = getattr(self, "session_origin", None) or {}
             origin_ch = str(session_origin.get("channel_id") or "")
             candidates: list[tuple[str, str]] = []
+            # 有意 getattr 防御：同上（SimpleNamespace 替身）
             launch_source = str(getattr(self, "_active_turn_source", "") or "")
             if launch_source and launch_source != seg_source:
                 candidates.append((launch_source, origin_ch if launch_source == session_origin.get("source") else ""))
@@ -1063,13 +1073,15 @@ class CoaraBase:
             return False
         seg_source = self._segments.source if self._segments is not None else ""
         if not seg_source:
-            seg_source = str(getattr(self, "_active_turn_source", "") or "")
+            seg_source = str(self._active_turn_source or "")
         if not seg_source:
             return False
         sess_id = str(getattr(self, "session_id", "") or "")
         channel_id = self._segments.channel_id if self._segments is not None else ""
         try:
-            outcome = registry.deliver(seg_source, sess_id, {"kind": "chunk", "text": body}, channel_id=channel_id)
+            outcome = registry.deliver(
+                seg_source, sess_id, {"kind": "chunk", "text": body, "block": True}, channel_id=channel_id
+            )
             if not outcome.hit:
                 return False
             if asyncio.iscoroutine(outcome.value) or asyncio.isfuture(outcome.value):
@@ -1088,6 +1100,7 @@ class CoaraBase:
         """
         sess_id = str(getattr(self, "session_id", "") or "")
         if not getattr(getattr(self, "identity", None), "user_facing", True):
+            # 有意 getattr 防御：本方法被测试绑到 SimpleNamespace 替身调用（替身不带该字段）
             parent = getattr(self, "_subagent_parent", None)
             if parent is not None:
                 sess_id = str(getattr(parent, "session_id", "") or sess_id)
@@ -1127,6 +1140,7 @@ class CoaraBase:
             return
         # subagent_origin 与 executor 的 tool_complete payload 同源——主流 source 判定
         # 读 payload 的 subagent_origin，子智能体 diff 按派发来源投父会话 sender。
+        # 有意 getattr 防御：本方法被测试绑到 SimpleNamespace 替身调用（替身不带该字段）
         _payload = dict(payload)
         _origin_snap = getattr(self, "_subagent_origin", None)
         if isinstance(_origin_snap, (tuple, list)) and len(_origin_snap) >= 2 and str(_origin_snap[0] or ""):
@@ -1143,7 +1157,7 @@ class CoaraBase:
                 # source 判定读它，子智能体 diff 按派发来源投父会话 sender。
                 "subagent_origin": str(
                     payload.get("subagent_origin")
-                    or getattr(self, "_subagent_origin", ("", None))[0]
+                    or (_origin_snap[0] if isinstance(_origin_snap, (tuple, list)) else "")
                     or ""
                 ),
             },
@@ -1165,6 +1179,7 @@ class CoaraBase:
         label = str(payload.get("tool_label") or "").strip()
         if not label:
             return
+        # 有意 getattr 防御：本方法被测试绑到 SimpleNamespace 替身调用（替身不带该字段）
         if getattr(self, "_cli_silent", False):
             # 系统维护 agent（janitor/daily）全程静默，其工具行走不进任何端。
             return
@@ -1287,14 +1302,14 @@ class CoaraBase:
                     system_prompt=system_prompt,
                     tools=tool_definitions,
                     signal=signal,
-                    on_assistant_delta=getattr(self, "_assistant_stream_hook", None),
+                    on_assistant_delta=self._assistant_stream_hook,
                 )
             )
             self._turn_phase.set("processing")
         except BaseException as exc:
             call_err = exc
 
-        turn_meta = getattr(self, "_llm_debug_turn_meta", None)
+        turn_meta = self._llm_debug_turn_meta
         if self.identity.user_facing:
             # FlowRoot（构建对话）与主会话同为 user_facing，但归属不同主体：
             # llmlog 按 _session_agent_kind 区分，不混为两个「主会话」
@@ -1304,18 +1319,18 @@ class CoaraBase:
         overview = build_agent_overview(
             user_facing=bool(self.identity.user_facing),
             persona_name=agent_kind if not self.identity.user_facing else "",
-            background=bool(getattr(self, "_delegate_background", False)),
+            background=bool(self._delegate_background),
             bound_tool_names=self._tool_manager.get_bound_tool_names(),
         )
         if self._session_agent_kind == "flow":
             overview = "构建对话"
-        self._session_llm_call_count = int(getattr(self, "_session_llm_call_count", 0) or 0) + 1
+        self._session_llm_call_count = int(self._session_llm_call_count or 0) + 1
         batch_tool_calls = len(response.tool_calls) if response is not None and response.tool_calls else 0
-        self._session_tool_call_count = int(getattr(self, "_session_tool_call_count", 0) or 0) + batch_tool_calls
+        self._session_tool_call_count = int(self._session_tool_call_count or 0) + batch_tool_calls
         meta = Meta(
             session_id=(turn_meta or {}).get("session_id") or self.session_id,
             turn_id=(turn_meta or {}).get("turn_id") or "",
-            user_input=(turn_meta or {}).get("user_input") or getattr(self, "_llm_debug_user_input", "") or "",
+            user_input=(turn_meta or {}).get("user_input") or self._llm_debug_user_input or "",
             llm_call=self._session_llm_call_count,
             tool_call_count=self._session_tool_call_count,
             provider_name=llm_ctx.provider_name,
@@ -1355,6 +1370,7 @@ class CoaraBase:
             payload_hash = payload_fingerprint_cached(system_prompt, tool_definitions)
         except Exception:
             payload_hash = None
+        assert response is not None  # call_err 已在上方抛出，走到这里必有响应
         self._llm_usage_snapshot.record_turn(
             usage=dict(response.usage or {}),
             history_len=len(messages),
@@ -1365,247 +1381,6 @@ class CoaraBase:
         )
 
         return response
-
-    def submit_continuation_input(
-        self,
-        text: str,
-        image_blocks: list[dict[str, Any]] | None = None,
-        *,
-        source: str = "",
-        agent_origin: str = "",
-        agent_origin_channel: str = "",
-    ) -> None:
-        """Buffer a user message to be injected mid-turn.
-
-        ``image_blocks`` carries optional Vision attachments so a follow-up
-        pasted mid-turn keeps its images (Plan B: multimodal continuation).
-        ``source`` tags the follow-up's origin (``cli``/``matrix``/``web``);
-        required for correct CLI mirroring when the active turn is unrelated
-        (e.g. phone message during a ``background`` awaken turn).
-        ``agent_origin`` / ``agent_origin_channel`` tag a *subagent result* with
-        the delegate-call user input origin + matrix room (never clears the
-        plan lock — it is system injection).
-        """
-        # Windows 控制台/粘贴可能产生 UTF-16 代理项（无法 UTF-8 编码），
-        # 进入事件流会让显示订阅者编码失败——入口统一清洗
-        from src.utils.text_utils import sanitize_surrogates
-
-        text = sanitize_surrogates(text)
-        origin = str(source or "").strip()
-        agent_src = str(agent_origin or "").strip()
-        origin_ch = str(agent_origin_channel or "").strip()
-        from src.coara.turn_context import get_turn_channel_id
-
-        _origin_channel_id = str(get_turn_channel_id() or "")
-        # 带来源的接续输入 = 用户中途介入：解除 plan_mode submit 的待批准锁。
-        # 系统注入（delegate 结果等）不带 source，不误清。
-        if origin:
-            self._plan_pending_approval = False
-        # 入队只记 source 在队列项上，不刷新「最近一次输入端」——那是注入语义，
-        # 归属到 turn loop 迭代头真正注入上下文那一刻（开新段时才更新）。
-        # 入队≠注入：跟话入队后 LLM 仍在跑上一段的输出，端归属不能提前切换。
-        self._continuation_inputs.append(
-            ContinuationInput(
-                text=text,
-                image_blocks=image_blocks,
-                source=origin,
-                agent_origin=agent_src,
-                agent_origin_channel=origin_ch,
-                channel_id=_origin_channel_id,
-                deferred_remote_ctx=self._pending_deferred_remote_ctx,
-            )
-        )
-        # Stamp moves onto the queue item; do not leave a shared slot for the next end.
-        self._pending_deferred_remote_ctx = None
-        self._deferred_remote_ctx = None
-        self._continuation_event.set()
-        self._emit_trace(
-            "continuation_input_received",
-            f"Continuation input received: {text[:80]}",
-            payload={
-                "text": text,
-                "image_count": len(image_blocks or []),
-                "source": origin,
-                "agent_origin": agent_src,
-                "agent_origin_channel": origin_ch,
-            },
-        )
-
-    def drain_continuation_inputs(self) -> list[ContinuationInput]:
-        """Pop all buffered continuation inputs."""
-        if not self._continuation_inputs:
-            return []
-        items = self._continuation_inputs[:]
-        self._continuation_inputs.clear()
-        if not self._continuation_inputs:
-            self._continuation_event.clear()
-        return items
-
-    def set_deferred_remote_ctx(
-        self, room_id, send_text, interaction_channel, *, source: str = "", actor: str = ""
-    ) -> None:
-        """Stamp remote turn context for the *next* ``submit_continuation_input``.
-
-        Called by the ingress defer path (busy turn) so the turn loop can
-        re-apply ``turn`` ContextVars when it consumes that specific input
-        （审批/询问走远端通道）。Stamp is per queue item — a later end cannot
-        overwrite an earlier follow-up's approval channel.
-
-        正文输出归属由 **segment**（最近一次用户注入端）经 EndRegistry 路由——
-        各端在跟话注入时已登记自己的流式通道，不再设收尾补发镜像。
-        """
-        ctx = (room_id, send_text, interaction_channel, source, actor)
-        self._pending_deferred_remote_ctx = ctx
-        # Compat mirror until submit attaches the stamp to the queue item.
-        self._deferred_remote_ctx = ctx
-
-    def clear_deferred_remote_ctx(self) -> None:
-        """Drop pending/compat deferred remote context (turn cleanup)."""
-        self._deferred_remote_ctx = None
-        self._pending_deferred_remote_ctx = None
-
-    # ------------------------------------------------------------------
-    # Foreground delegate tracking
-    # ------------------------------------------------------------------
-
-    def register_foreground_delegate(self, task_id: str, task: Any, description: str) -> None:
-        """Register a foreground delegate task launched asynchronously.
-
-        The turn loop's exit guard consults this registry to prevent the
-        turn from exiting while foreground subagents are still running.
-        """
-        self._pending_foreground_delegates[task_id] = task
-        self._foreground_delegate_descriptions[task_id] = description
-
-    def on_foreground_delegate_done(self, task_id: str, description: str, task: Any) -> None:
-        """Called when a foreground delegate asyncio.Task completes.
-
-        Extracts the result and injects it as a continuation input so the
-        next iteration sees it and can continue reasoning.
-
-        Cancelled tasks are skipped: cancellation happens during
-        ``_reset_transient_state`` / turn cleanup, so injecting a
-        "子代理被取消" message would be stale noise.
-
-        Released delegates（回合出口放行）: session busy → same continuation
-        injection; session idle → park the result into session history (and
-        persist) so the next turn sees it, without waking a new turn.
-        """
-        released = task_id in self._released_foreground_delegates
-        self._pending_foreground_delegates.pop(task_id, None)
-        self._released_foreground_delegates.pop(task_id, None)
-        self._foreground_delegate_descriptions.pop(task_id, None)
-
-        if task.cancelled():
-            return
-
-        from src.core.message_tags import system_info
-
-        if task.exception() is not None:
-            exc = task.exception()
-            # str(exc) 可为空串（如裸 CancelledError/Error()）：回退异常类型名，保证失败信息非空可辨
-            result_text = f"子代理失败: {str(exc) or type(exc).__name__}"
-        else:
-            tool_result = task.result()
-            # _run_subagent swallows CancelledError and returns ToolResult.cancelled
-            # — treat that like task.cancelled() so interrupt cleanup stays quiet.
-            if getattr(tool_result, "is_cancelled", False):
-                return
-            content = getattr(tool_result, "content", None)
-            result_text = str(content) if content is not None else str(tool_result)
-
-        message = system_info(f"[前台子智能体已完成] [{task_id}]\n任务：{description}\n结果：{result_text}")
-        # 段归属：delegate 调用时父会话注入段来源 + matrix 房间，随结果注入传给
-        # turn loop（与子智能体 diff 同锚点；收官直推不靠 ContextVar）。
-        sub_origin = ""
-        sub_channel = ""
-        try:
-            result = task.result()
-            meta = getattr(result, "metadata", None) or {}
-            sub_origin = str(meta.get("subagent_origin") or "")
-            sub_channel = str(meta.get("subagent_origin_channel") or "")
-        except Exception:  # noqa: BLE001
-            sub_origin = ""
-            sub_channel = ""
-        if released and not self.has_active_turn():
-            # 放行后的迟到结果：会话空闲 → 进驻历史（下一轮可见），不唤醒新回合
-            self.message_history.append(Message(role=MessageRole.USER, content=message))
-            try:
-                loop = asyncio.get_running_loop()
-                # 落盘任务必须持引用：fire-and-forget 任务随时可能被 GC
-                # 回收协程，落盘静默丢失
-                persist_task = loop.create_task(asyncio.to_thread(self.persist_session_to_disk))
-                self._session_persist_tasks.add(persist_task)
-                persist_task.add_done_callback(self._session_persist_tasks.discard)
-            except RuntimeError:
-                pass
-            return
-        self.submit_continuation_input(
-            message,
-            agent_origin=sub_origin,
-            agent_origin_channel=sub_channel,
-        )
-
-    def release_pending_foreground_delegates(self) -> list[str]:
-        """放行全部在跑的前台子智能体：回合可正常结束，完成结果按迟到语义路由。
-
-        Returns the released task_ids (still running only).
-        """
-        released: list[str] = []
-        for task_id, task in list(self._pending_foreground_delegates.items()):
-            if task.done():
-                continue
-            self._released_foreground_delegates[task_id] = task
-            self._pending_foreground_delegates.pop(task_id, None)
-            released.append(task_id)
-        return released
-
-    def has_pending_foreground_delegates(self) -> bool:
-        """True if any foreground delegate task is still running."""
-        # Clean up finished tasks first
-        done_ids = [tid for tid, task in self._pending_foreground_delegates.items() if task.done()]
-        for tid in done_ids:
-            self._pending_foreground_delegates.pop(tid, None)
-            self._foreground_delegate_descriptions.pop(tid, None)
-        return bool(self._pending_foreground_delegates)
-
-    def pending_foreground_delegate_descriptions(self) -> str:
-        """Return a formatted list of pending foreground delegate descriptions."""
-        lines = []
-        for task_id, desc in self._foreground_delegate_descriptions.items():
-            lines.append(f"- [{task_id}] {desc}")
-        return "\n".join(lines)
-
-    def cancel_all_pending_foreground_delegates(self, *, include_released: bool = True) -> None:
-        """Cancel all running foreground delegate tasks (e.g. on turn interrupt).
-
-        include_released=True（中断路径）：连放行的一起停，Ctrl+C 语义不变。
-        include_released=False（回合正常退出的 finally）：放行的继续跑，
-        迟到结果经 done 回调驻留历史。
-        """
-        tasks = list(self._pending_foreground_delegates.items())
-        if include_released:
-            tasks += list(self._released_foreground_delegates.items())
-        for task_id, task in tasks:
-            if not task.done():
-                task.cancel()
-                # Emit failed so CLI spinner drops the live node. Tasks cancelled
-                # before ``_run_subagent`` runs never emit subagent_failed themselves
-                # (seen when /new raced fire-and-forget foreground_async janitor).
-                self._emit_trace(
-                    "subagent_failed",
-                    f"Subagent cancelled: {task_id}",
-                    payload={
-                        "subagent_id": task_id,
-                        "description": self._foreground_delegate_descriptions.get(task_id, ""),
-                        "error": "cancelled",
-                        "workspace_dir": str(getattr(self, "workspace_dir", "") or ""),
-                    },
-                )
-        self._pending_foreground_delegates.clear()
-        if include_released:
-            self._released_foreground_delegates.clear()
-        self._foreground_delegate_descriptions.clear()
 
     def has_active_turn(self) -> bool:
         """True while this instance still owns an in-flight turn.
@@ -1727,7 +1502,7 @@ class CoaraBase:
 
     def _resolve_interrupt_turn_origin(self) -> str:
         """Whether the active turn was started from remote ingress vs local CLI."""
-        source = getattr(self, "_active_turn_source", "") or ""
+        source = self._active_turn_source or ""
         if source == "matrix":
             return "remote"
         try:
@@ -1740,93 +1515,6 @@ class CoaraBase:
     def _raise_if_interrupted(self, runtime: TurnRuntime) -> None:
         if runtime.signal.aborted:
             raise CoaraRunCancelledError(runtime.reason)
-
-    def _build_system_prompt(self) -> str:
-        """Build system prompt.
-
-        Strategy: Static template rendered once, runtime context appended every turn.
-        Environment / subagent info is appended as text rather than injected
-        as separate messages, keeping message_history pure conversation.
-        """
-        # 1. Cache (Static prompt never changes during session)
-        if "static" not in self._static_prompt_cache:
-            builder = PromptBuilder()
-            if self.identity.persona.yaml_config is not None:
-                builder.set_yaml_config(self.identity.persona.yaml_config)
-            else:
-                builder.set_role_prompt(
-                    self.identity.persona.system_prompt_template or "You are a helpful AI assistant."
-                )
-            builder.set_workspace_dir(self.workspace_dir)
-            prompt = builder.build()
-            prompt = self._inject_skill_list(prompt)
-            prompt = self._inject_deferred_tool_list(
-                prompt,
-                self._tool_manager,
-                self.identity.is_owner_context,
-            )
-            self._static_prompt_cache["static"] = prompt
-
-        prompt = self._static_prompt_cache["static"]
-
-        # 动态段：被禁用的工具明确告知（tools 参数已过滤，这里给模型硬信号避免误调）
-        disabled_names = self._tool_manager.get_disabled_names()
-        if disabled_names:
-            names_text = "、".join(f"`{n}`" for n in disabled_names)
-            prompt += (
-                "\n\n<系统提醒>以下工具当前已被禁用，禁止调用："
-                f"{names_text}。如需恢复请运行 /tools on <名称>。</系统提醒>"
-            )
-        return prompt
-
-    def _inject_skill_list(self, prompt: str) -> str:
-        """Render ``${COARA_SKILL_LIST}`` with discovered skill names (root.md opt-in).
-
-        两段式：listed（人工策展）技能名直接列出；挂起技能（自动生成、未策展）
-        只给裸名字并指引用 skill(action="search") 查描述——与挂起工具清单同构。
-        子智能体无技能模块：需要技能时由主会话把技能内容写进任务指令。
-        """
-        if "${COARA_SKILL_LIST}" not in prompt:
-            return prompt
-        all_skills = self.skill_manager.get_all()
-        listed = [s.name for s in all_skills if s.listed]
-        unlisted = [s.name for s in all_skills if not s.listed]
-        sections: list[str] = []
-        sections.append("、".join(listed) if listed else "（无）")
-        if unlisted:
-            shown, overflow = unlisted[:30], len(unlisted) - 30
-            names_text = "、".join(shown) + (f" 等 {len(unlisted)} 个" if overflow > 0 else "")
-            sections.append('挂起技能（仅名字，描述用 `skill(action="search")` 查询）：' + names_text)
-        return prompt.replace("${COARA_SKILL_LIST}", "\n".join(sections))
-
-    @staticmethod
-    def _inject_deferred_tool_list(
-        prompt: str,
-        tool_manager: Any,
-        is_owner_ctx: bool,
-    ) -> str:
-        """Render ``${COARA_DEFERRED_TOOL_LIST}`` — deferred built-in tools.
-
-        Deferred tools get name + one-line description. The listing is static
-        for the whole session: revealed tools stay listed so the system prompt
-        prefix never changes on activation (prompt-cache friendly).
-        """
-        if "${COARA_DEFERRED_TOOL_LIST}" not in prompt:
-            return prompt
-
-        deferred = tool_manager.get_deferred_tool_summaries(is_owner_ctx, include_revealed=True)
-
-        if deferred:
-            listing = '挂起的内置工具（`tool(action="activate", name="…")` 装载后即可调用）：\n' + "\n".join(
-                f"- `{item['name']}` — {item['description']}" for item in deferred
-            )
-        else:
-            listing = "（当前无挂起工具）"
-        return prompt.replace("${COARA_DEFERRED_TOOL_LIST}", listing)
-
-    def _invalidate_prompt_cache(self) -> None:
-        self._static_prompt_cache.clear()
-        self._tool_manager.invalidate_cache()
 
     # ── Plan mode ──
 
@@ -1866,48 +1554,6 @@ class CoaraBase:
     @property
     def plan_file_path(self) -> Path | None:
         return self._tool_manager._plan_file_path
-
-    def _get_visible_tool_definitions(self) -> list[dict[str, Any]]:
-        return self._tool_manager.get_visible_tool_definitions(self.identity.is_owner_context)
-
-    def _get_tool_definitions_for_llm(self) -> list[dict[str, Any]]:
-        if self._tool_definitions_override is not None:
-            return self._tool_definitions_override
-        return self._tool_manager.get_tool_definitions_for_llm(self.identity.is_owner_context)
-
-    def register_tool(self, tool: BaseTool, *, replace: bool = False) -> None:
-        self._tool_manager.register_tool(tool, replace=replace)
-        self._invalidate_prompt_cache()
-
-    def register_tools(self, tools: list[BaseTool]) -> None:
-        self._tool_manager.register_tools(tools)
-
-    async def bootstrap_tools(self, *, with_skill_tool: bool = True) -> None:
-        from src.tools import register_builtin_tools
-        from src.tools.builtin.skills.skills import SkillTool
-        from src.tools.registry import tool_registry
-
-        register_builtin_tools()
-        self.register_tools(tool_registry.list_all())
-        if with_skill_tool:
-            self.register_tool(SkillTool(parent_coara=self))
-
-    async def load_skills(self, only: list[str] | None = None) -> None:
-        """Load discovered skills for the current workspace.
-
-        When ``only`` is provided, restrict the loaded skills to those whose
-        ``name`` appears in the list. ``None`` (default) loads all discovered
-        skills, preserving existing behavior for Root/sub-agents.
-        """
-        await self.skill_manager.discover(self.workspace_dir, coara_home=resolve_coara_home(self.workspace_dir))
-        all_skills = self.skill_manager.get_all()
-        if only is None:
-            self._skills = all_skills
-        else:
-            only_set = set(only)
-            self._skills = [s for s in all_skills if s.name in only_set]
-        logger.debug(f"Loaded {len(self._skills)} skills for {self.identity.name}")
-        self._invalidate_prompt_cache()
 
     # 只有端输入注入（cli/web/matrix/cli-attached）的回合才推进空间 last-run；
     # janitor/后台/事件注入不进此集合，运行本身不更新 last-run。
@@ -2162,7 +1808,7 @@ class CoaraBase:
         if usage_snapshot:
             self._llm_usage_snapshot.restore(usage_snapshot)
         self._rebuild_session_log()
-        recorder = getattr(self, "_session_log", None)
+        recorder = self._session_log
         if recorder is not None and restored_event_keys is not None:
             recorder.reset_projection(
                 keys=restored_event_keys,
@@ -2207,38 +1853,7 @@ class CoaraBase:
 
     def is_flow_subject(self) -> bool:
         """True when this coara is the FlowRoot second subject (agent_kind=flow)."""
-        return getattr(self, "_session_agent_kind", "") == "flow"
-
-    def _rebuild_session_log(self) -> None:
-        """按当前 session_id 重建会话事件记录器（唯一事实源，无开关）；失败静默为 None。
-
-        录像带跟主体不跟执行目录：主会话→工作空间带；FlowRoot 与会话内 flow
-        节点→工作流系统带；引擎节点→引擎系统带（跨进程隔离）。
-        """
-        self._session_log = None
-        try:
-            from src.session_log.recorder import build_recorder
-            from src.session_log.store import workflow_session_log_path
-
-            log_path = None
-            tape = getattr(self, "_session_tape", "")
-            if self.is_flow_subject() or tape == "flow":
-                log_path = workflow_session_log_path("flow", coara_home=self._session_state_coara_home())
-            elif tape == "engine":
-                log_path = workflow_session_log_path("engine", coara_home=self._session_state_coara_home())
-
-            self._session_log = build_recorder(
-                workspace_dir=self.workspace_dir,
-                session_id=self.session_id,
-                coara_id=self.identity.coara_id,
-                coara_name=self.identity.name,
-                agent_kind=getattr(self, "_session_agent_kind", "") or "main",
-                coara_home=self._session_state_coara_home(),
-                log_path=log_path,
-            )
-        except Exception:
-            logger.exception("Session log recorder init failed for {}", self.workspace_dir)
-            self._session_log = None
+        return self._session_agent_kind == "flow"
 
     def _clear_session_state(self, *, session_id: str | None = None) -> None:
         self._reset_transient_state()
@@ -2251,167 +1866,6 @@ class CoaraBase:
         # /new 换了 session_id：事件记录器必须跟着重绑（新会话投影从零开始），
         # 否则事件挂到旧会话下
         self._rebuild_session_log()
-
-    async def _purge_legacy_audit_logs(self) -> None:
-        """Remove deprecated session tool-audit directories for this workspace."""
-        if not (self.identity.user_facing or self.identity.is_owner_context):
-            return
-        from src.core.config import config_manager
-        from src.core.error_log import purge_session_audit_logs
-
-        coara_home = config_manager.config.coara_home if config_manager._config else None
-        purge_session_audit_logs(workspace_dir=self.workspace_dir, coara_home=coara_home)
-
-    @property
-    def _trace_sink(self) -> Any:
-        return self._trace_emitter.sink
-
-    def set_trace_sink(self, sink: Any) -> None:
-        self._trace_emitter.sink = sink
-
-    def _emit_trace(
-        self, event_type: str, message: str, *, payload: dict[str, Any] | None = None, level: str = "info"
-    ) -> None:
-        """Thin wrapper delegating to the trace emitter."""
-        if self.is_flow_subject():
-            origin_scope = "flow_loop"
-        elif self.identity.user_facing:
-            origin_scope = "main_loop"
-        else:
-            origin_scope = "subagent_loop"
-        # 统一补当前回合 source：工具/收尾等事件此前常无 payload，发送端按端
-        # 过滤会把无 source 的 completed 丢掉 → attach CLI spinner 转不停。
-        # 显式给了 source 的不覆盖（user_message 等自行指定）。
-        turn_source = str(getattr(self, "_active_turn_source", "") or "").strip()
-        if turn_source:
-            if payload is None:
-                payload = {"source": turn_source}
-            elif not str(payload.get("source") or "").strip():
-                payload = {**payload, "source": turn_source}
-        # 多 CLI attach：补发起连接 channel_id，trace 只回投该连接（各端独立）。
-        try:
-            from src.coara.turn_context import get_turn_channel_id
-
-            ch = str(get_turn_channel_id() or "").strip()
-        except Exception:
-            ch = ""
-        if ch:
-            if payload is None:
-                payload = {"channel_id": ch}
-            elif not str(payload.get("channel_id") or "").strip():
-                payload = {**payload, "channel_id": ch}
-        self._trace_emitter.emit(event_type, message, payload=payload, level=level, origin_scope=origin_scope)
-
-    def _session_state_coara_home(self) -> Path | None:
-        """Resolve coara_home for workspace session files (state/history/marker)."""
-        from src.core.config import config_manager
-
-        coara_home = None
-        if config_manager._config is not None:
-            coara_home = config_manager._config.coara_home
-        wm = getattr(self, "workspace_manager", None)
-        if wm is not None and getattr(wm, "coara_home", None) is not None:
-            coara_home = wm.coara_home
-        return coara_home
-
-    def _mark_turn_in_flight(self, turn_id: str) -> None:
-        """Write the turn in-flight marker (atomic small file).
-
-        与 ``persist_session_to_disk`` 同门禁：只有拥有工作空间会话文件的
-        会话才写标记。标记写入失败不得阻断回合（仅降级为恢复时无注记）
-        Flow 写独立 ``flow_turn_in_flight.json``，不覆盖主会话标记。
-        """
-        if not (self.identity.user_facing or self.identity.is_owner_context):
-            return
-        try:
-            from src.coara.workspace_state import mark_flow_turn_in_flight, mark_turn_in_flight
-
-            if self.is_flow_subject():
-                mark_flow_turn_in_flight(
-                    self.workspace_dir,
-                    self.session_id,
-                    coara_home=self._session_state_coara_home(),
-                    turn_id=turn_id,
-                )
-            else:
-                mark_turn_in_flight(
-                    self.workspace_dir,
-                    self.session_id,
-                    coara_home=self._session_state_coara_home(),
-                    turn_id=turn_id,
-                )
-        except Exception:
-            logger.debug("Failed to mark turn in-flight for {}", self.workspace_dir, exc_info=True)
-
-    def _clear_turn_in_flight(self) -> None:
-        """Clear the turn in-flight marker after the turn's history is persisted."""
-        if not (self.identity.user_facing or self.identity.is_owner_context):
-            return
-        try:
-            from src.coara.workspace_state import clear_flow_turn_in_flight, clear_turn_in_flight
-
-            if self.is_flow_subject():
-                clear_flow_turn_in_flight(
-                    self.workspace_dir,
-                    coara_home=self._session_state_coara_home(),
-                )
-            else:
-                clear_turn_in_flight(
-                    self.workspace_dir,
-                    coara_home=self._session_state_coara_home(),
-                )
-        except Exception:
-            logger.debug("Failed to clear turn in-flight marker for {}", self.workspace_dir, exc_info=True)
-
-    def persist_session_to_disk(self) -> None:
-        """落盘会话状态：事件日志同步（唯一事实源）+ 会话索引。
-
-        消息事件经 ``sync_history`` 前缀对账写入事件日志；usage 快照走
-        ``session/meta`` 事件。session_history.json 快照线已删除。
-        Safe to call from worker threads (blocking disk IO). Owner/user-facing
-        sessions only — ephemeral subagents do not own workspace session files.
-
-        Flow 第二主体：写同一条 ``session_events.jsonl``，但索引走
-        ``flow_session_state.json``，**禁止**写主会话 ``session_state.json``。
-        """
-        if not (self.identity.user_facing or self.identity.is_owner_context):
-            return
-        try:
-            from src.coara.workspace_state import save_flow_session_state, save_session_state
-
-            # janitor 是附着在每个用户空间上的维护机制（拿目标空间上下文跑维护回合），
-            # 只同步录像带，不占有会话索引：写了 session_state 会顶掉主会话索引、把
-            # last_updated 推新，启动补扫据此判定「会话有更新」而反复触发自己（死循环）。
-            # daily 不在此列——它已是独立的 internal 系统空间主体（user_facing=True，
-            # 自己的 workspace_dir），该写自己的 session_state（自己的会话索引与录像带）。
-            persona_name = str(getattr(self.identity.persona, "name", "") or "").strip().lower()
-            if persona_name == "janitor":
-                pass
-            elif self.is_flow_subject():
-                save_flow_session_state(
-                    self.workspace_dir,
-                    self.session_id,
-                    coara_home=self._session_state_coara_home(),
-                )
-            else:
-                save_session_state(
-                    self.workspace_dir,
-                    self.session_id,
-                    coara_home=self._session_state_coara_home(),
-                )
-        except Exception:
-            logger.exception("Failed to persist session state for {}", self.workspace_dir)
-        recorder = getattr(self, "_session_log", None)
-        if recorder is None:
-            return
-        try:
-            recorder.sync_history(list(self.message_history))
-            recorder.record_session_meta({"usage_snapshot": self._llm_usage_snapshot.to_dict()})
-        except Exception:
-            logger.exception("Failed to sync session event log for {}", self.workspace_dir)
-
-    def _serialize_messages_for_trace(self, messages: list[Message]) -> list[dict[str, Any]]:
-        return serialize_messages_for_trace(messages)
 
     def __repr__(self) -> str:
         return f"coaraBase(name={self.identity.name!r}, status={self.status.value})"

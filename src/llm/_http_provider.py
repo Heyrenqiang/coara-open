@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 from typing import Any
 
+from src.core.logger import logger
+
 
 def llm_request_timeout_seconds() -> float:
     """单次请求读超时：见 ``src.llm.timeouts``（此处保留兼容导出）."""
@@ -21,6 +23,7 @@ def product_user_agent() -> str:
 
         return f"coara/{version('coara')}"
     except Exception:
+        logger.debug("UA version 解析失败，回落为裸 coara 标识")
         return "coara"
 
 
@@ -116,6 +119,18 @@ class HTTPProviderMixin:
 
     _client_cls: type[Any]
 
+    # 子类必须提供：本 provider 的 API key 与缺失时的报错实现
+    api_key: str
+
+    # abort 状态由本 mixin 维护（类级 None 兜底；子类在 __init__ 里置实例初值）
+    _abort_lock: asyncio.Lock | None = None
+    _abort_task: asyncio.Task[None] | None = None
+    _closed: bool = False
+
+    def _require_api_key(self) -> None:
+        """Raise when no usable API key is configured (subclass contract)."""
+        raise NotImplementedError
+
     def ensure_client(self) -> Any:
         """Return live SDK client; create on first use after key check."""
         client = getattr(self, "client", None)
@@ -129,10 +144,10 @@ class HTTPProviderMixin:
         return self.client
 
     async def close(self) -> None:
-        if getattr(self, "_closed", False):
+        if self._closed:
             return
         self._closed = True
-        abort_task = getattr(self, "_abort_task", None)
+        abort_task = self._abort_task
         if abort_task is not None and not abort_task.done():
             abort_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -144,9 +159,9 @@ class HTTPProviderMixin:
 
     def abort(self) -> None:
         """Forcefully abort pending requests by closing and recreating the HTTP client."""
-        if getattr(self, "_closed", False):
+        if self._closed:
             return
-        abort_task = getattr(self, "_abort_task", None)
+        abort_task = self._abort_task
         if abort_task is not None and not abort_task.done():
             # 已有 abort 在途：复用即可，无需并发第二个重建
             return
@@ -156,12 +171,12 @@ class HTTPProviderMixin:
         self._abort_task = asyncio.create_task(self._abort_and_recreate())
 
     async def _abort_and_recreate(self) -> None:
-        abort_lock = getattr(self, "_abort_lock", None)
+        abort_lock = self._abort_lock
         if abort_lock is None:
             abort_lock = asyncio.Lock()
             self._abort_lock = abort_lock
         async with abort_lock:
-            if getattr(self, "_closed", False):
+            if self._closed:
                 return
             client = getattr(self, "client", None)
             if client is not None:

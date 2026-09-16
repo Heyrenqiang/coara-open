@@ -11,7 +11,7 @@ from typing import Any
 from src.core.logger import logger
 from src.matrix_client.chat_commands import try_handle_matrix_chat_command
 
-SendChunkFn = Callable[[str, str], Awaitable[None]]
+SendChunkFn = Callable[[str, str], Awaitable[Any]]
 LocalToolSummaryFn = Callable[[str], Awaitable[None] | None]
 
 
@@ -223,13 +223,13 @@ async def stream_coara_reply_to_matrix(
                     from src.matrix_client.diff_bridge import build_matrix_diff_message
 
                     blocks = deserialize_display_blocks(frame.get("display_blocks"))
-                    message = build_matrix_diff_message(
+                    diff_message = build_matrix_diff_message(
                         blocks,
                         tool_call_id=str(frame.get("tool_call_id") or ""),
                         parent_tool_call_id=str(frame.get("parent_tool_call_id") or ""),
                     )
-                    if message:
-                        await send_chunk(room_id, message)
+                    if diff_message:
+                        await send_chunk(room_id, diff_message)
                 except Exception:  # noqa: BLE001
                     logger.exception("matrix diff frame send failed")
                 return

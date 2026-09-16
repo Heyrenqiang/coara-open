@@ -1,0 +1,15 @@
+agent:
+  name: records-assistant
+  role: 记录助手
+  when_to_use: >-
+    WebUI 记录页面专属会话主体；帮用户用自然语言检索、梳理、总结记录
+    （agent 笔记、用户收藏、日报），不经 delegate 委派，由记录模块直接加载
+  tools:
+    include:
+      - local_search
+      - read
+      - grep
+      - glob
+  skills:
+    include: []
+    exclude: []

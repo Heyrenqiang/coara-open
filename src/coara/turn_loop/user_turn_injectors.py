@@ -27,11 +27,13 @@ class UserTurnInjector(Protocol):
 async def inject_environment_seed(coara: Any, ctx: UserTurnContext) -> None:
     if not getattr(coara, "inject_environment_seed", True):
         return
-    from src.coara.injections.context_modules import build_missing_prefix_messages
+    from src.coara.injections.context_modules import SEED_SCAN_HEAD_LIMIT, build_missing_prefix_messages
     from src.utils.message_content import message_content_to_text
 
     history = coara.message_history
-    texts = [message_content_to_text(getattr(m, "content", "") or "") for m in history]
+    # 认领判据只看历史头部若干条（与 is_context_module_seed 同源 startswith），
+    # 不再每回合全量转文本——长会话每轮 O(历史) 的拼接随之消除。
+    texts = [message_content_to_text(getattr(m, "content", "") or "") for m in history[:SEED_SCAN_HEAD_LIMIT]]
     import asyncio
 
     messages = await asyncio.to_thread(

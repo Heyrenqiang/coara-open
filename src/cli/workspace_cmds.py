@@ -190,6 +190,7 @@ def remove_workspace(
             )
             return
     except OSError:
+        # 有意静默：resolve() 失败说明无法确认是否 coara_home，此后 is_dir() 会自然判否并给出提示
         pass
     if not disk_path.is_dir():
         console.print(f"[{_fg('status.warn')}]已取消登记[/{_fg('status.warn')}] {display_name}；路径不是目录，未删盘")

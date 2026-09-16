@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from src.coara.commands.registry import CommandArgs, register
 from src.coara.commands.types import CommandResult
+from src.core.logger import logger
 
 if TYPE_CHECKING:
     from src.coara.root import RootCoara
@@ -31,7 +32,7 @@ def _gomatrix_port() -> int:
             if port:
                 return port
     except Exception:
-        pass
+        logger.debug("read gomatrix port from config failed; using default 8008", exc_info=True)
     return 8008
 
 

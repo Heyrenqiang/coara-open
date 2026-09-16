@@ -9,7 +9,7 @@ from pathlib import Path
 
 from src.core.logger import logger
 from src.core.types import VaultStatus
-from src.vault.crypto import build_verifier, derive_key, generate_salt
+from src.vault.crypto import build_verifier, derive_key, generate_salt, wipe_key_material
 from src.vault.env_password import vault_password_from_env
 from src.vault.errors import VaultAuthError, VaultError, VaultLockedError, VaultNotInitializedError
 from src.vault.guard import (
@@ -349,8 +349,12 @@ class VaultService:
 
         new_salt = generate_salt()
         dek_new = derive_key(new_password, new_salt)
-        new_meta = VaultMeta(version=1, salt=new_salt, verifier=build_verifier(dek_new), kdf=current_kdf_params())
-        count = self._rekey_sealed(dek_old=dek_old, dek_new=dek_new, new_meta=new_meta)
+        try:
+            new_meta = VaultMeta(version=1, salt=new_salt, verifier=build_verifier(dek_new), kdf=current_kdf_params())
+            count = self._rekey_sealed(dek_old=dek_old, dek_new=dek_new, new_meta=new_meta)
+        finally:
+            # 旧 DEK 至此使命终结（新会话持 dek_new），原地清零缩短驻留窗口
+            wipe_key_material(dek_old)
 
         self.session.unlock(dek_new, persistent=False)
         self._materialize()
@@ -437,13 +441,21 @@ class VaultService:
         """
         new_salt = generate_salt()
         dek_new = derive_key(password, new_salt)
-        new_meta = VaultMeta(
-            version=meta.version,
-            salt=new_salt,
-            verifier=build_verifier(dek_new),
-            kdf=current_kdf_params(),
-        )
-        self._rekey_sealed(dek_old=dek_old, dek_new=dek_new, new_meta=new_meta)
+        try:
+            new_meta = VaultMeta(
+                version=meta.version,
+                salt=new_salt,
+                verifier=build_verifier(dek_new),
+                kdf=current_kdf_params(),
+            )
+            self._rekey_sealed(dek_old=dek_old, dek_new=dek_new, new_meta=new_meta)
+        except Exception:
+            # 失败路径回退到 legacy DEK（_maybe_upgrade_kdf 交还 dek_old 继续
+            # 解锁），旧 DEK 不能清——清了回退拿到的是全零 buffer，解锁即炸
+            raise
+        else:
+            # 仅成功路径清旧 DEK：此后会话与新 meta 都挂在 dek_new 上
+            wipe_key_material(dek_old)
         return dek_new
 
     def _maybe_upgrade_kdf(self, password: str, dek_old: bytes) -> bytes:

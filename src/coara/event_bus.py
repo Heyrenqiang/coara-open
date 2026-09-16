@@ -153,10 +153,14 @@ class EventBus:
         return Subscription(bus=self, subscriber_id=subscriber_id, topic=topic)
 
     def _remove_subscription(self, subscriber_id: str, topic: str | None) -> None:
-        """Remove subscription by subscriber_id."""
+        """Remove subscription by subscriber_id; empty topic buckets are dropped."""
         for store in (self._sync_subscribers, self._async_subscribers):
             if topic in store:
-                store[topic] = [(sid, cb) for sid, cb in store[topic] if sid != subscriber_id]
+                remaining = [(sid, cb) for sid, cb in store[topic] if sid != subscriber_id]
+                if remaining:
+                    store[topic] = remaining
+                else:
+                    del store[topic]
 
     @staticmethod
     async def _safe_async_call(

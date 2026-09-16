@@ -194,14 +194,18 @@ class ConfigManager:
         if config_paths is not None:
             return list(config_paths)
         paths = _iter_config_yaml_paths(None)
-        merged: dict[str, Any] = {}
+        # 趟2 降载：只为取出可能存在的 coara_home 键（鸡生蛋问题），
+        # 不做全量深合并——单键覆盖与深合并对取该键语义等价
+        coara_home_raw: Any = None
         for path in paths:
             try:
                 with open(path, encoding="utf-8") as handle:
                     data = yaml.safe_load(handle) or {}
-                ConfigManager._deep_merge_dict(merged, data)
+                if "coara_home" in data:
+                    coara_home_raw = data["coara_home"]
             except Exception:
                 continue
+        merged: dict[str, Any] = {"coara_home": coara_home_raw} if coara_home_raw is not None else {}
         extra = _iter_config_yaml_paths(merged)
         ordered: list[Path] = []
         seen: set[Path] = set()

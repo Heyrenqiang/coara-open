@@ -11,9 +11,6 @@ if TYPE_CHECKING:
     from src.coara.root import RootCoara
 
 
-_VAULT_USAGE = "用法: /vault | /vault status | /vault lock"
-
-
 @register("vault")
 async def handle_vault(root: RootCoara, args: CommandArgs) -> CommandResult:
     service = getattr(root, "vault_service", None)

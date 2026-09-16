@@ -1,0 +1,14 @@
+agent:
+  name: review-assistant
+  role: 消息助手
+  when_to_use: >-
+    WebUI 消息页面专属会话主体；帮用户用自然语言梳理待过目动态
+    （工作空间动态、事件源触发的消息），不经 delegate 委派，由消息模块直接加载
+  tools:
+    include:
+      - read
+      - grep
+      - glob
+  skills:
+    include: []
+    exclude: []

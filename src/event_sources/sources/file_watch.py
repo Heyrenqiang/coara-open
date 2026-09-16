@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
-from collections.abc import Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -17,8 +16,7 @@ from src.event_sources.dedupe import path_dedupe_key
 from src.event_sources.types import EventSourceDefinition, InboundEvent
 from src.workspace.vfs import VfsResolver
 
-EmitCallback = Callable[[InboundEvent], Awaitable[None]]
-_DEBOUNCE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="file-watch-debounce")
+EmitCallback = Callable[[InboundEvent], Coroutine[Any, Any, None]]
 
 
 class _DebouncedHandler(FileSystemEventHandler):
@@ -37,7 +35,9 @@ class _DebouncedHandler(FileSystemEventHandler):
         self.loop = loop
         self.emit = emit
         self.debounce_seconds = debounce_seconds
-        self._generation: dict[str, int] = {}
+        # 去抖用 threading.Timer：延时在 timer 自己的守护线程里度过，
+        # 不占任何共享工作线程池，慢路径（网络盘 resolve）不会堵死后续事件。
+        self._timers: dict[str, threading.Timer] = {}
         self._lock = threading.Lock()
 
     def on_created(self, event) -> None:
@@ -59,16 +59,16 @@ class _DebouncedHandler(FileSystemEventHandler):
         if not self._matches_pattern(path.name):
             return
         key = str(path.resolve())
-        with self._lock:
-            generation = self._generation.get(key, 0) + 1
-            self._generation[key] = generation
 
-        def _fire(expected_generation: int) -> None:
-            time.sleep(self.debounce_seconds)
+        fired_timer: threading.Timer | None = None
+
+        def _fire() -> None:
+            # 锁内原子收编：若本 timer 已不是登记在册者（被同 key 新事件替换），
+            # 直接放弃——等价于旧 generation 失配；身份比对在锁内完成，无错位窗口。
             with self._lock:
-                if self._generation.get(key) != expected_generation:
+                if self._timers.get(key) is not fired_timer:
                     return
-                self._generation.pop(key, None)
+                self._timers.pop(key, None)
             coro = self.emit(
                 InboundEvent(
                     source_id=self.definition.id,
@@ -86,7 +86,15 @@ class _DebouncedHandler(FileSystemEventHandler):
                     f"FileWatch '{self.definition.id}': dropped {event_type} for {path} — event loop unavailable: {exc}"
                 )
 
-        _DEBOUNCE_EXECUTOR.submit(_fire, generation)
+        timer = threading.Timer(self.debounce_seconds, _fire)
+        timer.daemon = True
+        fired_timer = timer
+        with self._lock:
+            old = self._timers.get(key)
+            self._timers[key] = timer
+        if old is not None:
+            old.cancel()
+        timer.start()
 
     def _matches_pattern(self, name: str) -> bool:
         from fnmatch import fnmatch
@@ -107,7 +115,8 @@ class FileWatchSource:
         self.vfs = vfs
         self.emit = emit
         self.loop = loop
-        self._observer: Observer | None = None
+        # watchdog 的 Observer 是平台选择出的变量别名，不是可用作类型的类
+        self._observer: Observer | None = None  # type: ignore[valid-type]
 
     def start(self) -> None:
         rel = self.definition.watch_path or "."

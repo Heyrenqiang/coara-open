@@ -24,8 +24,19 @@ def leftover_item_source(item: str | ContinuationInput, *, fallback: str = "") -
 
 
 def is_web_source(source: str) -> bool:
-    src = str(source or "").strip().lower()
-    return src == "web" or src.startswith("web-")
+    """web 族分派门：与 turn_source.web_shows_source 本体一致（web + web- 前缀）。
+
+    刻意不转发：web_shows_source 带 unknown 门（空来源缺省放行），分派门空串恒 False。
+    """
+    from src.coara.turn_source import web_shows_source
+
+    return web_shows_source(source, unknown=False)
+
+
+# 以下两个分派门与 turn_source 族判定存在**有意的语义差异**，勿统一：
+# - is_matrix_source 仅认精确 "matrix"：event 来源 leftover 不能走 matrix 回合通道
+#   （root.py 唤醒路径的 ("matrix","event") 同路是另一处决策，不适用于分派）
+# - is_cli_source 不认 cli- 前缀：cli-* 标签的 leftover 落到「跟收尾端走」兜底分支
 
 
 def is_matrix_source(source: str) -> bool:
@@ -148,6 +159,8 @@ async def _dispatch_matrix_via_root(
             try:
                 room_id = str(resolve() or "")
             except Exception:
+                # 下方 room_id 为空的分支已有 warning + fallback，这里只留 debug 痕迹
+                logger.debug("resolve matrix room id for leftover dispatch failed", exc_info=True)
                 room_id = ""
     if not room_id or send_text is None:
         logger.warning(

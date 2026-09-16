@@ -33,17 +33,6 @@ export interface ProviderConfig {
   enabled?: boolean;
 }
 
-/** Built-in vendor preset from /api/v1/provider-presets. */
-export interface ProviderPreset {
-  id: string;
-  label: string;
-  driver: string;
-  base_url: string;
-  default_model: string;
-  models: string[];
-  max_tokens?: number;
-}
-
 /** Top-level coara config subset edited via /api/v1/config. All fields are
  *  optional — the backend merges whatever is sent. Mirrors the shape used
  *  by features/config/ConfigPanel.tsx. */
@@ -197,7 +186,7 @@ export interface WorkspaceRow {
 
 export const fetchWorkspaces = () => getJson("/api/v1/workspaces");
 
-export interface WorkspaceEntryRow {
+interface WorkspaceEntryRow {
   id: string;
   name: string;
   path: string;
@@ -224,9 +213,46 @@ export async function createWorkspaceEntry(name: string, path: string) {
   return res.json() as Promise<{ ok: boolean; workspace: WorkspaceEntryRow }>;
 }
 
+/** 服务端目录浏览（只读，仅列目录）；path 空串时浏览推荐根目录。 */
+interface FsBrowseResult {
+  path: string;
+  parent: string | null;
+  dirs: { name: string; path: string }[];
+}
+
+export async function browseFs(path: string): Promise<FsBrowseResult> {
+  const qs = path ? `path=${encodeURIComponent(path)}&` : "";
+  const res = await fetch(`${API_BASE}/api/fs/browse?${qs}${tokenQueryFragment()}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || res.statusText);
+  }
+  return (await res.json()) as FsBrowseResult;
+}
+
 /** 移出登记（只取消登记，磁盘目录保留）。ref 可传 id 或登记名。 */
 export const removeWorkspaceEntry = (ref: string) =>
   del(`/api/v1/workspaces/${encodeURIComponent(ref)}`);
+
+/** 改绑目录（目录被删、项目挪位后的恢复）：id 不变，历史档案不断链。 */
+export async function rebindWorkspaceEntry(ref: string, path: string) {
+  const res = await fetch(`${API_BASE}/api/v1/workspaces/${encodeURIComponent(ref)}/rebind${tokenQuery()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const data = await res.clone().json();
+      if (data && typeof data.message === "string") detail = data.message.trim();
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || `改绑目录失败（HTTP ${res.status}）`);
+  }
+  return res.json() as Promise<{ ok: boolean }>;
+}
 
 
 // ---- File system APIs ----
@@ -249,7 +275,7 @@ export async function fetchWorkspaceList() {
   }>;
 }
 
-export interface FileViewEntry {
+interface FileViewEntry {
   name: string;
   type: "dir" | "file";
   size: number;
@@ -383,9 +409,10 @@ export async function uploadFile(file: File) {
 }
 
 /** 上传附件的 inline 显示地址（图片预览 / 文件下载，token 已带）。
- *  上传文件落在工作区 .coara/uploads/ 下，经 workspace/file-raw 直出。 */
+ *  上传文件落在工作区 uploads/ 下（真源 src/core/workspace_layout.py），
+ *  经 workspace/file-raw 直出。 */
 export function uploadRawUrl(ref: string): string {
-  return fileRawUrl(`.coara/uploads/${ref}`);
+  return fileRawUrl(`uploads/${ref}`);
 }
 
 /** 最近文件条目（跨来源按时间倒序）。 */
@@ -431,7 +458,7 @@ export interface SubagentFramePayload {
 }
 
 /** 快照里的一条消息行（快照接口与切空间响应共用同一形状）。 */
-export interface SessionSnapshotMessage {
+interface SessionSnapshotMessage {
   role: string;
   text: string;
   files?: ChatFileAttachmentPayload[];
@@ -478,6 +505,9 @@ export interface SessionSnapshot {
   subagent_diffs?: Record<string, SubagentFramePayload[]>;
   /** delegate 任务指令（call_id → 文本）：不进消息流，只回填展开区的「任务指令」组 */
   subagent_briefs?: Record<string, string>;
+  /** 折叠区封顶裁剪计数（results/diffs/briefs → 被裁条数）：封顶是边界不是静默
+   *  丢失——服务端裁掉的历史子智能体产出在此显式标记，端上可提示「更早过程已省略 N 项」 */
+  subagent_truncated?: { results?: number; diffs?: number; briefs?: number };
   /** 该空间此刻的回合态摘要：与消息同源一起回来，刷新与切空间共用同一把尺。
    *  注意：只读预取（带 workspace_dir）模式下它描述的是**调用端自己**的回合态。 */
   runtime?: {
@@ -491,11 +521,18 @@ export interface SessionSnapshot {
 export async function fetchSessionMessages(
   limit = 100,
   afterViewSeq?: number,
-  opts?: { workspaceDir?: string },
+  opts?: { workspaceDir?: string; beforeViewSeq?: number },
 ) {
   const params = new URLSearchParams({ limit: String(limit) });
-  // 增量 hydrate：带上已渲染到的游标，只取之后的帧（刷新只补后缀，不重建）
-  if (afterViewSeq != null && afterViewSeq > 0) params.set("after_view_seq", String(afterViewSeq));
+  // 向前翻页：取 before_view_seq 之前的最近 limit 条（加载更早消息）。before 与
+  // after 互斥——before 给了就忽略 after（向前翻页与增量补拉语义相反，不混带）。
+  const before = opts?.beforeViewSeq;
+  if (before != null && before > 0) {
+    params.set("before_view_seq", String(before));
+  } else if (afterViewSeq != null && afterViewSeq > 0) {
+    // 增量 hydrate：带上已渲染到的游标，只取之后的帧（刷新只补后缀，不重建）
+    params.set("after_view_seq", String(afterViewSeq));
+  }
   // 只读预取：带 workspace_dir 时读那条线（不切当前会话）。用当前空间自己的路径
   // 请求，等于把「读的是哪条线」显式钉死——并发切空间不会把内容换到别的线上。
   // 服务端对非绝对路径直接 400（与文件工具的绝对路径约定一致），因此只在该参数
@@ -526,7 +563,7 @@ export async function fetchModuleSessionMessages(subject: string, limit = 100) {
 }
 
 /** Outbound file metadata persisted with conversation history. */
-export interface ChatFileAttachmentPayload {
+interface ChatFileAttachmentPayload {
   file_id: string;
   url: string;
   filename: string;
@@ -670,16 +707,16 @@ export interface CollectionEntry {
   has_file: boolean;
 }
 
-export type RecordsScope = "agent" | "user";
+type RecordsScope = "agent" | "user";
 
-export interface RecordListResponse {
+interface RecordListResponse {
   enabled: boolean;
   scope?: RecordsScope;
   entries: RecordEntry[];
   count: number;
 }
 
-export interface CollectionListResponse {
+interface CollectionListResponse {
   enabled: boolean;
   scope: "user";
   entries: CollectionEntry[];
@@ -744,6 +781,11 @@ export async function fetchCollectionEntry(
   return res.json();
 }
 
+/** 取消用户收藏（scope=user 收藏条目的删除，手机端 recordsDelete(scope="user") 同款落点）。 */
+export async function deleteCollection(id: string): Promise<void> {
+  return deleteRecord(id, "user");
+}
+
 export async function deleteRecord(id: string, scope: RecordsScope = "agent"): Promise<void> {
   const params = new URLSearchParams({ id, scope });
   const qs = [tokenQueryFragment(), params.toString()].filter(Boolean).join("&");
@@ -784,26 +826,6 @@ export async function unarchiveRecord(id: string): Promise<void> {
     const text = await res.text().catch(() => "");
     throw new Error(text || `Failed to unarchive record: ${res.statusText}`);
   }
-}
-
-export async function collectRecord(body: {
-  title?: string;
-  summary?: string;
-  url?: string;
-  note?: string;
-  content?: string;
-  tags?: string[];
-}): Promise<{ ok: boolean; message: string; id?: string }> {
-  const res = await fetch(`${API_BASE}/api/records/collect${tokenQuery()}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `Failed to collect: ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /** 工作区文件收藏（手点；落盘 records/user/files/）。 */
@@ -907,75 +929,6 @@ export async function fetchUsageDashboard(opts?: {
   return res.json();
 }
 
-// ---- 消费明细（会话 → 大轮 → 小轮，费用按配置价格估算） ----
-
-export interface UsageTurnIteration {
-  ts: string;
-  model: string;
-  provider: string;
-  iteration: number | null;
-  cost_miss: number;
-  cost_hit: number;
-  cost_out: number;
-  cost_total: number;
-  // ---- 后端单源展示字段 ----
-  /** provider·model 展示标签 */
-  model_label?: string;
-  ts_display?: string;
-  cost_total_display?: string;
-  cost_miss_display?: string;
-  cost_hit_display?: string;
-  cost_out_display?: string;
-}
-
-export interface UsageTurnDetail {
-  turn_id: string;
-  ts: string;
-  cost_total: number;
-  iterations: UsageTurnIteration[];
-  // ---- 后端单源展示字段 ----
-  ts_display?: string;
-  cost_total_display?: string;
-}
-
-export interface UsageSessionDetail {
-  session_id: string;
-  coara_name: string;
-  agent_label: string;
-  workspace_name: string;
-  llm_turns: number;
-  cost_total: number;
-  turns: UsageTurnDetail[];
-  // ---- 后端单源展示字段 ----
-  cost_total_display?: string;
-}
-
-export interface UsageDetailResponse {
-  days: number;
-  limit: number;
-  sessions: UsageSessionDetail[];
-  /** 本次返回明细的合计（含展示字段），仅覆盖返回的 limit 条 */
-  totals?: UsageTokenTotals & { sessions?: number; turns?: number };
-}
-
-export async function fetchUsageDetail(opts?: {
-  days?: number;
-  workspaceId?: string;
-  limit?: number;
-}): Promise<UsageDetailResponse> {
-  const params = new URLSearchParams();
-  if (opts?.days != null) params.set("days", String(opts.days));
-  if (opts?.workspaceId) params.set("workspace_id", opts.workspaceId);
-  if (opts?.limit != null) params.set("limit", String(opts.limit));
-  const qs = [tokenQueryFragment(), params.toString()].filter(Boolean).join("&");
-  const res = await fetch(`${API_BASE}/api/usage/detail${qs ? `?${qs}` : ""}`);
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `Failed to fetch usage detail: ${res.statusText}`);
-  }
-  return res.json();
-}
-
 // ---- 模型价格（用量页展示 + 行内编辑；写入独立价格覆盖文件，估算随之更新） ----
 
 export interface UsagePricingEntry {
@@ -990,7 +943,7 @@ export interface UsagePricingEntry {
   source: "config" | "override";
 }
 
-export interface UsagePricingResponse {
+interface UsagePricingResponse {
   models: UsagePricingEntry[];
 }
 
@@ -1026,9 +979,9 @@ export async function updateUsagePricing(opts: {
 
 export type UpdateSalience = "low" | "normal" | "high";
 export type UpdateStatus = "unread" | "read" | "archived";
-export type UpdateDisposition = "pending" | "elevated" | "resolved" | "dismissed";
+type UpdateDisposition = "pending" | "elevated" | "resolved" | "dismissed";
 
-export interface ReviewEntry {
+interface ReviewEntry {
   by: string;
   at: string;
   action: string;
@@ -1062,7 +1015,7 @@ export interface UpdateItem {
   archived_at?: string | null;
 }
 
-export interface UpdatesSummary {
+interface UpdatesSummary {
   unread: Record<string, number>;
   pending: number;
 }
@@ -1122,5 +1075,178 @@ export function reviewUpdate(
   text: string
 ): Promise<{ ok: boolean; delivered: string; workspace: string }> {
   return postUpdates("/api/updates/review", { message_id: messageId, text });
+}
+
+/* ── Workflow 编辑器 API ─────────────────────────────────────────────
+ * 画布纯 UI：草案 CRUD + WDL parse/emit + 模板 + 活跃草案上报。
+ * 执行层（实例 run/cancel/resume、节点模型设置）已剥离为独立 wdl 软件，
+ * 前端一律不接。
+ * ─────────────────────────────────────────────────────────────────── */
+
+export async function fetchWorkflowDrafts() {
+  const res = await fetch(`${API_BASE}/api/workflow-drafts${tokenQuery()}`);
+  if (!res.ok) throw new Error(`加载工作流草案失败（HTTP ${res.status}）`);
+  return res.json() as Promise<{
+    drafts: Array<{ draft_id: string; name: string; updated_at: string }>;
+  }>;
+}
+
+/** 创建空草案（工作台常驻编辑器）。 */
+export async function createWorkflowDraft(name = "workbench") {
+  const res = await fetch(`${API_BASE}/api/workflow-drafts${tokenQuery()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`新建工作流草案失败（HTTP ${res.status}）`);
+  return res.json() as Promise<{ draft_id: string; name: string; wdl: string }>;
+}
+
+/** 上报当前编辑器/工作台打开的草案 id——构建对话编排写穿时复用这份草案，而不是新开一份。 */
+export async function reportActiveWorkflowDraft(draftId: string | null): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/workflow-active-draft${tokenQuery()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draft_id: draftId }),
+    });
+  } catch {
+    /* best-effort：上报失败只是写穿退回新建草案，不影响编辑 */
+  }
+}
+
+/** 内核图（kernel projection）节点：唯一节点类型是智能体。
+ *  与后端 /api/workflow-wdl/parse 返回的 document.nodes[id] 对齐（core/model.py Node）。 */
+export interface KernelNodeSpec {
+  task: string;
+  input: string;
+  routes: "all" | "one";
+  /** 节点级激活上限（覆写全局）；缺省 = 继承全局 */
+  max_activations?: number;
+  /** 节点级 LLM 覆盖；缺省 = 跟随图级/全局「节点模型」配置 */
+  provider?: string;
+  model?: string;
+}
+
+/** 内核图边：from → to；on 缺省 success，error 表示失败时投递（重试/兜底路由）。 */
+export interface KernelEdgeSpec {
+  from: string;
+  to: string;
+  on?: "success" | "error";
+}
+
+/** 内核图文档：POST /api/workflow-wdl/parse 的 document 与 /emit 的入参同构。 */
+export interface KernelDocument {
+  name?: string;
+  description?: string;
+  schedule?: Record<string, unknown>;
+  /** 全局激活上限（缺省 100） */
+  max_activations?: number;
+  nodes: Record<string, KernelNodeSpec>;
+  edges: KernelEdgeSpec[];
+}
+
+export interface WorkflowDraft {
+  draft_id: string;
+  name: string;
+  wdl: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+async function _extractError(res: Response, fallback: string): Promise<Error> {
+  try {
+    const body = await res.json();
+    if (body?.error) return new Error(String(body.error));
+  } catch {
+    /* ignore JSON parse failures */
+  }
+  return new Error(fallback);
+}
+
+export async function fetchWorkflowDraft(draftId: string): Promise<WorkflowDraft> {
+  const res = await fetch(
+    `${API_BASE}/api/workflow-drafts/${encodeURIComponent(draftId)}${tokenQuery()}`,
+  );
+  if (!res.ok) throw await _extractError(res, `Failed to fetch draft: ${res.statusText}`);
+  return res.json();
+}
+
+/** 共同编辑冲突（409）：草案已被会话侧推进，客户端需刷新基线 */
+export class DraftConflictError extends Error {
+  constructor(
+    message: string,
+    public readonly updatedAt: string,
+  ) {
+    super(message);
+    this.name = "DraftConflictError";
+  }
+}
+
+export async function saveWorkflowDraft(
+  draftId: string,
+  wdl: string,
+  baseUpdatedAt?: string,
+): Promise<WorkflowDraft> {
+  const res = await fetch(
+    `${API_BASE}/api/workflow-drafts/${encodeURIComponent(draftId)}${tokenQuery()}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(baseUpdatedAt ? { wdl, base_updated_at: baseUpdatedAt } : { wdl }),
+    },
+  );
+  if (res.status === 409) {
+    let message = "草案已被会话侧更新，画布需刷新后再编辑";
+    let updatedAt = "";
+    try {
+      const body = await res.json();
+      if (body?.error) message = String(body.error);
+      if (body?.updated_at) updatedAt = String(body.updated_at);
+    } catch {
+      /* keep defaults */
+    }
+    throw new DraftConflictError(message, updatedAt);
+  }
+  if (!res.ok) throw await _extractError(res, `Failed to save draft: ${res.statusText}`);
+  return res.json();
+}
+
+export async function deleteWorkflowDraft(draftId: string): Promise<{ deleted: boolean }> {
+  const res = await fetch(
+    `${API_BASE}/api/workflow-drafts/${encodeURIComponent(draftId)}${tokenQuery()}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw await _extractError(res, `Failed to delete draft: ${res.statusText}`);
+  return res.json();
+}
+
+interface WdlParseResult {
+  document: KernelDocument;
+  warnings?: string[];
+}
+
+export async function parseWdl(wdl: string): Promise<WdlParseResult> {
+  const res = await fetch(`${API_BASE}/api/workflow-wdl/parse${tokenQuery()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wdl }),
+  });
+  if (!res.ok) throw await _extractError(res, `Failed to parse WDL: ${res.statusText}`);
+  return res.json();
+}
+
+interface WdlEmitResult {
+  wdl: string;
+}
+
+export async function emitWdl(document: KernelDocument): Promise<WdlEmitResult> {
+  const res = await fetch(`${API_BASE}/api/workflow-wdl/emit${tokenQuery()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ document }),
+  });
+  if (!res.ok) throw await _extractError(res, `Failed to emit WDL: ${res.statusText}`);
+  return res.json();
 }
 

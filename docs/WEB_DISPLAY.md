@@ -39,7 +39,7 @@ Web 聊天页要把内核产出变成**可刷新、可切空间、可与 CLI/手
     (attach 多连接)          (单活跃浏览器)            (手机/Android)
            │                       │                       │
     scrollback + 活动树      聊天气泡 + 侧栏工具          房间消息 + COARA_DIFF
-    cli_shows_source()       isWebSource()              should_push_matrix()
+    cli_shows_source()       isWebSource()              delegate 帧路由+按端兜底
 ```
 
 - **命中判据与执行结果分离**：`EndRegistry.deliver()` 返回 `RouteResult(hit, value)` —— `hit` 是「查到了 sender」，与 sender 自己返回什么无关（同步 sender 返回 `None` 也是命中）。只用 `route()` 的返回值反推命中会把「同步 void」误判成「无通道」，进而多落一次带。
@@ -169,7 +169,7 @@ Web 聊天页要把内核产出变成**可刷新、可切空间、可与 CLI/手
 | 内容类型 | Web 聊天区 | Web 右侧栏（工具） | CLI attach | Matrix |
 |----------|------------|-------------------|------------|--------|
 | 用户气泡 | `source=web` | user_message trace | 本端 | 房间 |
-| assistant 正文 chunk | `isWebSource` | — | `cli_shows_source` | `should_push_matrix` |
+| assistant 正文 chunk | `isWebSource` | — | `cli_shows_source` | delegate 帧路由 |
 | 工具 ✓/✗ 行 | **聊天流内联一行**（插在正文段落之间） | `tool_*` + web source | scrollback | ✗ |
 | edit diff | `source=web` | tool_complete | diff 面板 | COARA_DIFF |
 | 子智能体工具行 / diff | ✗（折进 delegate 行展开区） | — | 活动树 | ✗ |

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from src.core.logger import logger
+
 
 def build_config_overview() -> str | None:
     """渲染当前配置概况；配置未加载返回 None（调用方跳过注入）。"""
@@ -75,7 +77,7 @@ def build_config_overview() -> str | None:
                 ws_parts.append(f"{name}{mark}")
             lines.append(f"工作空间（{len(entries)}）：" + "、".join(ws_parts))
     except Exception:
-        pass
+        logger.debug("config overview: workspace summary section failed; omitted", exc_info=True)
 
     # 事件源
     try:
@@ -89,7 +91,7 @@ def build_config_overview() -> str | None:
                 es_parts.append(f"{s['id']}（{s.get('kind', '?')}·{status}）")
             lines.append(f"事件源（{len(sources)}）：" + "、".join(es_parts))
     except Exception:
-        pass
+        logger.debug("config overview: event-source summary section failed; omitted", exc_info=True)
 
     # 技能
     skills_cfg = cfg.skills

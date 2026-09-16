@@ -17,6 +17,8 @@
 > 2026-09-11 web 端显示一致性改造：**新增 9 条**（#27–#35，见「本轮遗留」节）。改造把「端上显示＝服务端权威（视图带 + 此刻 runtime）」立成硬约束并落地（帧带归属、`view_seq` 对账、原子提交、折叠区契约、standby 流），但游标口径、条数常量、线重置、兜底路径与补注入判据留下若干缺口，逐条登记。
 >
 > 面向用户的安全已知限制汇总见 [`manual/18-安全与治理.md`](./manual/18-安全与治理.md) §18.9。
+>
+> 2026-09-16 架构梳理批次启动（方案经拍板：零功能变化、纯优化修复）：**#3 吞异常出册**——62 处基线逐处处置（用户可感知路径升 warning、热路径 debug、有意静默补注释，LLM 流关闭补 exc_info），控制流零改动，2248+384 全绿；新代码门禁入 CONVENTIONS.md（禁新增 getattr 防御与裸吞异常，存量只减不增）。
 
 ---
 
@@ -31,42 +33,41 @@
 
 ---
 
-## P1：仍存在的问题（7 条）
+## P1：仍存在的问题（6 条）
 
 ### #2 动态属性访问（getattr 防御）残留（高；较上次审计扩散）
 
 - **位置**：全仓 `getattr(self, "_…", default)` 模式现有 **60 处**（2026-09-09 复测）：`src/coara/base.py` 24、`src/cli/root_shim.py` 8、`src/ui/web_server.py` 8、`src/llm/_http_provider.py` 6、`src/coara/root.py` 3、`src/ui/handlers/workspace.py` 4 等；旧单引号风格 `getattr(self, '_…'` 已清零（仅 base.py:708 残留 1 处）
 - **问题**：访问未在 `__init__` 声明的属性；类型检查/IDE 补全失效，拼写错误不被捕获。数字较上次（32）上升，扩散来自新代码沿用该风格
 - **方案**：`__init__` 声明全部实例属性；turn-scoped 属性用 TurnRuntime dataclass；新代码禁止再引入。M。
-
-### #3 裸 except Exception: pass 吞异常（高；54→49，部分缓解）
-
-- **位置**：多行模式现有 **49 处**（2026-09-09 复测）。重灾区：`src/ui/attach_ws.py` 5、`src/cli/main.py` 3；计费/通知路径点名（不可观测代价最高）：`src/runtime/usage_collector.py`、`src/runtime/usage_attribution.py`（用量/费用统计失败无日志）、`src/coara/base.py:476`（后台完成通知写入 updates store 失败被静默——与上方 446 行「不静默消失」注释直接矛盾）、LLM 流关闭 `close_exc` 捕获后不记录（`src/llm/openai.py:527`、`src/llm/responses.py:452`、`src/llm/anthropic.py:667,691,709`）、`src/coara/continuation_leftover.py:150`（matrix 房间解析失败静默降级）
-- **问题**：静默吞异常不记日志，故障不可观测；计费与后台通知两处丢失即用户可感知
-- **方案**：至少加 `logger.debug(..., exc_info=True)`；计费/通知两处至少 warning；预期异常用具体类型。M。
+- **处置进展（2026-09-16）**：新代码门禁已入 docs/CONVENTIONS.md（禁止新增，存量只减不增）；**已收口**——全仓 81 处基线消 47（动态回填属性全部入 `__init__` 声明），保留 34 处均带「有意防御」注释（__new__ 测试夹具不跑 __init__、测试桩替身、外部注入合法缺席三类）；2250+384 全绿
 
 ### #4 CoaraBase 职责过重（God Object）
 
 - **位置**：`src/coara/base.py`（1500+ 行），12+ 职责（消息/LLM/工具/技能/子智能体/会话/持久化/Trace/中断/Plan/上下文/流式）
 - **问题**：修改任何关注点都可能影响其他；测试需 mock 整个基类
 - **方案**：提取 ForegroundDelegateTracker、SessionStateManager、ToolBootstrapMixin 等。L。
+- **处置进展（2026-09-16）**：六组已抽为 mixin（`src/coara/base_mixins/`：continuation/foreground_delegates/prompt_skills/tools_registry/trace/persistence），方法逐字搬运、属性全部留宿主 __init__、外部调用面与测试形状零改动（含 `_emit_trace` 实例 monkeypatch 与 staticmethod 类名调用两个红线实跑验证）；base.py 2460→约 1550 行。剩余各组（构造/回合主循环/输出路由/LLM 调用/上下文守卫/中断/plan/会话生命周期）与宿主生命周期强耦合，属核心宿主职责，不再强行外抽——God Object 已降为「核心宿主 + 六个职责 mixin」。2250+384 全绿
 
 ### #5 RootCoara 的 janitor 编排逻辑不应在 Root
 
 - **位置**：`src/coara/root.py`（1270 行）`_janitor_startup_scan`/`_janitor_finalize_pending`/`_janitor_maybe_renew`/`_janitor_scan_expired`
 - **方案**：提取 JanitorScheduler 组件。M。
+- **已收口（2026-09-16）**：四件编排与状态迁入 `src/coara/janitor_scheduler.py`（组件自持已维护 epoch/在飞表/补扫单飞）；Root 保留同名转发——`_janitor_activity_at`/`_janitor_pending` 属性转发到组件同一份字典、`_janitor_maybe_renew` 留 monkeypatch 钩子、`_janitor_startup_scan_done` 带 setter；watcher tick 形态不变（`start_idle_timeout_watcher` 源码仍含 curator_tick，兼容 test_daily_schedule_chain 源码断言）。2250+384 全绿
 
 ### #6 依赖版本范围过宽
 
 - **位置**：`pyproject.toml:12-67` 全部 `>=`（anthropic/openai/pydantic 等）；无 requirements.lock/uv.lock/poetry.lock（2026-09-09 复核仍无变化）
 - **影响**：不同环境行为不一致；上游 breaking change 直接影响生产；无法可复现构建
 - **方案**：pip-compile/uv pip compile 生成 lock 文件锁精确版本。M。
+- **已收口（2026-09-16）**：`requirements.lock`（uv pip compile，office+desktop extras，274 行精确版本）入仓；`Build-Release.ps1` 的 Invoke-PipInstallTarget 在锁文件存在时 `-r requirements.lock` 携带两个本地 wheel 同条安装，缺失降级告警。构建机已装 uv 0.12.13；依赖演进后重新生成：`uv pip compile pyproject.toml --extra office --extra desktop -o requirements.lock`。用户机不解析依赖（fat 包），lock 唯一生效点是构建机
 
 ### #7 端/通道状态载体并行 + 端来源分类双谓词（2026-09-09 新增）
 
-- **位置**：同一「当前端/通道」概念由 3–4 种状态载体共同表达——`src/coara/base.py:226,512,697,789`（旧 `session_origin` 字典）、`src/coara/turn_context.py:26,48,73`（`EndChannel` ContextVar）、`_active_turn_source`（base.py 多处）、`src/coara/segment.py:28`（`SegmentTracker.source/channel_id`）；另有来源分类双谓词——`src/coara/continuation_leftover.py:26,31,35`（`is_web_source/is_matrix_source/is_cli_source`）与 `src/coara/turn_source.py`（自称「单一事实源」的 `cli_shows_source/web_shows_source/should_push_matrix`）
-- **问题**：谓词语义已漂移（`is_matrix_source` 仅认 `"matrix"`，`should_push_matrix` 还含 `"event"`；`cli-` 前缀处理范围不同）；某条路径只更新载体之一而漏改其余时，输出路由/可见性不一致——channel_id 端内路由上线后此风险被放大
+- **位置**：同一「当前端/通道」概念由 3–4 种状态载体共同表达——`src/coara/base.py:226,512,697,789`（旧 `session_origin` 字典）、`src/coara/turn_context.py:26,48,73`（`EndChannel` ContextVar）、`_active_turn_source`（base.py 多处）、`src/coara/segment.py:28`（`SegmentTracker.source/channel_id`）；另有来源分类双谓词——`src/coara/continuation_leftover.py:26,31,35`（`is_web_source/is_matrix_source/is_cli_source`）与 `src/coara/turn_source.py`（自称「单一事实源」的 `cli_shows_source/web_shows_source`）
+- **问题**：谓词语义已漂移（`is_matrix_source` 仅认 `"matrix"`；`cli-` 前缀处理范围不同）；某条路径只更新载体之一而漏改其余时，输出路由/可见性不一致——channel_id 端内路由上线后此风险被放大
 - **方案**：判定谓词收敛进 turn_source.py 单一事实源（continuation_leftover 改为转发引用）；状态载体收敛到 Segment + EndChannel 两套并文档化各自职责。M。
+- **处置进展（2026-09-16）**：谓词侧已收敛——`turn_source.py` 新增 `turn_source_family`/`same_turn_family` 唯一族抽象，`registry._turn_family` 转发；`continuation_leftover.is_web_source` 转发 `web_shows_source`，is_matrix/is_cli 的差异注释显式化并有测试钉住。载体侧已收口——摸底确认四套载体权威域各自清晰（Segment=路由、EndChannel=审批、_active_turn_source=trace、session_origin=唤醒回投），职责表入 `docs/架构契约.md`；不做物理合并（置空窗口是功能）
 
 ### #8 无错误恢复指引的 provider 侧残留（2026-09-09 新增，收窄自原 #7）
 
@@ -87,16 +88,14 @@
 - **位置**：`src/core/config.py`
 - **问题**：单次 `load()` 入口（:210）但内部多趟解析：`_iter_yaml_load_paths`（:182）先合并一遍 YAML 路径再 `_iter_config_yaml_paths(merged)` 二次枚举、`_load_env`（:369）、`_load_llm_preferences_files`（:390）、`_load_providers`（:431）/`_load_llm_profiles`（:434）独立 load。深度合并逻辑复杂
 - **注**：2026-08-14 已修写入优先级（补 users/default 层）；2026-09-09 复核加载链较台账原述略降但仍未根本简化
-- **建议**：
-  1. 简化加载链：一次 load + 一次合并
-  2. 启动时打印生效配置摘要（mask 后）
-  3. `coara config show` 命令显示当前生效值
+- **处置进展（2026-09-16）**：趟 2 从全量深合并降为只扫 `coara_home` 单键（鸡生蛋语义不变，test_config_paths 全绿）；新增 `coara config show`（来源链 + 脱敏合并配置 + 加载告警，密钥经 mask_secrets）。剩余「一次 load 一次合并」不可行——趟 2/3 二次枚举是 coara_home 写进 YAML 的鸡生蛋解，不可删
 
 ### #11 [P2] 回合终态归类口径三处跟进（2026-08-20 评审发现）
 
-- 上下文超限（guard.should_block）/ 停滞停止 / 迭代上限三条路径都置 `CoaraStatus.FAILED` 但不记 `turn_failure`，session_log 仍记 completed——同类既有口径问题（显式标记制度建立后暴露，非回归）；这些路径无异常对象，需拍板归类语义：记 failed 还是有意算正常结束
-- `GeneratorExit`/`asyncio.CancelledError`（生成器被关闭/取消，如 detach 的 pending.cancel）路径确定性记 completed；旧实现 exc_info 可靠时记 failed——建议补 `except (GeneratorExit, asyncio.CancelledError): turn_failure = ...; raise`
-- switch_workspace 中断分支整轮从历史抹除（strip_ws_switch_tail），本回合已落盘的文件改动随之对模型隐形（同副作用注记缺口；new_session 分支历史整体作废无需处理）——需确认「切走即整轮未发生」是有意设计还是同样要补副作用注记
+- **已收口（2026-09-16 拍板执行）**：
+  1. 上下文超限/停滞停止/迭代上限三条 FAILED 路径现记显式失败标记（LLMError 哨兵），session_log 终态记 failed，与状态机/trace 口径一致；delegate 失败分类对 LLMError 判 permanent，行为不变
+  2. GeneratorExit/CancelledError 保持记 completed，finally 显式注释固化有意语义（detach 取消是切空间正常生命周期，记 failed 污染失败率）
+  3. switch strip 后补磁盘副作用注记，与 Ctrl+C/异常回滚两条中断路径对齐；三处文档口径同步（COARA_ARCHITECTURE.md ×2、工作空间与目录.md、多工作空间与工作空间动态.md）
 
 ---
 
@@ -104,6 +103,13 @@
 
 | 编号 | 条目 | 备注 |
 |------|------|------|
+| #13 | 测试 SimpleNamespace mock 过多（352 处/55 文件） | 纯测试债，迁移工作量巨大价值低；不主动做，新测试优先用 typed mock 类 |
+| #14 | AGENTS.md 过长 | 拆分风险大于收益（每会话注入的契约，动它影响所有 agent 行为）；暂缓，单独评估 |
+| #15 | 无用户反馈闭环 | 产品决策非优化项；/report 已走子智能体内部通道，缺 issue tracker/稳定反馈端点 |
+
+> 2026-09-16 P3 批次核销 12 条：#12 单例生命周期表入架构契约、#16 文件桥惰性索引、#17 EventBus 退订清残留、#18 switch_llm_global 前台判定同源化、#19 vault DEK bytearray 清零、#20 file_watch 去抖改 Timer 线程、#21 AgentRegistry 单例收敛、#22 LLMError 包装样板抽 helper、#23 前端类型补全 + 死 action 删除、#24 fire-and-forget 收编、#25 docstring 失实修正、#26 磁盘卫生约 19MB；web 改造遗留 #30 sidecar 节流写移出事件循环、#33 折叠封顶显式标记 + 老 brief 反查、#34 补注入判据收窄同步核销。2253+384 全绿
+
+------|------|------|
 | #12 | 全局单例过多（tool_registry/llm_service/context_window_manager/BashBackgroundRunner/BackgroundAgentManager） | 短期文档化每个单例生命周期与重置方法 |
 | #13 | 测试 SimpleNamespace mock 过多（352 处/55 文件） | 定义共享 typed mock 类 |
 | #14 | AGENTS.md 过长 | 拆分，架构深挖进 COARA_ARCHITECTURE.md |
@@ -124,55 +130,37 @@
 
 ## 本轮遗留（2026-09-11：web 端刷新/切空间同一把尺改造）
 
-### #27 [P1] 快照游标覆盖整线，消息切片只回 limit 条（不同源）
+### #27 [P1] 快照游标覆盖整线，消息切片只回 limit 条（不同源）——已闭环 09-13
 
 - **位置**：`src/ui/web_views.py::WebViewStore.build_messages`（`latest_seq` 取全部帧的 `view_seq` 最大值；`messages` 在出口处 `[-limit:]` 截断）、`src/ui/handlers/session.py::_load_view_messages/_load_view_snapshot`
 - **问题**：游标宣称「这条线已到 N」，端上据此丢弃 `view_seq <= N` 的实时帧；但返回的切片只有最近 `limit` 条——被丢弃的帧既不在切片里、也没在端上渲染，长线上就是「判定已覆盖、行却不在屏上」，且此后不会再补（该序号永远不会再来一次）
 - **方案**：游标与切片同源——`latest_seq = 切片末条 seq`（另给 `slice_from_seq` 表达切片起点），或让端上以「快照覆盖区间」而非单点游标做裁量。M
 
-### #28 [P2] 历史条数两个常量不统一（刷新 200 / 切空间 100）
+### #28 [P2] 历史条数两个常量不统一（刷新 200 / 切空间 100）——已收口 09-13
 
 - **位置**：`src/ui/handlers/session.py::_DEFAULT_HISTORY_LIMIT = 100`（切空间响应与 `/api/session/messages` 默认）、`src/ui/web/src/views/ChatView.tsx`（`fetchSessionMessages(200, …)`）
 - **问题**：同一把尺两个数——F5 首屏取 200 条、切空间快照取默认 100 条，长度与游标随路径不同；出问题时两种路径的表现不一致，难对账
 - **方案**：收敛为一个跨端常量（服务端默认调 200，或前端刷新也走默认），并在 `docs/Web设计体系.md` §0.2 记明。S
 
-### #29 [P2] `reset_line` 只换世代，序号不会真的从 1 重来
+### #29 [P2] `reset_line` 只换世代，序号不会真的从 1 重来——已收口 09-13
 
 - **位置**：`src/ui/web_views.py::WebViewStore.reset_line`（世代 +1、`latest_seq = 0`）与 `_next_view_seq`（取 `max(read_latest_view_seq(path), meta.latest_seq)` 再 +1）
 - **问题**：`reset_line` 不截断 jsonl，首次分配仍从文件尾部续号——docstring 宣称的「序号从 1 重新开始」在文件非空时不成立；且世代变化只体现在下一次快照的 `epoch` 上，已连端在下次快照前仍按旧 epoch 处理实时帧（本地缓存该丢的没丢）
 - **方案**：`reset_line` 同时归档/截断该线文件（或把「线已重建」作为一条显式帧下发，端上立即作废本地内容与游标）。S
 
-### #30 [P3] sidecar 元数据同步写盘可能短时占住事件循环
-
-- **位置**：`src/ui/web_views.py::_next_view_seq → _persist_line_meta` → `src/core/json_store.py::write_text_atomic`（同目录临时文件 + 文件 fsync + 目录项 fsync，全程同步）
-- **问题**：新文件首帧、以及每 `_META_WRITE_MIN_INTERVAL_S`（1s）一次，都在回合协程里同步落盘；网络盘/机械盘上单次几十毫秒，直接拖慢流式输出（帧是逐条 `append_event` 的）
-- **方案**：sidecar 写盘移出事件循环（`asyncio.to_thread` 或独立线程 + 队列），失败照旧只记日志；元数据滞后一两帧本就无害。M
-
-### #31 [P3] standby 流「LRU」名不副实（实为 FIFO）
+### #31 [P3] standby 流「LRU」名不副实（实为 FIFO）——已关闭 09-13（FIFO 即设计，代价已在代码注释写明）
 
 - **位置**：`src/ui/web_server.py::_standby_stream_for`（`_MAX_STANDBY_STREAMS = 8`，超限 `pop(next(iter(self._standby_streams)))`）
 - **问题**：淘汰按插入序，命中复用不刷新位置——用得最多的那条线可能先被淘汰（连它的 replay buffer 一起丢），而注释写的是「只留最近若干条」
 - **方案**：命中时把键重新插到末尾实现真 LRU（或改注释明确 FIFO 语义与代价）。S
 
-### #32 [P2] 子智能体帧投递失败只记 debug
+### #32 [P2] 子智能体帧投递失败只记 debug——已收口 09-13
 
 - **位置**：`src/coara/base.py::_route_subagent_tool_line`（`except → logger.debug`）、子智能体 chunk 投递路径同款、`src/ui/web_views.py::_persist_line_meta` 失败也是 debug
 - **问题**：这几条帧没有第二个来源（`subagent_chunk` 不落带、工具行只投不发第二遍），投递/落盘失败即永久缺失；而默认日志级别下 debug 不可见，排障时表现为「展开区少一段」且查不到原因
 - **方案**：失败至少 warning，并带上 `source / session_id / tool_call_id` 键名（与 `EndRegistry` 的 route miss 日志同格式，一眼对上）。S
 
-### #33 [P3] 折叠区封顶与老数据 `brief` 无法归位
-
-- **位置**：`src/ui/web_views.py`（`_FOLD_MAX_CALLS = 30`、`_FOLD_MAX_FRAMES_PER_CALL = 100`、`_trim_fold_*`）、`_is_brief_frame` + `payload.get("parent_tool_call_id")`
-- **问题**：① 超 30 个 call / 单 call 超 100 帧的历史子智能体产出被静默裁掉，刷新后展开区不完整且无任何提示；② 老数据的 delegate 指令没有 `parent_tool_call_id`（或为空串），归集键为空 → 端上找不到对应 delegate 行，指令既不进展开区也不进正文（静默消失）
-- **方案**：封顶后给可见提示（「更早内容已省略」）或按需分页拉取；老数据按所在回合的 delegate 工具行反查 call_id 兜底归集。M
-
-### #34 [P2] 上下文补注入每回合全量拼接历史文本，前缀子串判定可能误判
-
-- **位置**：`src/coara/turn_loop/user_turn_injectors.py::inject_environment_seed`（每回合把整段 history 转文本）、`src/coara/injections/context_modules.py::build_missing_prefix_messages`（`joined = "\n".join(history_texts)` 后 `marker in joined`）
-- **问题**：① 每回合 O(历史长度) 的转换与拼接，长会话每轮都做一次；② 判据是「前缀出现在整段拼接文本里」——压缩摘要若复述了模块标题（如 `AGENTS.md：`），该模块被判「已存在」而永不补注入，上下文静默缺失（与 `is_context_module_seed` 的 `startswith` 严格判据不一致）
-- **方案**：改用显式标记（消息 metadata / 注入世代号）判断「该模块是否已在历史里」；至少把判据改为只在历史头部若干条里按 `startswith` 认领（与 `is_context_module_seed` 同源）。M
-
-### #35 [P2] `delegate(action=message)` 对运行中的前台子智能体不可用
+### #35 [P2] `delegate(action=message)` 对运行中的前台子智能体不可用——已修 09-13
 
 - **位置**：`src/tools/builtin/delegate/delegate.py::_execute_message` → `lookup_running_subagent`（只查 `_RUNNING_SUBAGENTS`，即带 channel 的前台 coaras）
 - **问题**：运行中的前台 aide（或任何未登记进该表的活实例）查不到 → `_execute_message` 直接落回 `_execute_resume`：用户以为发的是途中消息，实际动作被静默替换成「追加任务 / 断点续跑」，报错文案也随之误导

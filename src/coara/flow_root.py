@@ -1,4 +1,4 @@
-"""FlowRoot：WebUI 工作流页面的专属会话主体（第二主体）。
+"""FlowRoot：WebUI 工作流示例空间的专属会话主体（第二主体）。
 
 与主会话（root / WorkspaceSession）完全并立：
 - 独立 system prompt（``prompts/agents/flow-root.md``）与独立 session_id
@@ -7,6 +7,11 @@
 - orchestrator 常驻；实例级 FlowCoordinator（flow_subject="flow"）
 - 由 WebServer 惰性创建并持有；图在进程内跨空间保留，workspace_dir 跟随前台
   （新 spawn 默认工作目录）；会话事件写入当前前台空间的录像带
+
+工作流以「示例工作空间」身份回归空间体系：与其它系统空间同构（独立 persona +
+专属画布页面），是出厂自带的参考实现——用户可照此范式构建自己的空间
+（自定义 schema、独立引擎、内核工具、专属页面）。执行层不在此：WDL 实例
+运行由独立 wdl 软件承载。
 """
 
 from __future__ import annotations

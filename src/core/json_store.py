@@ -91,6 +91,41 @@ def write_bytes_atomic(path: Path, data: bytes) -> None:
         raise
 
 
+@contextlib.contextmanager
+def interprocess_file_lock(lock_path: Path):
+    """同机跨进程互斥，用于「读—改—写」保护；锁文件仅作互斥，不承载数据。
+
+    Windows 走 msvcrt.locking（阻塞式，系统自带重试），POSIX 走 fcntl.flock。
+    与 ``src/ui/web_views.py`` 的 view_seq 锁同款——锁是建议性的，双方都必须走
+    本函数才有效。
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]  # POSIX 专有
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]  # POSIX 专有
+        handle.close()
+
+
 class TypedJsonStore(Generic[T]):
     """Load/save ``dict[id, T]`` from a JSON file with atomic writes.
 

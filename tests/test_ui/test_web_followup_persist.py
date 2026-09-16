@@ -60,7 +60,9 @@ async def test_cli_active_web_followup_persists_user_and_chunks(
         def set_deferred_remote_ctx(self, *args, **kwargs) -> None:
             pass
 
-        def submit_continuation_input(self, text: str, image_blocks=None, *, source: str = "") -> None:
+        def submit_continuation_input(
+            self, text: str, image_blocks=None, *, source: str = "", client_msg_id: str = ""
+        ) -> None:
             pass
 
         def drain_continuation_inputs(self) -> list[ContinuationInput]:

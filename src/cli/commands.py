@@ -17,6 +17,7 @@ from pathlib import Path
 from rich.console import Console
 
 from src.coara.commands import CommandResult, execute_command
+from src.core.logger import logger
 
 console = Console()
 
@@ -71,8 +72,8 @@ def _render_result(result: CommandResult) -> None:
                 port=parsed.port or 8080,
                 token=token,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"打开浏览器 WebUI 失败：{exc}")
 
     action = result.action
     if action == "new_session":

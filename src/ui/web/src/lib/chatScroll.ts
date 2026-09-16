@@ -12,7 +12,7 @@
  * scrollTop 就落到别的逻辑位置上；锚在消息上才与「用户在看哪一条」等价。
  */
 
-export type ScrollDecision = "bottom" | "anchor" | "hold";
+type ScrollDecision = "bottom" | "anchor" | "hold";
 
 /** 滚动锚：切走 / 上翻时「停在哪儿」的声明式记法。 */
 export interface ScrollAnchor {
@@ -44,7 +44,7 @@ export function anchorAtViewportTop(rows: readonly ScrollRow[]): ScrollAnchor {
   return BOTTOM_ANCHOR;
 }
 
-export interface ScrollContext {
+interface ScrollContext {
   /** 本页面生命里还没提交过任何权威内容（＝刷新、或首次进入这一页） */
   newPageLife: boolean;
   /** 用户在本页面生命里手动上翻过历史（stickToBottom === false） */

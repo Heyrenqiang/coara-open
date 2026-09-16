@@ -21,6 +21,28 @@ body {
   background: var(--coara-surface);
 }
 
+/* 光标只在真正的文本输入区出现：默认全透明，点击非输入区不再闪文本光标
+   （浏览器在任意可聚焦元素上也会放置 caret，视觉上像误进了 text 区域）。 */
+* {
+  caret-color: transparent;
+}
+input,
+textarea,
+[contenteditable="true"] {
+  caret-color: auto;
+}
+
+/* 侧边栏空间行：悬停才显示「移出」按钮。纯 CSS 驱动——JS state 驱动在
+   切换空间重建 Menu items 后失效（替换的 DOM 收不到 mouseenter 补发）。 */
+.workspace-space-row .workspace-space-delete {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.workspace-space-row:hover .workspace-space-delete {
+  opacity: 0.85;
+}
+
+
 #root {
   min-height: 100vh;
 }
@@ -54,9 +76,12 @@ body {
 
 /* 段落两端对齐、最后一行自然左对齐：中文字距拉伸交给表意文字算法，
    避免逐字均摊造成的「字间开洞」；text-wrap: pretty 让断行做全局取舍，
-   少出现「末尾只剩一两个字」的秃尾行（新引擎生效，旧引擎自动忽略）。 */
+   少出现「末尾只剩一两个字」的秃尾行（新引擎生效，旧引擎自动忽略）。
+   段间距 4px（对齐手机端 headingSpacing 同档）：比段内行距略松一点点，
+   段落之间有喘息但不空——块级相邻 margin 折叠取最大值，间距由下方各块
+   自身规则承载。 */
 .chat-markdown p {
-  margin: 0 0 12px;
+  margin: 0 0 4px;
   text-align: justify;
   text-justify: inter-ideograph;
   text-wrap: pretty;
@@ -67,21 +92,23 @@ body {
 }
 
 /* 代码块：单一底色、零边框、零阴影（原先「外框 + 底色 + 标题条」三层装饰
-   叠加，一屏里出现好几个方块，是视觉杂乱的主要来源）。 */
+   叠加，一屏里出现好几个方块，是视觉杂乱的主要来源）。
+   与正文/标题的间距收紧到 0.16em ≈ 2.4px（对齐手机端 codeAdjacentSpacing），
+   避免「标题下一大块空白」。 */
 .chat-markdown pre {
   background: var(--coara-code-bg);
   border: none;
   border-radius: 4px;
   padding: 10px 12px;
   overflow-x: auto;
-  margin: 12px 0;
+  margin: 2px 0;
   font-size: 13px;
   line-height: 1.55;
 }
 
 /* 代码块带语言标签 + 复制按钮的容器 */
 .codeblock {
-  margin: 12px 0;
+  margin: 2px 0;
   border: none;
   border-radius: 4px;
   overflow: hidden;
@@ -135,37 +162,43 @@ body {
   border-radius: 3px;
 }
 
+/* 列表：与段落同档（间距 0 对齐行距）；列表项之间不加额外空隙，
+   项内软换行与项间行距才一致（对齐手机端 listItemSpacing=0）。 */
 .chat-markdown ul,
 .chat-markdown ol {
   padding-left: 22px;
-  margin-bottom: 12px;
+  margin: 0;
 }
 
 .chat-markdown li {
-  margin-bottom: 4px;
+  margin-bottom: 0;
 }
 
+/* 引用：非散文块，间距走 blockSpacing 一档（0.4em ≈ 6px）。 */
 .chat-markdown blockquote {
   border-left: 3px solid var(--coara-border);
   padding-left: 12px;
   color: var(--coara-text-muted);
-  margin: 12px 0;
+  margin: 6px 0;
 }
 
+/* 表格：非散文块，间距走 blockSpacing 一档（0.4em ≈ 6px）。 */
 .chat-markdown table {
   border-collapse: collapse;
   width: 100%;
-  margin: 12px 0;
+  margin: 6px 0;
 }
 
 /* 表格只留行分隔线：去掉全网格线与斑马纹——格子套格子是另一个「五花八门」
-   的来源，行线已足够读表。 */
+   的来源，行线已足够读表。垂直内边距收到 3px（对齐手机端 0.18em 的紧凑口径）：
+   表格信息密度高，行距交给行高兜底，不靠上下留白撑——表格行必须比正文行紧凑。 */
 .chat-markdown th,
 .chat-markdown td {
   border: none;
   border-bottom: 1px solid var(--coara-border-soft);
-  padding: 6px 12px 6px 0;
+  padding: 3px 12px 3px 0;
   text-align: left;
+  line-height: 1.45;
 }
 
 .chat-markdown th {
@@ -271,19 +304,52 @@ body {
   animation: coara-spin 1.2s linear infinite;
 }
 
-/* Headings — 对齐 CLI 的口径：标题不靠行距或空白建立层级。
-   行距与正文同档（inherit），上下留白归零，只有字重与字号在说话——
-   标题因此不再打断正文的阅读节奏。 */
+/* 工具行运行中：单点呼吸脉动（对齐手机端 ToolRunningDots）——
+   透明度与缩放逐帧起伏，620ms 一轮往返，动感清楚又不抢注意力。 */
+.tool-running-dot {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: tool-dot-breathe 0.62s ease-in-out infinite alternate;
+}
+
+@keyframes tool-dot-breathe {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0.3;
+    transform: scale(0.6);
+  }
+}
+
+/* Headings — 对齐手机端口径：标题与相邻正文/列表之间留 0.28em ≈ 4px 的
+   空隙（headingSpacing），比正文行距略疏一点点、不大。标题属于它后面的
+   那一节，故上方空隙（首标题除外）略大于下方，块级 margin 折叠后取相邻
+   较大值，不会与正文/表格的间距叠加。 */
 .chat-markdown h1,
 .chat-markdown h2,
 .chat-markdown h3,
 .chat-markdown h4,
 .chat-markdown h5,
 .chat-markdown h6 {
-  margin: 0;
+  margin: 10px 0 4px;
   font-weight: 600;
   line-height: inherit;
   color: var(--coara-text);
+}
+
+/* 气泡内首个标题不带上部空隙，避免气泡顶部凭空留白。 */
+.chat-markdown > h1:first-child,
+.chat-markdown > h2:first-child,
+.chat-markdown > h3:first-child,
+.chat-markdown > h4:first-child,
+.chat-markdown > h5:first-child,
+.chat-markdown > h6:first-child {
+  margin-top: 0;
 }
 
 .chat-markdown h1 {

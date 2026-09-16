@@ -116,7 +116,7 @@ def _profile_defaults_for_target(config_manager: Any, provider: str, model: str)
         try:
             profile = get_fn(name)
         except Exception:
-            continue
+            continue  # 单个 profile 读取失败：跳过该项，其余 profile 照常匹配
         if (profile.provider or "").lower() != provider_lower:
             continue
         defaults = ModelCallDefaults(profile.max_tokens, profile.temperature)
@@ -177,7 +177,7 @@ def resolve_best_call_defaults(
         try:
             provider_cfg = config_manager.get_provider(provider)
         except Exception:
-            provider_cfg = None
+            provider_cfg = None  # 配置读取回落：有意静默用内置默认（热路径，不记日志）
         if provider_cfg is not None:
             yaml_model = _yaml_model_entry_defaults(provider_cfg, model)
             provider_max = getattr(provider_cfg, "max_tokens", None)

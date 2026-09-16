@@ -10,7 +10,7 @@ from typing import Any
 
 from .office_errors import DocumentBuildError
 from .office_presets import WORD_PRESETS, WordPreset
-from .office_support import require_pkg
+from .office_support import atomic_output_path, require_pkg
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _OFFICIAL_H1_RE = re.compile(r"^[一二三四五六七八九十百零〇]+、\s*(.+)$")
@@ -306,27 +306,26 @@ def build_word_document(
     from_template = template_path is not None
     ctx = _WordBuildContext(preset=preset, from_template=from_template)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with atomic_output_path(output_path) as temp_path:
+        if template_path is not None:
+            if not template_path.is_file():
+                raise DocumentBuildError(f"未找到 Word 模板: {template_path}")
+            shutil.copy2(template_path, temp_path)
+            document = Document(str(temp_path))
+        else:
+            document = Document()
+            for section in document.sections:
+                _configure_page(section, preset)
 
-    if template_path is not None:
-        if not template_path.is_file():
-            raise DocumentBuildError(f"未找到 Word 模板: {template_path}")
-        shutil.copy2(template_path, output_path)
-        document = Document(str(output_path))
-    else:
-        document = Document()
-        for section in document.sections:
-            _configure_page(section, preset)
+        if title and title.strip():
+            _add_title(document, title, ctx)
 
-    if title and title.strip():
-        _add_title(document, title, ctx)
+        body = content.strip()
+        if not body:
+            raise DocumentBuildError("文档内容不能为空。")
+        _render_markdown_body(document, body, ctx, style=preset_key)
 
-    body = content.strip()
-    if not body:
-        raise DocumentBuildError("文档内容不能为空。")
-    _render_markdown_body(document, body, ctx, style=preset_key)
-
-    document.save(str(output_path))
+        document.save(str(temp_path))
     return {
         "path": str(output_path.resolve()),
         "style": preset_key,

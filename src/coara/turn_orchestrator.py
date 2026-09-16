@@ -19,7 +19,6 @@ from src.coara.content_policy_recovery import complete_turn_with_content_policy_
 from src.coara.stagnation import build_error_signature
 from src.coara.turn_completion import CoaraRunCancelledError, PlanSubmittedError, _await_interruptible
 from src.coara.turn_loop import apply_tool_results_to_history, begin_user_turn, prepare_messages_for_llm_turn
-from src.coara.turn_source import should_push_matrix
 from src.coara.turn_timing import TurnTimingRecorder
 from src.context.window import context_window_manager
 from src.core.errors import ContextWindowExceededError, LLMError
@@ -305,6 +304,11 @@ async def run_turn_loop(
     # 显式失败标记：finally 判定回合成败读此变量，不依赖 sys.exc_info()
     # （async generator 关闭路径下 exc_info 不可靠，失败回合会误记 completed）
     turn_failure: BaseException | None = None
+    # 收尾尾窗计数：正常收尾 return 前的 yield 会让出事件循环，跟话恰在此刻
+    # 入队则绕过 :879 的消化检查；return 前再查一次队列续循环消化，到顶强制
+    # 收尾走 leftover 兜底——防持续跟话把回合拖成无限。
+    _final_drain_continues = 0
+    _final_drain_max = 10
     # 兜底硬上限：调用方若把 _max_tool_iterations 置 None（默认 1200 有上限，
     # 子智能体/工作空间会话传 None 即裸奔），LLM 每轮产不同参数的工具调用
     # （绕开 LoopDetector）且每次有进展（绕开 StagnationGuard）时会无限循环。
@@ -455,26 +459,10 @@ async def run_turn_loop(
                         _sub_emit_source = _agent_origin or _emit_source
                         _subagent_texts.append(_sub_display)
                         _subagent_sources.append(_sub_emit_source)
-                        # 子智能体最终结果同步推送手机端（段来源 matrix 时）：
-                        # 用派发时快照的房间 + bot 常驻 send_text，不靠 ContextVar
-                        # （完成可能 drain 进 CLI/Web 活跃回合，turn 已空）。
-                        if should_push_matrix(_sub_emit_source):
-                            try:
-                                from src.coara.turn_context import get_turn_channel_id
-                                from src.matrix_client.diff_bridge import push_matrix_text
-
-                                _room = str(getattr(_ci, "agent_origin_channel", "") or "").strip()
-                                if not _room:
-                                    # 兜底只认 matrix 房间 id（! 开头）：drain 进
-                                    # CLI/Web 活跃回合时 turn 的 channel_id
-                                    # 是连接 id 而非房间，误用会发送失败静默丢——
-                                    # 交给 push_matrix_text 的最近房间兜底。
-                                    _maybe_channel = str(get_turn_channel_id() or "").strip()
-                                    if _maybe_channel.startswith("!"):
-                                        _room = _maybe_channel
-                                await push_matrix_text(room_id=_room, body=_sub_display)
-                            except Exception as _exc:  # noqa: BLE001
-                                logger.debug(f"subagent result matrix push skipped: {_exc}")
+                        # 显示面投递不在这里：子智能体结果由 delegate 的帧路由统一
+                        # 投给发起端（含未命中时按端兜底）。注入路径只负责把结果写进
+                        # history 供主模型继续推理——在注入里再直推一次端，就是同一条
+                        # 结果的第二次上屏（手机端会把它当主会话正文铺出来）。
                     _display = continuation_followup_display_line(
                         _ci_text,
                         image_blocks=_ci.image_blocks,
@@ -534,7 +522,10 @@ async def run_turn_loop(
                 coara._emit_trace(
                     "context_blocked", guard.reason, level="error", payload={"llm_input": llm_input_summary}
                 )
-                coara._turn_failure = None  # 上下文压缩阻断：确定性失败，不可续跑
+                # 上下文压缩阻断：确定性失败，不可续跑；记失败标记使
+                # session_log 终态与 CoaraStatus.FAILED / error 级 trace 同口径
+                turn_failure = LLMError(f"context blocked: {guard.reason}")
+                coara._turn_failure = turn_failure
                 yield f"Context limit reached. {guard.reason}"
                 return
 
@@ -987,6 +978,16 @@ async def run_turn_loop(
                     yield warning_prefix + remainder if remainder else warning_prefix
                 elif remainder:
                     yield remainder
+                # 尾窗跟话（:859 检查之后、return 之前入队）：不结束回合，续循环消化
+                if coara._continuation_inputs and _final_drain_continues < _final_drain_max:
+                    _final_drain_continues += 1
+                    coara._emit_trace(
+                        "turn_continue",
+                        "Late continuation at final turn boundary; continuing",
+                        payload={"iteration": iteration, "final_drain_continues": _final_drain_continues},
+                    )
+                    timing.finish_iteration()
+                    continue
                 coara.status = CoaraStatus.IDLE
                 timing.finish_iteration()
                 coara._emit_final_turn_traces(final_content)
@@ -1071,7 +1072,12 @@ async def run_turn_loop(
                 if execution.result.is_error:
                     logger.debug(f"Tool error: {execution.tool_call.name} -> {execution.result.content}")
                     if show_tool_summary:
-                        yield f"✗ {execution.tool_call.name} 报错: `{execution.result.content}`\n"
+                        # 上屏只取错误首行（一句人话）；多行细节（如 edit 附带的原文摘录）
+                        # 属模型通道，留在 ToolResult.content 里给 LLM 自纠，不进端上输出流
+                        error_line = str(execution.result.content or "").split("\n", 1)[0].strip()
+                        if len(error_line) > 200:
+                            error_line = error_line[:200] + "…"
+                        yield f"✗ {execution.tool_call.name} 报错: `{error_line}`\n"
 
                 # 用户主动取消（如按 ESC）—— 优雅终止当前 turn
                 if getattr(execution.result, "is_cancelled", False):
@@ -1209,12 +1215,18 @@ async def run_turn_loop(
             )
             if alert is not None:
                 stop_message = coara._stop_for_stagnation(iteration, alert.feedback, alert.reason)
+                # 停滞停止是失控保护（FAILED + error trace），终态同口径记 failed
+                turn_failure = LLMError(f"stagnation stop: {alert.reason}")
+                coara._turn_failure = turn_failure
                 yield stop_message
                 return
         stop_message = f"Stopped after reaching the maximum tool iterations ({_iteration_cap})."
         coara.message_history.append(Message(role=MessageRole.ASSISTANT, content=stop_message))
         coara.status = CoaraStatus.FAILED
         coara._emit_trace("iteration_limit", stop_message, level="error")
+        # 迭代上限同属失控保护：终态记 failed，与状态机/trace 口径一致
+        turn_failure = LLMError(stop_message)
+        coara._turn_failure = turn_failure
         coara._emit_final_turn_traces(
             stop_message,
             completed_message="Iteration limit reached",
@@ -1268,6 +1280,16 @@ async def run_turn_loop(
             # Idempotent: ws(switch) already stripped the source tail; sanitize again
             # if the executor path skipped cleanup.
             strip_ws_switch_tail(coara.message_history)
+            # 与 Ctrl+C / 异常回滚两条中断路径对齐：整轮抹除后本回合已执行的
+            # 磁盘改动对模型彻底隐形，会误判磁盘未被改动。副作用注记 append 在
+            # strip 边界之后（strip 只上溯到 ws 工具链），不会被二次 strip。
+            side_effects_detail = _build_interrupt_side_effects_note(
+                file_effects=turn_file_effects,
+                other_tools=turn_other_effects,
+                delegates=turn_delegate_effects,
+            )
+            if side_effects_detail:
+                coara.message_history.append(Message(role=MessageRole.USER, content=system_info(side_effects_detail)))
             workspace_name = exc.reason.split(":", 1)[1] if ":" in exc.reason else "?"
             from src.coara.workspace_state import format_workspace_switch_message
 
@@ -1335,6 +1357,12 @@ async def run_turn_loop(
     finally:
         # 成败判定用显式捕获的 turn_failure（async generator 关闭路径下
         # sys.exc_info() 不可靠，失败回合会误记 completed）
+        #
+        # GeneratorExit / asyncio.CancelledError（生成器被外部关闭/取消，如
+        # detach 的 pending.cancel、进程关停、端断开）不经任何 except 分支，
+        # turn_failure 保持 None → 记 completed。这是有意的：detach 取消是
+        # 切空间的正常生命周期，记 failed 会系统性污染失败率；两者都不是
+        # 「回合未达成且需关注」的失败。
         # 清理 mid-turn 远端接续输入恢复的 turn ContextVar：逆序 reset
         # 回到初始值，避免远端上下文泄漏到回合外（如下一回合或后台任务）。
         # 正文回投统一走 EndRegistry 流式路由，无收尾补发镜像。

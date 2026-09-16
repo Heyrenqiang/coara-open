@@ -7,7 +7,7 @@ from typing import Any
 
 from .office_errors import DocumentBuildError
 from .office_presets import EXCEL_PRESETS, ExcelPreset
-from .office_support import require_pkg
+from .office_support import atomic_output_path, require_pkg
 
 
 def _require_openpyxl() -> None:
@@ -100,7 +100,8 @@ def build_excel_workbook(
         ws = workbook.create_sheet(title=name)
         total_rows += _write_sheet(ws, sheet, preset)
 
-    workbook.save(str(output_path))
+    with atomic_output_path(output_path) as temp_path:
+        workbook.save(str(temp_path))
     return {
         "path": str(output_path.resolve()),
         "style": preset_key,

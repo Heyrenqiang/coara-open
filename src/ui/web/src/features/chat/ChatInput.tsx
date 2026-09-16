@@ -93,7 +93,7 @@ function isTextFile(file: File): boolean {
 }
 
 /** 附件语义类别：决定后端如何内联（文本/Office/PDF 提取文本，二进制给路径）。 */
-export type AttachmentKind = "image" | "text" | "office" | "pdf" | "binary";
+type AttachmentKind = "image" | "text" | "office" | "pdf" | "binary";
 
 function attachmentKind(file: File): AttachmentKind | null {
   const ext = fileExt(file.name);

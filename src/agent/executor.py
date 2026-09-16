@@ -625,6 +625,7 @@ class ToolExecutor:
             return execution
 
         started_at = time.perf_counter()
+        result: ToolResult | None = None
         tool = coara._tool_manager.tools.get(tool_call.name)
         if tool is None:
             renamed_to = _RENAMED_TOOLS.get(tool_call.name)
@@ -753,7 +754,7 @@ class ToolExecutor:
             # Approval = tool-declared (requires_approval on the tool class)
             # OR LLM-requested (require_approval in call arguments).
             # Config call_policy.prompt can also force-prompt.
-            decision = await self._policy.resolve(
+            call_decision = await self._policy.resolve(
                 coara,
                 tool.name,
                 tool,
@@ -761,8 +762,8 @@ class ToolExecutor:
                 invocation,
                 signal,
             )
-            if not decision.allowed:
-                result = ToolResult.error(decision.reason)
+            if not call_decision.allowed:
+                result = ToolResult.error(call_decision.reason)
 
             # Plan mode restriction: write/edit can only target the plan file
             if result is None and coara.is_plan_mode and tool.name in ("write", "edit"):
@@ -823,7 +824,8 @@ class ToolExecutor:
                         # 任务——有子进程的工具（shell）据此走**强杀**而
                         # 非优雅等待，超时不留额外执行时间。等清理收尾后返回明确
                         # 超时错误，模型据此决策重试或放弃
-                        execute_task._coara_timed_out = True
+                        # 供工具侧（shell）getattr 读取的超时标记：强杀而非优雅等待
+                        execute_task._coara_timed_out = True  # type: ignore[attr-defined]
                         execute_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError, TimeoutError, Exception):
                             await asyncio.wait_for(execute_task, timeout=5.0)
@@ -982,7 +984,7 @@ class ToolExecutor:
             and not result.is_error
             and not getattr(result, "is_cancelled", False)
         ):
-            tool_cache.set(tool.name, effective_call.arguments, result, scope=cache_scope)
+            tool_cache.set(tool.name, effective_call.arguments, result, scope=cache_scope or "")
 
         coara.loop_detector.record(
             effective_call,

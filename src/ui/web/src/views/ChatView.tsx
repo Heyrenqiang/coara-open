@@ -30,6 +30,12 @@ const STATUS_MAX = 640;
  *  落带延迟）也能被同一段帧覆盖校正——同 seq 的行在 store 里原地替换，不产生重影。 */
 const HYDRATE_OVERLAP = 50;
 
+/** 单次 hydrate 拉取的帧数：必须 ≤ 服务端上限（src/ui/handlers/session.py 的
+ *  _MAX_HISTORY_LIMIT = 500），且不小于其默认段（_DEFAULT_HISTORY_LIMIT = 100）。
+ *  改这里要一并看那两个常量——两处是「端侧单次取量」与「服务端契约上限」的关系，
+ *  不是同一个数；越上限会被服务端截断。 */
+const HYDRATE_FETCH_LIMIT = 200;
+
 const { Text } = Typography;
 
 export function ChatView() {
@@ -113,7 +119,7 @@ export function ChatView() {
     // streaming/optimistic 等会先上屏（A）再被 hydrate 覆盖（B），产生闪变。
     useStore.getState().sanitizeResidentMessages();
 
-    const runHydrate = (targetDir: string, forceFull = false) => {
+    const runHydrate = (targetDir: string, forceFull = false, sameBoundaryTopUp = false) => {
       const generation = bumpHydrateGeneration();
           // 增量补拉的起点＝**屏幕上已覆盖到的最大 view_seq** 减一段重叠窗口
           //（不是本地游标：游标只表达「最近一次快照覆盖到哪」，内容到哪以屏上为准）。
@@ -122,14 +128,20 @@ export function ChatView() {
           // 见下方 needsHydrate 分支）：只取游标之后的帧追加，已渲染的部分一个字
           // 不动——等价于「补后缀」，不产生 A→B 重建。
       const before = useStore.getState();
+      // 增量补拉只在两种情况下有意义：权威快照已落定（viewReady），或 /new 的
+      // 同边界补拉（sameBoundaryTopUp——同一条线上的分段，已显示行不动只补后缀）。
+      // 刷新首屏 store 里可能已有先于快照到达的 live 帧（工具行/正文块），它们
+      // 不是权威内容——此时按 maxSeq 算增量起点会把首屏退化成尾部补拉，200 条
+      // 历史根本拉不下来，后续合并再按水位地板丢旧行，就是「刷新后消息乱序/
+      // 用户气泡错位」的根因。
       const maxSeq = before.messages.reduce((acc, m) => Math.max(acc, m.seq ?? 0), 0);
       const after =
-        !forceFull && before.messages.length > 0 && maxSeq > 0
+        !forceFull && (before.viewReady || sameBoundaryTopUp) && before.messages.length > 0 && maxSeq > 0
           ? Math.max(0, maxSeq - HYDRATE_OVERLAP)
           : undefined;
       // 带 workspace_dir：把「读的是哪条线」显式钉死（服务端在该模式下只读这条线，
       // 不切当前会话）——两次往返之间即使视图被切走，也不会把内容换到别的线上。
-      fetchSessionMessages(200, after, { workspaceDir: targetDir })
+      fetchSessionMessages(HYDRATE_FETCH_LIMIT, after, { workspaceDir: targetDir })
             .then((data) => {
               const st = useStore.getState();
               if (st.workspaceDir !== targetDir) return;
@@ -149,6 +161,16 @@ export function ChatView() {
           // 归属校验：两次往返之间服务端视图可能已经切走，别把别的空间的回合态装
           // 到本端——这和消息的边界守卫是同一把尺的两面。
           const runtimeInBoundary = Boolean(rt) && (!rtDir || rtDir === targetDir);
+          // 折叠区封顶裁剪的显式标记：更早的子智能体过程被服务端按封顶裁掉
+          // （不随会话长度无界回传）。UI 提示（折叠区「更早过程已省略 N 项」）待做，
+          // 先留 debug 痕迹，静默裁剪不再是隐形的。
+          const truncated = data.subagent_truncated;
+          if (truncated) {
+            const dropped = (truncated.results ?? 0) + (truncated.diffs ?? 0) + (truncated.briefs ?? 0);
+            if (dropped > 0) {
+              console.debug(`子智能体折叠区已封顶：更早过程已省略 ${dropped} 项`, truncated);
+            }
+          }
           // runtime / 折叠区（最终答复 + 子智能体工具行与 diff）/ 线身份全部折进
           // loadHistory 的同一次提交：分两次 set 会先渲染消息、再补 spinner 与展开区，
           // 那就是「先一半后补齐」。原子提交后一屏只画一次。
@@ -194,7 +216,7 @@ export function ChatView() {
     // 补一次，别让历史与折叠区数据整段不在屏上。
     if (workspaceDir && needsHydrate) {
       consumeNeedsHydrate();
-      runHydrate(workspaceDir);
+      runHydrate(workspaceDir, false, true);
     }
     // 边界未定时（刷新后 state 帧还没到）不拉历史：没定界就取快照，等于拿一个
     // 「还不知道是哪条线」的响应去铺屏，正是「错空间先上屏」。等 state 帧把

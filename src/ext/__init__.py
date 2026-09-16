@@ -31,6 +31,8 @@ def register_optional_commands() -> None:
 
 def telemetry_service(root: Any, coara_home: Path | None) -> Any | None:
     """构造遥测服务；未安装实现返回 None。"""
+    if coara_home is None:
+        return None
     try:
         from src.telemetry import TelemetryService
     except Exception:
@@ -41,7 +43,7 @@ def telemetry_service(root: Any, coara_home: Path | None) -> Any | None:
         return None
 
 
-def account_activity_pinger() -> Callable[[Path], Awaitable[None]] | None:
+def account_activity_pinger() -> Callable[[Path], Awaitable[Any]] | None:
     """账户活跃保活函数；未安装账户实现返回 None。"""
     try:
         from src.account.gate import maybe_refresh_activity

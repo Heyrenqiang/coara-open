@@ -10,6 +10,7 @@ from typing import Any
 from aiohttp import web
 
 from src.core.logger import logger
+from src.core.workspace_layout import UPLOAD_DIR_NAME
 from src.ui.handler_contract import HandlerMixinBase
 from src.ui.web_upload_limits import (
     BINARY_SUFFIXES as _BINARY_SUFFIXES,
@@ -51,8 +52,9 @@ class FilesHandlers(HandlerMixinBase):
                 self.root, "_foreground_session_id", None
             )
             ws_id = str(_cur) if _cur else None
+        raw_before = request.query.get("before")
         try:
-            before = float(request.query.get("before")) if request.query.get("before") else None
+            before = float(raw_before) if raw_before else None
         except ValueError:
             before = None
         try:
@@ -67,8 +69,8 @@ class FilesHandlers(HandlerMixinBase):
         return web.json_response({"files": entries, "has_more": has_more})
 
     def _resolve_upload_path(self, ref: str) -> Path | None:
-        """Resolve a sanitized upload ref under ``.coara/uploads``; None if invalid."""
-        uploads_dir = self.workspace_dir / ".coara" / "uploads"
+        """Resolve a sanitized upload ref under ``<workspace>/uploads``; None if invalid."""
+        uploads_dir = self.workspace_dir / UPLOAD_DIR_NAME
         uploads_root = uploads_dir.resolve()
         safe_ref = Path(ref).name
         path = (uploads_dir / safe_ref).resolve()
@@ -83,13 +85,14 @@ class FilesHandlers(HandlerMixinBase):
     async def _handle_upload(self, request: web.Request) -> web.Response:
         """Handle multipart file upload (images for vision, attachments)."""
         self._check_token(request)
+        home = self.coara_home  # 只为记录最近文件；为空就跳过索引，不影响上传本身
         reader = await request.multipart()
-        uploads_dir = self.workspace_dir / ".coara" / "uploads"
+        uploads_dir = self.workspace_dir / UPLOAD_DIR_NAME
         uploads_dir.mkdir(parents=True, exist_ok=True)
 
         uploaded = []
         async for part in reader:
-            if not hasattr(part, "name") or part.name != "file":
+            if getattr(part, "name", None) != "file":
                 continue
             filename = getattr(part, "filename", None) or f"upload_{uuid.uuid4().hex[:8]}"
             # Sanitize filename (Win32 reserved names / trailing dots / spaces)
@@ -106,7 +109,7 @@ class FilesHandlers(HandlerMixinBase):
                 received = 0
                 too_large = False
                 while True:
-                    chunk = await part.read_chunk(65536)
+                    chunk = await part.read_chunk(65536)  # type: ignore[union-attr]  # aiohttp 存根的迭代元素是并集
                     if not chunk:
                         break
                     received += len(chunk)
@@ -128,19 +131,20 @@ class FilesHandlers(HandlerMixinBase):
             try:
                 from src.records.recent_files import record_recent_file
 
-                _ws = getattr(self.root, "web_view_workspace_id", None) or getattr(
-                    self.root, "_foreground_session_id", None
-                )
-                record_recent_file(
-                    self.coara_home,
-                    origin="inbound",
-                    end="web",
-                    name=dest.name,
-                    path=str(dest.resolve()),
-                    mime=mimetypes.guess_type(dest.name)[0] or "",
-                    size=dest.stat().st_size,
-                    workspace_id=str(_ws) if _ws else None,
-                )
+                if home is not None:
+                    _ws = getattr(self.root, "web_view_workspace_id", None) or getattr(
+                        self.root, "_foreground_session_id", None
+                    )
+                    record_recent_file(
+                        home,
+                        origin="inbound",
+                        end="web",
+                        name=dest.name,
+                        path=str(dest.resolve()),
+                        mime=mimetypes.guess_type(dest.name)[0] or "",
+                        size=dest.stat().st_size,
+                        workspace_id=str(_ws) if _ws else None,
+                    )
             except Exception as exc:  # noqa: BLE001 — 索引故障不影响上传
                 logger.warning(f"recent_files record failed (web upload): {exc}")
         return web.json_response({"files": uploaded})
@@ -278,7 +282,7 @@ class FilesHandlers(HandlerMixinBase):
                     image_bytes_blocks_with_notice,
                 )
 
-                def _render(raw: bytes, _mime: str | None = mime, _path: Path = path) -> list[dict[str, Any]]:
+                def _render(raw: bytes, _mime: str | None = mime, _path: Path | None = path) -> list[dict[str, Any]]:
                     try:
                         return image_bytes_blocks_with_notice(raw, "high")
                     except Exception:
@@ -286,11 +290,11 @@ class FilesHandlers(HandlerMixinBase):
                         # 大图放弃并提示（原样回退会把巨串永久驻留上下文，token 爆炸）。
                         if len(raw) > self._FALLBACK_RAW_IMAGE_MAX_BYTES:
                             logger.warning(
-                                f"Image {_path.name} unreadable and too large "
+                                f"Image {_path.name if _path else ''} unreadable and too large "
                                 f"({len(raw)} bytes), dropped instead of raw base64 fallback"
                             )
                             return []
-                        _mt = _mime if (_mime or "").startswith("image/") else "image/png"
+                        _mt = _mime if (_mime and _mime.startswith("image/")) else "image/png"
                         return [
                             image_block_from_base64(
                                 base64.b64encode(raw).decode("ascii"), _mt

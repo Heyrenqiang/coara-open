@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from src.core.read_format import (
     count_text_lines,
@@ -259,6 +259,7 @@ class ReadToolInvocation(WorkspaceBoundFileToolInvocation):
         path, path_error = self._resolve_file_path_or_error(self.path, "Read")
         if path_error:
             return ToolResult.error(path_error)
+        path = cast(Path, path)
 
         from src.utils.image_processor import is_image_file
 

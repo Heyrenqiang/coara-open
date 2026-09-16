@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import {
   MessageOutlined,
   BookOutlined,
+  ApartmentOutlined,
   AuditOutlined,
   BarChartOutlined,
   SettingOutlined,
@@ -19,7 +20,7 @@ import {
  * 用户空间是**无限**的：内核在 `WorkspaceInfo.home_view` 里指回这里某个 `path`；
  * 指不回来的（无 home_view 或未注册）一律按对话空间处理。
  */
-export interface SystemView {
+interface SystemView {
   /** 路由前缀，同时是 `WorkspaceInfo.home_view` 的取值 */
   path: string;
   /** 未识别空间名的兜底展示名 */
@@ -29,10 +30,11 @@ export interface SystemView {
   load: (() => Promise<unknown>) | null;
 }
 
-export const SYSTEM_VIEWS: readonly SystemView[] = [
+const SYSTEM_VIEWS: readonly SystemView[] = [
   { path: "/chat", label: "对话", Icon: MessageOutlined, load: null },
   { path: "/review", label: "消息", Icon: AuditOutlined, load: () => import("../views/ReviewView") },
   { path: "/records", label: "记录", Icon: BookOutlined, load: () => import("../views/RecordsView") },
+  { path: "/workflow", label: "工作流", Icon: ApartmentOutlined, load: () => import("../views/WorkflowView") },
   { path: "/usage", label: "用量", Icon: BarChartOutlined, load: () => import("../views/UsageView") },
   { path: "/config", label: "配置", Icon: SettingOutlined, load: () => import("../views/ConfigView") },
 ];

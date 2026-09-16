@@ -108,7 +108,8 @@ def resolve_workspace_path(
                 return None, f"{action} 被拒绝: {denied}"
             return resolved.path, None
         except Exception:
-            pass  # fall through — allow absolute paths outside mounts for read-only tools
+            logger.debug(f"vfs resolve 失败（只读工具放行到绝对路径处理）: {raw_path}")
+            # fall through — allow absolute paths outside mounts for read-only tools
 
     workspace_root = workspace_root.resolve()
     candidate = str(raw_path or "").strip()

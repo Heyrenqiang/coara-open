@@ -7,7 +7,7 @@
  * BroadcastChannel 不支持时静默跳过（单例保护失效但功能不受影响）。
  */
 
-export interface TabPing {
+interface TabPing {
   type: "hello" | "ack" | "focus";
   ts?: number;
   id?: string;

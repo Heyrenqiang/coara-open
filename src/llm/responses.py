@@ -175,9 +175,7 @@ class ResponsesProvider(HTTPProviderMixin, LLMProvider):
 
         # 发送前闭合孤儿 tool_call 配对（与 OpenAI/Anthropic 驱动同一共享逻辑）
         messages = close_orphan_tool_calls(messages)
-        vision = model_supports_vision(
-            model, provider_name=self.name, vision_model_ids=getattr(self, "_vision_model_ids", None)
-        )
+        vision = model_supports_vision(model, provider_name=self.name, vision_model_ids=self._vision_model_ids)
         use_file_api = vision and is_deepseek_openai_endpoint(self.base_url)
         items: list[dict[str, Any]] = []
         for msg in messages:
@@ -276,7 +274,7 @@ class ResponsesProvider(HTTPProviderMixin, LLMProvider):
             "input": await self._convert_input(messages, model=model),
             "temperature": temperature,
             "max_output_tokens": clamp_max_tokens_for_model(
-                model, max_tokens, base_url=self.base_url, provider=self.name
+                model, max_tokens, base_url=self.base_url or "", provider=self.name
             ),
             "stream": stream,
         }
@@ -371,7 +369,7 @@ class ResponsesProvider(HTTPProviderMixin, LLMProvider):
 
         return await retry_complete(_call, provider_name=self.name, max_retries=3)
 
-    async def stream_complete(
+    async def stream_complete(  # type: ignore[override,misc]  # 基类把 stream_complete 标成 async，实际是 async generator
         self,
         messages: list[Message],
         model: str | None = None,
@@ -446,7 +444,7 @@ class ResponsesProvider(HTTPProviderMixin, LLMProvider):
             try:
                 await stream.close()
             except Exception as close_exc:
-                logger.debug(f"Responses stream close error: {close_exc}")
+                logger.debug(f"Responses stream close error: {close_exc}", exc_info=True)
 
     def get_context_window(self, model: str | None = None) -> int:
         model_key = (model or self.default_model or "").lower()

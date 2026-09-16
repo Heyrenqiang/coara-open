@@ -128,7 +128,8 @@ async def initialize_root_services(root: RootCoara) -> None:
             root._bg_tasks.add(_ping_task)
             _ping_task.add_done_callback(root._bg_tasks.discard)
     except Exception:
-        pass
+        # 账户装配静默失败是既定口径（遥测/账户依赖外部站点，不可用即跳过）
+        logger.debug("account activity ping wiring skipped", exc_info=True)
 
     try:
         from src.core.coara_home import resolve_coara_home as _resolve_home_telemetry
@@ -187,14 +188,15 @@ async def initialize_root_services(root: RootCoara) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"usage workspace registration failed: {exc}")
 
-    # 系统空间统一登记（侧边栏空间化）：配置/消息/记录登记为 internal（目录指向
+    # 系统空间统一登记（侧边栏空间化）：配置/消息登记为 internal（目录指向
     # coara_home/workspaces/.internal/<name> 占位）。
-    # 注：工作流不是空间——WDL 是一种文件类型，引擎+画布页是独立的 WDL 软件工作台，
-    # 不占空间席位，这里不再登记/补身份。
+    # 注：工作流以「示例工作空间」身份登记——与其它系统空间同构（persona +
+    # 画布页面），是出厂自带的参考实现；执行层不在内核，由独立 wdl 软件承载。
     try:
-        from src.workspace.system_spaces import ensure_system_workspace_entries
+        from src.workspace.system_spaces import ensure_creator_workflow_entry, ensure_system_workspace_entries
 
         ensure_system_workspace_entries(root)
+        ensure_creator_workflow_entry(root)
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"system workspace registration failed: {exc}")
 
@@ -223,7 +225,8 @@ async def initialize_root_services(root: RootCoara) -> None:
             except Exception:
                 workspace = ""
             if not workspace:
-                entries = list(root.workspace_manager.registry.document.workspaces.values())
+                wm = root.workspace_manager
+                entries = list(wm.registry.document.workspaces.values()) if wm is not None else []
                 workspace = str(entries[0].name) if entries else ""
             if not workspace:
                 logger.warning(f"Reminder '{record.id}' fired but no workspace to receive it")
@@ -327,8 +330,10 @@ async def initialize_root_services(root: RootCoara) -> None:
         _add(root.workspace_dir)
         _add(Path.cwd())
         try:
-            for entry in root.workspace_manager.registry.list_active():
-                _add(entry.resolved_path())
+            wm = root.workspace_manager
+            if wm is not None:
+                for entry in wm.registry.list_active():
+                    _add(entry.resolved_path())
         except Exception as exc:
             logger.warning(f"Workspace registry scan for stale recovery failed: {exc}")
         return dirs
@@ -336,11 +341,11 @@ async def initialize_root_services(root: RootCoara) -> None:
     try:
         from src.coara.subagent_store import SubagentStore
 
-        coara_home = getattr(root.workspace_manager, "coara_home", None)
+        recovery_home = getattr(root.workspace_manager, "coara_home", None)
         recovered_agents = 0
         for ws_dir in _registered_workspace_dirs():
             try:
-                recovered_agents += SubagentStore(ws_dir, coara_home=coara_home).recover_stale_running()
+                recovered_agents += SubagentStore(ws_dir, coara_home=recovery_home).recover_stale_running()
             except Exception as exc:
                 logger.warning(f"Failed to recover subagent records for {ws_dir}: {exc}")
         if recovered_agents:
@@ -368,10 +373,10 @@ async def initialize_root_services(root: RootCoara) -> None:
     try:
         from src.coara.subagent_task_ledger import report_interrupted_tasks
 
-        coara_home = getattr(root.workspace_manager, "coara_home", None)
+        recovery_home = getattr(root.workspace_manager, "coara_home", None)
         for ws_dir in _registered_workspace_dirs():
             try:
-                await asyncio.to_thread(report_interrupted_tasks, root, ws_dir, coara_home)
+                await asyncio.to_thread(report_interrupted_tasks, root, ws_dir, recovery_home)
             except Exception as exc:
                 logger.warning(f"Failed to report interrupted subagent tasks for {ws_dir}: {exc}")
     except Exception as exc:

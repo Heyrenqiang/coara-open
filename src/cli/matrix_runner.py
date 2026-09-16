@@ -350,6 +350,17 @@ async def _run_matrix_client_inner(
             ensure_joined=lambda: _join_room(room_id, label="reply"),
         )
 
+    # 宿主回调契约要求 Awaitable[None]；本地实现带 bool 返回（投递成败），
+    # 这里只做类型适配，调用方本就不使用返回值。
+    async def _send_text_void(room_id: str, body: str) -> None:
+        await _send_text(room_id, body)
+
+    async def _handle_response_void(room_id: str, response: str) -> None:
+        await _handle_matrix_response(room_id, response)
+
+    async def _send_plain_text(room_id: str, body: str) -> None:
+        await matrix_room_send_text(client, room_id, body)
+
     async def _maybe_send_turn_quiet() -> None:
         """后台级联工作收尾后：若已彻底安静（无后台工作、无活跃回合），
         给手机补发 [COARA_TURN] quiet 信封，收掉单点 typing 状态"""
@@ -389,9 +400,9 @@ async def _run_matrix_client_inner(
         file_bridge=file_bridge,
         coara_home=coara_home,
         cli_owner=True,
-        send_chunk=_handle_matrix_response,
-        send_text=_send_text,
-        send_room_text=_send_text,
+        send_chunk=_handle_response_void,
+        send_text=_send_text_void,
+        send_room_text=_send_text_void,
         report_text_error=_report_text_error,
         report_media_error=_report_media_error,
         echo_tool_summary_local=_echo_tool_summary_local,
@@ -481,13 +492,17 @@ async def _run_matrix_client_inner(
         from src.matrix_client.chat_commands import is_ws_command, try_handle_matrix_chat_command
 
         if is_ws_command(body):
-            matrix_dispatcher.schedule_unlocked(
-                try_handle_matrix_chat_command(
+
+            async def _run_ws_command() -> None:
+                await try_handle_matrix_chat_command(
                     root,
                     body,
-                    send_text=lambda text: matrix_room_send_text(client, room.room_id, text),
+                    send_text=lambda text: _send_plain_text(room.room_id, text),
                     room_id=room.room_id,
-                ),
+                )
+
+            matrix_dispatcher.schedule_unlocked(
+                _run_ws_command(),
                 label="ws-command",
             )
             return
@@ -501,8 +516,7 @@ async def _run_matrix_client_inner(
             _process_text_message(room, event, bind_coara=bind_coara, bind_ws_id=bind_ws_id),
             label="matrix-text",
             session_key=fg_key,
-            on_busy=lambda: matrix_room_send_text(
-                client,
+            on_busy=lambda: _send_plain_text(
                 room.room_id,
                 BUSY_DROP_NOTICE,
             ),
@@ -547,8 +561,7 @@ async def _run_matrix_client_inner(
             _process_media_message(room, event, bind_coara=bind_coara, bind_ws_id=bind_ws_id),
             label="matrix-file",
             session_key=fg_key,
-            on_busy=lambda: matrix_room_send_text(
-                client,
+            on_busy=lambda: _send_plain_text(
                 room.room_id,
                 BUSY_DROP_NOTICE,
             ),
@@ -581,17 +594,17 @@ async def _run_matrix_client_inner(
                 _deliver_media_batch(room_id, blocks, caption, bind_coara=bind_coara, bind_ws_id=bind_ws_id),
                 label="matrix-image-batch",
                 session_key=fg_key,
-                on_busy=lambda: matrix_room_send_text(client, room_id, BUSY_DROP_NOTICE),
+                on_busy=lambda: _send_plain_text(room_id, BUSY_DROP_NOTICE),
             )
 
         handler = build_media_batch_handler(
             client,
             root,
             trust_level=trust_level,
-            send_room_text=lambda rid, body: matrix_room_send_text(client, rid, body),
+            send_room_text=_send_plain_text,
             deliver_batch=_deliver_batch,
         )
-        task = asyncio.create_task(handler(room, event))
+        task: asyncio.Task[None] = asyncio.ensure_future(handler(room, event))
         media_batch_tasks.add(task)
         task.add_done_callback(media_batch_tasks.discard)
 
@@ -610,7 +623,9 @@ async def _run_matrix_client_inner(
         # 正文 chunk 失败计数：批次正文走 stats.send，结束信封带 chunk_lost 标记
         raw_send_chunk = ingress_host.send_chunk
         turn_stats = turn_send_stats(raw_send_chunk)
-        turn_send = turn_stats.send if turn_stats is not None else raw_send_chunk
+        turn_send = turn_stats.send if turn_stats is not None else None
+        if turn_send is None:
+            turn_send = raw_send_chunk
         async with matrix_turn_scope(
             room_id,
             send_chunk=raw_send_chunk,

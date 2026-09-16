@@ -156,6 +156,9 @@ def _build_workspace_list_result(root: RootCoara) -> CommandResult:
                 # 「用户空间 / 系统空间」两组（与 web navRegistry 同一判据）。
                 "kind": entry.kind.value,
                 "home_view": entry.home_view or "",
+                # 视图能力随列表下发：web_only 的空间（工作流画布等）matrix 端
+                # 渲染不了，下发侧据此过滤（end_allowed 同一把尺，listing 对齐切换）。
+                "view": entry.view.value,
             }
         )
     active_name = active_name or ""

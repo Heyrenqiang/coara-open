@@ -31,7 +31,7 @@ import asyncio
 import contextlib
 import json
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from aiohttp import WSMsgType, web
 from aiohttp.client_exceptions import ClientConnectionResetError
@@ -213,6 +213,7 @@ class AttachWsHandlers(HandlerMixinBase):
                 t.cancel()
             end_registry = getattr(self.root, "end_registry", None)
             if end_registry is not None:
+                # 有意 getattr 防御：跟话表惰性创建（512 行起），从未建过跟话的连接没有该属性
                 for sess_id, sndr in getattr(self, "_followup_senders", {}).pop(current_id, []):
                     end_registry.unregister("cli-attached", sndr, sess_id)
             # 断连挂起不取消：清本端登记，挂起的审批帧按 conn_id 留着——resume 二次
@@ -267,19 +268,19 @@ class AttachWsHandlers(HandlerMixinBase):
 
             frame["service_desks"] = list_service_desks(self.root)
         except Exception:
-            pass
+            logger.debug("attach snapshot: service_desks listing failed", exc_info=True)
         try:
             is_plan = coara.is_plan_mode() if callable(getattr(coara, "is_plan_mode", None)) else False
             frame["is_plan_mode"] = bool(is_plan)
         except Exception:
-            pass
+            logger.debug("attach snapshot: is_plan_mode probe failed", exc_info=True)
         try:
             tm = getattr(coara, "_tool_manager", None)
             if tm is not None:
                 visible = tm.get_visible_tool_names(getattr(coara.identity, "is_owner_context", False))
                 frame["tools_count"] = len(visible)
         except Exception:
-            pass
+            logger.debug("attach snapshot: tools_count probe failed", exc_info=True)
         # 工作空间列表（名↔路径映射）+ active_name。先重读注册表文件——
         # 外挂进程 ensure_workspace 刚登记的空间可能尚未进主进程内存版。
         wm = getattr(self.root, "workspace_manager", None)
@@ -298,19 +299,25 @@ class AttachWsHandlers(HandlerMixinBase):
                             }
                         )
                     except Exception:
+                        # 单条条目损坏不应拖垮整表，但损坏本身是数据信号
+                        logger.warning(
+                            "attach snapshot: workspace entry serialization failed, entry skipped", exc_info=True
+                        )
                         continue
                 frame["workspaces"] = workspaces
                 # 本连接 pin 的空间名（勿用全局 cli view，多 attach 时会错）
                 frame["active_name"] = str(getattr(entry, "name", "") or "")
             except Exception:
-                pass
+                logger.warning(
+                    "attach snapshot: workspace list rebuild failed, workspaces frame left empty", exc_info=True
+                )
         # usage 快照 + context_window：与 web 状态栏同一口径（_foreground_context_usage）。
         try:
             usage_ctx = self._attach_context_usage(coara)
             frame["usage"] = usage_ctx.get("usage", {})
             frame["context_window"] = int(usage_ctx.get("context_window") or 0)
         except Exception:
-            pass
+            logger.debug("attach snapshot: usage snapshot failed", exc_info=True)
         return frame
 
     @staticmethod
@@ -389,7 +396,11 @@ class AttachWsHandlers(HandlerMixinBase):
             self.root.record_user_activity(workspace_id=workspace_id)
             task = asyncio.create_task(self._handle_attach_chat(data, ws, conn_id, workspace_id))
             self._chat_tasks.setdefault(conn_id, set()).add(task)
-            task.add_done_callback(lambda t, cid=conn_id: self._chat_tasks.get(cid, set()).discard(t))
+
+            def _discard_chat_task(t: Any, cid: str = conn_id) -> None:
+                self._chat_tasks.get(cid, set()).discard(t)
+
+            task.add_done_callback(_discard_chat_task)
         elif msg_type == "command":
             # 斜杠命令：全量透传统一命令层（target_coara=pin 空间），不再限白名单。
             self._spawn_bg_task(self._handle_attach_command(data, ws, conn_id))
@@ -451,6 +462,7 @@ class AttachWsHandlers(HandlerMixinBase):
                 _sess_id = str(getattr(session.coara, "session_id", "") or "")
                 _turn_id = str(getattr(getattr(session.coara, "_active_turn", None), "turn_id", "") or "")
                 _target_stream: TurnStream | None = None
+                # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，_turns 可能不存在
                 for _s in getattr(self, "_turns", {}).values():
                     if getattr(_s, "done", True):
                         continue
@@ -475,7 +487,7 @@ class AttachWsHandlers(HandlerMixinBase):
                         _follow_tid,
                         "cli-attached",
                         "root",
-                        self,
+                        cast(Any, self),
                         channel_id=conn_id,
                         session_id=_sess_id,
                     )
@@ -488,18 +500,19 @@ class AttachWsHandlers(HandlerMixinBase):
                 # 导致回合 finally 注销对不上、或后续回合被旧闭包霸占）。
                 existing_ch = end_registry.sender_for_channel("cli-attached", _sess_id, conn_id)
                 if created or existing_ch is None:
+                    stream_for_sender: TurnStream = _target_stream
 
-                    def _attach_stream_sender(frame: dict, _stream: TurnStream = _target_stream) -> None:
+                    def _attach_stream_sender(frame: dict) -> None:
                         mapped = _attach_output_frame(frame)
                         if mapped is None:
                             return
                         kind, payload = mapped
-                        _stream.emit(kind, **payload)
+                        stream_for_sender.emit(kind, **payload)
 
                     _attach_stream_sender._end_channel_id = conn_id  # type: ignore[attr-defined]
                     end_registry.register("cli-attached", _attach_stream_sender, _sess_id)
                     if not hasattr(self, "_followup_senders"):
-                        self._followup_senders = {}
+                        self._followup_senders: dict[str, list[tuple[str, Any]]] = {}
                     self._followup_senders.setdefault(conn_id, []).append((_sess_id, _attach_stream_sender))
             await ws.send_str(json.dumps({"type": "continuation_accepted"}, ensure_ascii=False))
         elif msg_type == "drain_continuation":
@@ -600,9 +613,11 @@ class AttachWsHandlers(HandlerMixinBase):
         只在真的建过跟话流时才装（订阅随 WebServer 生命周期，经 ``_subscriptions``
         在 stop 时统一注销），重复调用幂等；event_bus 缺席（替身/早期状态）时静默。
         """
+        # 有意 getattr 防御：句柄惰性创建（首装于 629 行）；__new__ 测试夹具也无 __init__
         existing = getattr(self, "_attach_turn_end_sub", None)
         if existing is not None:
             # stop() 已把订阅从 _subscriptions 里清掉（服务重启）：旧句柄失效，重装。
+            # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，_subscriptions 可能不存在
             tracked = getattr(self, "_subscriptions", None)
             if not isinstance(tracked, list) or existing in tracked:
                 return
@@ -616,6 +631,7 @@ class AttachWsHandlers(HandlerMixinBase):
             logger.debug("attach turn_end subscribe failed", exc_info=True)
             return
         self._attach_turn_end_sub = sub
+        # 有意 getattr 防御：__new__ 测试夹具不跑 __init__，_subscriptions 可能不存在
         subscriptions = getattr(self, "_subscriptions", None)
         if isinstance(subscriptions, list):
             subscriptions.append(sub)
@@ -737,7 +753,7 @@ class AttachWsHandlers(HandlerMixinBase):
 
         turn_id = uuid.uuid4().hex
         source = "cli-attached"
-        stream = TurnStream(turn_id, source, "root", self, channel_id=conn_id)
+        stream = TurnStream(turn_id, source, "root", cast(Any, self), channel_id=conn_id)
         stream.desk = desk_label
         stream.workspace_id = workspace_id
         stream.session_id = str(getattr(turn_coara, "session_id", "") or "")

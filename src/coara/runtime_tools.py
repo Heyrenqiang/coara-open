@@ -81,7 +81,7 @@ def register_runtime_tools(coara: Any) -> None:
             + "（其余 provider 需在 system/.env 配置对应 API key）。"
         )
     except Exception:
-        pass
+        logger.debug("probe available search providers failed; tool description omits provider list", exc_info=True)
     coara.register_tool(search_tool, replace=True)
     # media：无 AGNES_API_KEY 则不注册（生图/视频都走它）。
     try:

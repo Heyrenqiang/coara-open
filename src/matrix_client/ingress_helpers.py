@@ -148,12 +148,12 @@ def try_defer_to_continuation_input(
                         from src.matrix_client.diff_bridge import build_matrix_diff_message
 
                         blocks = deserialize_display_blocks(frame.get("display_blocks"))
-                        message = build_matrix_diff_message(
+                        diff_message = build_matrix_diff_message(
                             blocks,
                             tool_call_id=str(frame.get("tool_call_id") or ""),
                             parent_tool_call_id=str(frame.get("parent_tool_call_id") or ""),
                         )
-                        if message:
+                        if diff_message:
                             await send_text(room_id, message)
                     except Exception:
                         logger.debug("matrix followup diff send failed", exc_info=True)
@@ -237,8 +237,9 @@ def guest_room_allowed(room_id: str) -> bool:
         raw = getattr(matrix_cfg, "guest_rooms", None)
         if raw is not None:
             rooms = [str(r).strip() for r in raw if str(r).strip()]
-    except Exception:
-        pass
+    except Exception as exc:
+        # 每条入站消息都会触发，高频路径只留 debug，避免刷屏
+        logger.debug(f"读取 matrix.guest_rooms 配置失败，按默认全放行：{exc}")
     if "*" in rooms:
         return True
     return room_id in rooms
@@ -258,7 +259,7 @@ def bind_matrix_active_room(
         from src.coara.workspace_runtime import update_active_runtime_matrix
 
         update_active_runtime_matrix(
-            coara_home,
+            Path(coara_home),
             matrix_enabled=True,
             matrix_room_id=room_id,
         )

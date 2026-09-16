@@ -421,7 +421,7 @@ class PtcTool(WorkspaceBoundTool):
     @property
     def description(self) -> str:  # type: ignore[override]
         """LLM 可见描述：按当前可见工具现算，挂起工具揭示后清单自动更新"""
-        coara = getattr(self, "_parent_coara", None)
+        coara = self._parent_coara
         if coara is None:
             return _PTC_FALLBACK_DESCRIPTION
         try:

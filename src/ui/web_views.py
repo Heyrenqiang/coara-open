@@ -61,7 +61,8 @@ from src.core.message_tags import (
     TASK_INSTRUCTION_OPEN,
     strip_llm_only,
 )
-from src.ui.trace_store import _AsyncFileWriter
+from src.core.workspace_layout import UPLOAD_DIR_NAME
+from src.ui.trace_store import _AsyncFileWriter, _FileWriteOp
 
 _TAIL_READ_BYTES = 256 * 1024
 
@@ -268,7 +269,7 @@ class WebViewStore:
                     # 唯一读取键）。广播帧走顶层字段（display_blocks/diff_lines），
                     # 落盘与广播分离——这里负责映射。
                     diff_lines = frame.get("diff_lines")
-                    payload = {"diff": diff_lines} if isinstance(diff_lines, dict) else {}
+                    payload: dict[str, Any] = {"diff": diff_lines} if isinstance(diff_lines, dict) else {}
                     # 产生它的那次工具调用 id（与同工具 tool 行同值）：端上至此
                     # 不靠相邻关系猜位置。主会话 diff 也一并落（同一帧字段）。
                     tool_call_id = str(frame.get("tool_call_id") or "")
@@ -312,13 +313,24 @@ class WebViewStore:
         序号时，sidecar 接住继续递增。真要回到 1 只能走 ``reset_line``（世代 +1 →
         epoch 变化，端上全量重取）。
 
-        分配在跨进程文件锁内完成，并强制落盘 sidecar 高水位——交棒窗口旧实例与
-        新实例不得各自从同一水位各取 +1 撞号。
+        分配在跨进程文件锁内完成，并同步落盘 sidecar 高水位——交棒窗口旧实例
+        与新实例不得各自从同一水位各取 +1 撞号（跨进程一致性以 sidecar 为准）。
         """
         with self._seq_lock, _view_seq_file_lock(resolve_view_seq_lock_path(path)):
-            # 他进程可能刚推进过高水位：丢掉内存镜像里的 latest_seq，从盘重读。
-            self._line_meta.pop(path, None)
+            # 他进程可能刚推进过高水位：丢掉内存镜像里的 latest_seq，从盘重读
+            # （世代 gen 除外——见下方 merge 说明）。
+            stale = self._line_meta.pop(path, None)
             meta = self._load_line_meta(path)
+            if stale is not None:
+                if stale.get("reset_baseline"):
+                    # reset_line 的 latest_seq=0 是重估基准：不接回（接回会挡住
+                    # jsonl 旧帧水位的重估）；gen 已随 reset_line 同步落盘。
+                    pass
+                elif bool(stale["write_pending"]):
+                    # 已投递 worker 尚未执行：该写晚于本次盘读快照，执行后盘上
+                    # 高水位 ≥ stale 值——接回防撞号。已执行完的盘上已读到，
+                    # 未投递的（dirty）当前不可能存在（序号路径同步落盘）。
+                    meta["latest_seq"] = max(int(meta["latest_seq"]), int(stale["latest_seq"] or 0))
             disk_hi = max(read_latest_view_seq(path), int(meta["latest_seq"] or 0))
             cached = self._seq_cache.get(path)
             base = disk_hi if cached is None else max(int(cached), disk_hi)
@@ -326,15 +338,38 @@ class WebViewStore:
             self._seq_cache[path] = nxt
             meta["latest_seq"] = nxt
             meta["dirty"] = True
-            self._persist_line_meta(path, force=True)
+            payload = {"gen": int(meta["gen"]), "latest_seq": nxt, "updated_ts": time.time()}
+            self._write_line_meta_sync(path, meta, payload)
             return nxt
 
     # ------------------------------------------------------------------
     # 线身份（世代）与元数据
     # ------------------------------------------------------------------
 
+    def _write_line_meta_sync(self, path: Path, meta: dict[str, Any], payload: dict[str, Any]) -> None:
+        """在调用线程内原子落盘 sidecar 并同步镜像（失败只记日志）。
+
+        序号分配与 reset 路径用：跨进程文件锁内依赖 sidecar 真实落盘，不走
+        worker 队列。其余调用方（flush 等后台路径）应投递到 worker 线程
+        （见 _persist_line_meta）。
+        """
+        try:
+            from src.core.json_store import write_json_atomic
+
+            write_json_atomic(resolve_view_meta_path(path), payload)
+        except Exception as exc:  # noqa: BLE001 — 元数据故障绝不中断落帧
+            logger.debug(f"web view meta persist failed (path={path}): {exc}")
+        meta["dirty"] = False
+        meta["existing"] = True
+        meta["written_ts"] = time.time()
+        meta["write_pending"] = False
+
     def _load_line_meta(self, path: Path) -> dict[str, Any]:
-        """读该线的元数据（内存镜像优先；sidecar 缺失/损坏按新线处理）。"""
+        """读该线的元数据（内存镜像优先；sidecar 缺失/损坏按新线处理）。
+
+        调用方须持 ``_seq_lock``。已弹出的旧镜像是否接回由调用方决定
+        （见 _next_view_seq 的 dirty 门）。
+        """
         meta = self._line_meta.get(path)
         if meta is not None:
             return meta
@@ -353,30 +388,71 @@ class WebViewStore:
             # 但绝不能因为 flush/close 就往别的空间的目录里凭空写一个 sidecar。
             "existing": bool(data),
             "written_ts": 0.0,
+            # sidecar 写已异步化（worker 线程）：序号分配路径投递后不等待落盘，
+            # 中途退出会丢最后几帧高水位。重启/交棒读路径因此按「高水位可能滞后」
+            # 兜底——从盘重读，与 jsonl 尾部取 max，序号单调不回退。
+            "write_pending": False,
         }
         self._line_meta[path] = meta
         return meta
 
     def _persist_line_meta(self, path: Path, *, force: bool = False) -> None:
-        """落 sidecar（节流；失败只记日志——元数据缺一帧不影响落帧）。"""
+        """投递 sidecar 落盘（节流；失败只记日志——元数据缺一帧不影响落帧）。
+
+        写盘移到 worker 线程（``_AsyncFileWriter.enqueue``）——同目录临时文件 + 双
+        fsync 的原子写在网络盘/机械盘上会拖慢流式输出所在的回合协程。重启校准窗
+        口：``read_latest_view_seq`` 读的是 jsonl 尾部（权威），sidecar 只是文件读
+        不到序号时的兜底高水位；旧实现里 sidecar 本就可能滞后 jsonl 至多
+        ``_META_WRITE_MIN_INTERVAL_S``（1s，节流），异步投递只把这个既存窗口再放宽
+        约一两帧——单调取 max 的校准语义不变，台账认可为无害。线程内保序：写按投递
+        顺序执行，后投的更新值不会先落盘。
+        注：序号分配（_next_view_seq）与 reset_line 的 sidecar 写是同步的（跨进程
+        锁内要求真实落盘），本函数只服务非关键路径的兜底写。
+        """
         meta = self._line_meta.get(path)
         if meta is None:
             return
         if not meta["dirty"] and (not force or not meta["existing"]):
             return
+        if meta.get("reset_baseline"):
+            # reset_line 的 latest_seq=0 是重估基准而非高水位：永不经本函数落盘
+            # （会盖住 FIFO 里已投递的更高水位）；gen 推进由 reset_line 同步落盘。
+            return
         now = time.time()
         if not force and now - float(meta["written_ts"] or 0.0) < _META_WRITE_MIN_INTERVAL_S:
             return
         payload = {"gen": int(meta["gen"]), "latest_seq": int(meta["latest_seq"]), "updated_ts": now}
+        meta["dirty"] = False
+        meta["existing"] = True
+        meta["written_ts"] = now
+        meta["write_pending"] = True
+        target = resolve_view_meta_path(path)
         try:
             from src.core.json_store import write_json_atomic
 
-            write_json_atomic(resolve_view_meta_path(path), payload)
-            meta["dirty"] = False
-            meta["existing"] = True
-            meta["written_ts"] = now
+            def _write_sidecar() -> None:
+                try:
+                    write_json_atomic(target, payload)
+                except Exception as exc:  # noqa: BLE001 — 元数据故障绝不中断落帧
+                    logger.debug(f"web view meta persist failed (path={target}): {exc}")
+                finally:
+                    meta["write_pending"] = False
+
+            self._writer.enqueue(_FileWriteOp(path=target, text="", append=False, callback=_write_sidecar))
         except Exception as exc:  # noqa: BLE001 — 元数据故障绝不中断落帧
-            logger.debug(f"web view meta persist failed (path={path}): {exc}")
+            meta["write_pending"] = False
+            logger.debug(f"web view meta persist failed (path={target}): {exc}")
+
+    def _wait_writer_turn(self, timeout: float = 5.0) -> None:
+        """等待 worker 执行完此刻之前已投递的全部 op（sentinel 屏障）。
+
+        不等待之后新投递的写；若 worker 此前故障堆积，屏障照样排在它们后面，
+        超时只记日志不升级（与落盘失败语义一致）。
+        """
+        done = threading.Event()
+        self._writer.enqueue(_FileWriteOp(path=Path(), text="", append=False, done=done))
+        if not done.wait(timeout=timeout):
+            logger.debug("web view writer barrier wait timeout")
 
     def line_generation(self, path: Path) -> int:
         """该线当前世代（0 = 从未重建）。快照的 epoch 由它参与构造。"""
@@ -384,12 +460,18 @@ class WebViewStore:
             return int(self._load_line_meta(path)["gen"])
 
     def reset_line(self, path: Path) -> int:
-        """重建这条线：世代 +1（epoch 随之变化）、序号从 1 重新开始。
+        """重建这条线：世代 +1（epoch 随之变化）、序号基准归零重估。
 
-        **这是重置序号的唯一入口。** 本仓现有归档/清理路径都不重建视图线（归档＝
-        保留原文件，序号自然保留），故当前没有调用方；将来新增此类路径必须走这里，
-        绝不允许把文件清空后让序号静默从 1 重来——端上会把它当同一条线的旧序号
-        前缀，去重与 gap 判定全部失效。
+        **这是声明「线已重建」的唯一入口。** 序号本身不会因此回退——重估取「文件
+        尾部最大序号」与「sidecar 高水位」的较大者（见类 docstring 单调契约），
+        文件还在就继续往上走，只有文件确已清空才从 1 起。本仓现有归档/清理路径都
+        不重建视图线（归档＝保留原文件，序号自然保留），故当前没有调用方；将来新增
+        此类路径必须走这里，绝不允许把文件清空后让序号静默从 1 重来——端上会把它当
+        同一条线的旧序号前缀，去重与 gap 判定全部失效。
+
+        sidecar 写异步化后的处理：latest_seq=0 是重估基准不是高水位，不落盘；
+        gen 推进直接由本函数单独投递（值取「盘上已有高水位」，FIFO 保序不会被
+        覆盖成 0），并等待落盘——重启读到的 epoch 必须立即反映新世代。
         """
         with self._seq_lock:
             meta = self._load_line_meta(path)
@@ -397,23 +479,55 @@ class WebViewStore:
             meta["latest_seq"] = 0
             meta["dirty"] = True
             meta["written_ts"] = 0.0
+            meta["reset_baseline"] = True
             self._seq_cache.pop(path, None)
-            self._persist_line_meta(path, force=True)
+            # 等此前在飞的写落盘，取盘上真实高水位写「gen 推进」帧；0 永不出盘。
+            self._wait_writer_turn()
+            disk_hi = 0
+            try:
+                parsed = json.loads(resolve_view_meta_path(path).read_text(encoding="utf-8"))
+                if isinstance(parsed, dict):
+                    disk_hi = int(parsed.get("latest_seq") or 0)
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
+                disk_hi = 0
+            payload = {"gen": int(meta["gen"]), "latest_seq": disk_hi, "updated_ts": time.time()}
+            self._write_line_meta_sync(path, meta, payload)
             logger.info(f"web view line reset (gen={meta['gen']}, path={path})")
             return int(meta["gen"])
 
     # ------------------------------------------------------------------
-    # 生命周期
+    # 生命周期（flush/close 收口：等待已投递的 meta 写落盘）
     # ------------------------------------------------------------------
 
+    def _wait_meta_writes(self, timeout: float = 2.0) -> None:
+        """等待已投递的 sidecar 写全部落盘（flush/close 收口用，尽力而为）。
+
+        ``_AsyncFileWriter`` 按 worker 排空即置 drained，此时刚投的 op 可能还在
+        队列里——shutdown 收口若只看 drained 会丢掉最后几帧高水位。这里等待所有
+        镜像 settled（dirty=False 且 write_pending=False），再确认一次 drained。
+        write_pending 由 worker 线程在落盘后清除；观察侧不持 ``_seq_lock`` 等待，
+        避免「writer 已 closed → 提交协程在持锁 inline 执行 callback → 等待协程
+        持锁观察」的死锁。worker 队列 FIFO 保序，write_pending 只增置信度；镜像已
+        被 pop 而 callback 尚未执行完的瞬间视作已投到 FIFO，drained 兜底落盘。
+        deadline 内未 settled 不升级——失败语义与落盘故障一致（只记日志）。
+        """
+        deadline = time.monotonic() + timeout
+        settled_once = False
+        while time.monotonic() < deadline:
+            settled = all(not bool(m["dirty"]) and not bool(m.get("write_pending")) for m in self._line_meta.values())
+            if settled:
+                settled_once = True
+                break
+            time.sleep(0.01)
+        if settled_once:
+            self._writer.flush(timeout=max(0.0, deadline - time.monotonic()))
+
     def flush(self, timeout: float | None = None) -> bool:
-        for path in list(self._line_meta):
-            self._persist_line_meta(path, force=True)
+        self._wait_meta_writes(timeout=timeout if timeout is not None else 2.0)
         return self._writer.flush(timeout=timeout)
 
     def close(self) -> None:
-        for path in list(self._line_meta):
-            self._persist_line_meta(path, force=True)
+        self._wait_meta_writes()
         try:
             self._writer.close()
         except Exception as exc:  # noqa: BLE001
@@ -452,14 +566,22 @@ class WebViewStore:
         merge_chunks: bool = False,
         extra_paths: list[Path] | None = None,
         since_seq: int = 0,
+        before_seq: int = 0,
+        source_filter: str | None = None,
         subagent_out: dict[str, str] | None = None,
         subagent_diffs_out: dict[str, list[dict[str, Any]]] | None = None,
         subagent_briefs_out: dict[str, str] | None = None,
+        fold_truncated_out: dict[str, int] | None = None,
     ) -> tuple[list[dict[str, Any]], int, int]:
         """从视图帧聚合聊天行：(messages, total, latest_view_seq)。
 
         - user_message → user 行（含 source=web 主会话行；它端来源的回合
           帧本就不写 web 视图——attach 端不挂 persist）。
+        - ``source_filter`` 非空时（仅 root 线用）：只聚合 ``source`` 等于它的帧；
+          缺 ``source`` 字段的历史帧按放行处理（老数据没标来源，按本端算）。
+          他端帧（matrix/cli 落带）仍是线上事实——``latest_seq`` 照常覆盖它们，
+          只是不投影成 web 聊天区的行。显示与录制分离：录制全端统一进带，
+          显示每个端只看自己的。
         - chunk → assistant 行。主会话（merge_chunks=False）每条 chunk 帧
           独立一行，与实时渲染（store 每条 chunk 帧独立气泡）逐帧一致；
           模块会话（merge_chunks=True）保持同回合合并（其实时渲染为追加
@@ -478,13 +600,18 @@ class WebViewStore:
           ``delegate_task`` 标记 / 正文以 ``<任务指令>`` 开头）→ **不投影成消息**
           （否则刷新后冒出一条 role=user 气泡），传 ``subagent_briefs_out`` 时按
           ``{父 call_id: 指令全文}`` 归集，端上折进那条 delegate 工具行。
+          老帧缺 ``parent_tool_call_id`` 时按所在回合反查：同 ``turn_id`` 内
+          最近的 delegate 工具帧（含该行本身被判为指令跟话时的下一条）认领；
+          反查不到保持现状（归空 key，端上忽略、不冒气泡）。
         - 内核注入信封（``<子智能体消息>`` / ``<途中消息>`` 开头，见
           ``_is_injected_user_frame``）→ **不投影成消息**，也不进折叠映射
           （它们没有对应的父工具行），纯消隐。
 
         三张折叠映射都只收 ``view_seq > since_seq`` 的帧（增量刷新不重传旧内容），
         且按 ``_FOLD_MAX_CALLS`` / ``_FOLD_MAX_FRAMES_PER_CALL`` 封顶——长线上
-        历史子智能体不随会话长度无界回传。
+        历史子智能体不随会话长度无界回传。传 ``fold_truncated_out`` 时，封顶
+        实际裁掉的条数写进该 dict（键 results/diffs/briefs，值为条数），由快照
+        响应带给端上作显式提示（封顶是边界不是静默丢失）。
 
         「上次回合中断」不在此猜测：进程活着响应 hydrate 时，无 turn_end 的
         最新回合是进行中而非崩溃。崩溃恢复由启动路径读 in-flight 标记注入
@@ -514,6 +641,12 @@ class WebViewStore:
         # ——对外形状仍是 {call_id: text} / {call_id: [帧…]}。
         result_rank: dict[str, int] = {}
         brief_rank: dict[str, int] = {}
+        # brief 反查缓存：帧按时间线单遍扫描，「(session_id, turn_id) → 最近的
+        # delegate 工具行 call_id」。delegate 行与它的指令跟话同回合时，行先落带
+        # （指令帧晚一拍）；行晚于指令帧（历史数据落盘次序不齐）时靠预扫兜底认
+        # 下一行。键带 session_id：主对话一个空间一条线（多 session 共线），
+        # turn_id 跨 session 可能撞名，不隔离会串认别会话的发起行。
+        delegate_calls_by_turn: dict[tuple[str, str], str] = {}
         # 分隔标记帧（新会话/模型切换）：无 turn_id，直接按落盘顺序占一行，
         # 渲染成时间线分隔线（role=assistant + divider 字段，前端识别成分隔线）。
         dividers: list[tuple[int, dict[str, Any]]] = []
@@ -528,6 +661,22 @@ class WebViewStore:
                 view_seq = int(frame.get("view_seq") or 0)
             except (TypeError, ValueError):
                 view_seq = 0
+            if source_filter:
+                frame_source = str(frame.get("source") or "")
+                if frame_source and frame_source != source_filter:
+                    # 他端落带帧：是线上事实（latest_seq 已覆盖），但不属于本端显示
+                    continue
+            # 主会话 delegate 工具行登记到所在 turn：老指令帧缺父行标识时
+            # 按它反查归集（单遍按时间线推进，最新一行胜出——同行内多次
+            # delegate 时指令认最近那条发起行）。
+            if (
+                kind == "tool"
+                and not str(payload.get("parent_tool_call_id") or "")
+                and str(payload.get("tool_name") or "") == "delegate"
+            ):
+                tc_id = str(payload.get("tool_call_id") or "")
+                if turn_id and tc_id:
+                    delegate_calls_by_turn[(str(frame.get("session_id") or ""), turn_id)] = tc_id
             if kind == "divider":
                 label = str(payload.get("label") or "").strip()
                 try:
@@ -565,6 +714,14 @@ class WebViewStore:
                 if subagent_briefs_out is not None and view_seq > since_seq:
                     call_id = str(payload.get("parent_tool_call_id") or "")
                     text = str(payload.get("content") or "")
+                    if not call_id:
+                        # 老帧缺父行标识：按所在回合反查 delegate 工具行认领——
+                        # 先看这帧之前已登记的（工具行先落带的常态），没有就
+                        # 预扫本回合之后最近的 delegate 行（落盘次序不齐的历史）。
+                        session_id = str(frame.get("session_id") or "")
+                        call_id = delegate_calls_by_turn.get((session_id, turn_id), "") or _next_delegate_call_id(
+                            frames, frame, session_id, turn_id
+                        )
                     if text.strip():
                         subagent_briefs_out[call_id] = text
                         brief_rank[call_id] = view_seq
@@ -660,13 +817,13 @@ class WebViewStore:
             elif kind == "files":
                 files = payload.get("files")
                 if isinstance(files, list) and files:
-                    entry: dict[str, Any] = {
+                    files_entry: dict[str, Any] = {
                         "role": "assistant",
                         "text": str(payload.get("caption") or ""),
                         "files": files,
                         "seq": view_seq,
                     }
-                    turn["blocks"].append((view_seq, entry))
+                    turn["blocks"].append((view_seq, files_entry))
             elif kind == "turn_end":
                 turn["ended"] = True
 
@@ -710,8 +867,8 @@ class WebViewStore:
                 first_text_seq = turn["texts"][0][0] if turn["texts"] else turn["last_seq"]
                 items.append((first_text_seq, entry))
                 items.extend(turn["blocks"])
-                for _seq, row in sorted(items, key=lambda x: x[0]):
-                    messages.append(row)
+                for _seq, _row in sorted(items, key=lambda x: x[0]):
+                    messages.append(_row)
             else:
                 items = list(user_items)
                 for seq, text, is_cmd in turn["texts"]:
@@ -746,7 +903,7 @@ class WebViewStore:
                 continue
             for att in atts:
                 if isinstance(att, dict) and not att.get("url") and att.get("ref"):
-                    att["url"] = f"/api/workspace/file-raw?path=.coara/uploads/{att['ref']}"
+                    att["url"] = f"/api/workspace/file-raw?path={UPLOAD_DIR_NAME}/{att['ref']}"
 
         # 多文件聚合时 seq 是时间线位置序号（各文件 view_seq 会互相冲突）：
         # 游标 = 末条位置 = 全量行数。必须在增量过滤之前算——过滤后尾部可能为空，
@@ -761,19 +918,60 @@ class WebViewStore:
         total = len(messages)
         if since_seq > 0:
             messages = [m for m in messages if int(m.get("seq") or 0) > since_seq]
+        # 向前翻页：只回 before_seq 之前的帧，limit 取该窗口的最近 N 条——
+        # 端侧 prepend 到头部，与尾部增量（since_seq）互为镜像，互不相交。
+        if before_seq > 0:
+            messages = [m for m in messages if int(m.get("seq") or 0) < before_seq]
         if len(messages) > limit:
             messages = messages[-limit:]
         # 游标同源：latest_seq 只覆盖**实际返回切片**的最后一帧——截断前的全量游标
         # 会让端侧把被裁掉的帧当成「已送达」永不再补，屏幕历史出现永久静默空洞
-        #（被裁帧 ≤ 旧游标、不触发 gap 检测）。单文件与多文件（重编位置序号）通用。
+        # （被裁帧 ≤ 旧游标、不触发 gap 检测）。单文件与多文件（重编位置序号）通用。
         if messages:
             latest_seq = int(messages[-1].get("seq") or 0)
         # 折叠映射在出口处裁剪：只留最近若干 call_id / 每个 call_id 最近若干帧。
         # 不做这一步，长线的子智能体产出会随会话长度无界回传（每次刷新/切空间全量）。
-        _trim_fold_text_map(subagent_out, result_rank)
-        _trim_fold_text_map(subagent_briefs_out, brief_rank)
-        _trim_fold_frame_map(subagent_diffs_out)
+        # 裁剪计数随 fold_truncated_out 透出：快照据此带 subagent_truncated 显式
+        # 标记——封顶是边界，不是静默丢弃。
+        dropped_results = _trim_fold_text_map(subagent_out, result_rank)
+        dropped_briefs = _trim_fold_text_map(subagent_briefs_out, brief_rank)
+        dropped_frames = _trim_fold_frame_map(subagent_diffs_out)
+        if fold_truncated_out is not None:
+            fold_truncated_out["results"] = dropped_results
+            fold_truncated_out["diffs"] = dropped_frames
+            fold_truncated_out["briefs"] = dropped_briefs
         return messages, total, latest_seq
+
+
+def _next_delegate_call_id(frames: list[dict[str, Any]], current: dict[str, Any], session_id: str, turn_id: str) -> str:
+    """brief 反查兜底：同 session 同 turn_id 内当前帧之后最近的 delegate 工具行 call_id。
+
+    仅用于老指令帧缺 ``parent_tool_call_id`` 且该帧之前没有登记过 delegate 行
+    的场景（历史数据落盘次序不齐）；找不到返回空串（保持现状：归空 key，
+    端上忽略、不冒气泡）。主对话多 session 共线，反查必须限同 session。
+    """
+    if not turn_id:
+        return ""
+    try:
+        start = frames.index(current) + 1
+    except ValueError:
+        return ""
+    for frame in frames[start:]:
+        if str(frame.get("session_id") or "") != session_id:
+            continue
+        if str(frame.get("turn_id") or "") != turn_id:
+            continue
+        if str(frame.get("kind") or "") != "tool":
+            continue
+        payload = frame.get("payload") or {}
+        if str(payload.get("parent_tool_call_id") or ""):
+            continue  # 子智能体自己的工具行，不是主会话发起行
+        if str(payload.get("tool_name") or "") != "delegate":
+            continue
+        call_id = str(payload.get("tool_call_id") or "")
+        if call_id:
+            return call_id
+    return ""
 
 
 def _is_brief_frame(kind: str, payload: dict[str, Any]) -> bool:
@@ -820,29 +1018,40 @@ def _is_injected_user_frame(kind: str, payload: dict[str, Any]) -> bool:
     return str(payload.get("content") or "").lstrip().startswith(_INJECTED_USER_PREFIXES)
 
 
-def _trim_fold_text_map(out: dict[str, str] | None, rank: dict[str, int]) -> None:
-    """折叠文本映射裁剪：只留最近 ``_FOLD_MAX_CALLS`` 个 call_id（原地修改）。"""
+def _trim_fold_text_map(out: dict[str, str] | None, rank: dict[str, int]) -> int:
+    """折叠文本映射裁剪：只留最近 ``_FOLD_MAX_CALLS`` 个 call_id（原地修改）。
+
+    返回被裁掉的 call_id 数（0 = 无裁剪）——封顶是行为边界不是静默丢弃，
+    调用方据此给快照带 ``subagent_truncated`` 显式标记。
+    """
     if out is None or len(out) <= _FOLD_MAX_CALLS:
-        return
+        return 0
+    dropped = len(out) - _FOLD_MAX_CALLS
     keep = set(sorted(out, key=lambda k: rank.get(k, 0), reverse=True)[:_FOLD_MAX_CALLS])
     for key in [k for k in out if k not in keep]:
         del out[key]
+    return dropped
 
 
-def _trim_fold_frame_map(out: dict[str, list[dict[str, Any]]] | None) -> None:
-    """折叠帧映射裁剪：每个 call_id 只留最近 N 条，call_id 数也封顶（原地修改）。"""
+def _trim_fold_frame_map(out: dict[str, list[dict[str, Any]]] | None) -> int:
+    """折叠帧映射裁剪：每个 call_id 只留最近 N 条，call_id 数也封顶（原地修改）。
+
+    返回被裁掉的帧总数（0 = 无裁剪），用途同 ``_trim_fold_text_map``。
+    """
     if out is None:
-        return
+        return 0
+    dropped = 0
     for call_id, frames in list(out.items()):
         if len(frames) > _FOLD_MAX_FRAMES_PER_CALL:
+            dropped += len(frames) - _FOLD_MAX_FRAMES_PER_CALL
             out[call_id] = frames[-_FOLD_MAX_FRAMES_PER_CALL:]
     if len(out) <= _FOLD_MAX_CALLS:
-        return
-    keep = set(
-        sorted(out, key=lambda k: int(out[k][-1].get("view_seq") or 0), reverse=True)[:_FOLD_MAX_CALLS]
-    )
+        return dropped
+    keep = set(sorted(out, key=lambda k: int(out[k][-1].get("view_seq") or 0), reverse=True)[:_FOLD_MAX_CALLS])
     for call_id in [k for k in out if k not in keep]:
+        dropped += len(out[call_id])
         del out[call_id]
+    return dropped
 
 
 def _subagent_frame_entry(kind: str, payload: dict[str, Any], view_seq: int) -> dict[str, Any]:

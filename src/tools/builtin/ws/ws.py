@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from src.core.logger import logger
 from src.core.tool_base import BaseTool, ToolInvocation, ToolKind, ToolResult
 
 if TYPE_CHECKING:
     from src.coara.base import CoaraBase
+    from src.coara.root import RootCoara
 
 
 def resolve_default_workspace_path(coara_home: Path, name: str) -> Path:
@@ -252,7 +253,7 @@ class WsInvocation(ToolInvocation):
     async def _execute_list(self, manager: Any) -> ToolResult:
         from src.workspace.catalog import format_workspace_catalog
 
-        root = self._coara
+        root = cast("RootCoara", self._coara)
         root.sync_workspace_manager_to_foreground()
         active_name = self._invoking_active_name(manager)
         return ToolResult.success(format_workspace_catalog(manager, active_name=active_name))
@@ -307,7 +308,7 @@ class WsInvocation(ToolInvocation):
 
         # Guard: a cached session with an in-flight turn must not lose its
         # registry entry (and especially not its disk directory) mid-turn.
-        root = self._coara
+        root = cast("RootCoara", self._coara)
         cached = root._sessions.get(entry.id)
         cached_coara = getattr(cached, "coara", None) if cached is not None else None
         session_busy = bool(cached_coara is not None and cached_coara.is_turn_busy())
@@ -413,7 +414,7 @@ class WsInvocation(ToolInvocation):
         if not self.workspace_name:
             return ToolResult.error("switch 需要 name")
 
-        root = self._coara
+        root = cast("RootCoara", self._coara)
         # 源 session = 发起本工具调用的会话（executor 注入 session_id），非「扫第一个忙会话」。
         source_coara = self._invoking_session_coara()
         if source_coara is None:
@@ -463,7 +464,7 @@ class WsInvocation(ToolInvocation):
             from src.coara.turn_completion import CoaraRunCancelledError
             from src.coara.workspace_switch_history import strip_ws_switch_tail
 
-            if hasattr(source_coara, "message_history"):
+            if source_coara is not None and hasattr(source_coara, "message_history"):
                 strip_ws_switch_tail(source_coara.message_history)
             _retract_switch_ui_transcript(source_coara)
             cancel = CoaraRunCancelledError(f"switch_workspace:{self.workspace_name}")

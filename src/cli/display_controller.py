@@ -325,11 +325,11 @@ class CliDisplayController:
                 block.expanded = False
             self.background_spinner.request_redraw()
             return False
-        block = self.fold.latest()
-        if block is None:
+        latest_block = self.fold.latest()
+        if latest_block is None:
             self.background_spinner.request_redraw()
             return False
-        block.expanded = True
+        latest_block.expanded = True
         self.background_spinner.request_redraw()
         return True
 
@@ -614,7 +614,8 @@ class CliDisplayController:
         if topic == "tool_start":
             if str(payload.get("tool_name") or "") != "delegate":
                 return
-            args = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+            _raw_args = payload.get("arguments")
+            args: dict[str, Any] = _raw_args if isinstance(_raw_args, dict) else {}
             action = str(args.get("action") or "").strip().lower()
             if action not in _FOLD_DELEGATE_RUN_ACTIONS:
                 return  # wait / message / stop 不是一次运行，不建块

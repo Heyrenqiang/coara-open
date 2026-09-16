@@ -140,28 +140,30 @@ class EventSourceManager:
                 logger.error(f"Event-source reload failed and webhook rollback also failed: {restore_exc}")
             raise
 
-        for source in old_file_sources:
-            source.stop()
-        for source in old_poll_sources:
-            await source.stop()
-        for source in old_cron_sources:
-            await source.stop()
+        for file_source in old_file_sources:
+            file_source.stop()
+        for poll_source in old_poll_sources:
+            await poll_source.stop()
+        for cron_source in old_cron_sources:
+            await cron_source.stop()
 
     async def stop(self) -> None:
-        for source in self._file_sources:
-            source.stop()
+        for file_source in self._file_sources:
+            file_source.stop()
         self._file_sources.clear()
-        for source in self._poll_sources:
-            await source.stop()
+        for poll_source in self._poll_sources:
+            await poll_source.stop()
         self._poll_sources.clear()
-        for source in self._cron_sources:
-            await source.stop()
+        for cron_source in self._cron_sources:
+            await cron_source.stop()
         self._cron_sources.clear()
         self._webhook_server.unregister_all()
         await self._webhook_server.stop()
 
     async def _start_sources(self) -> None:
         vfs = self.workspace_manager.vfs
+        # start()/reload() 已先设 self._loop；兜底取当前运行循环，不把可选值透传给要求非空的参数
+        loop = self._loop or asyncio.get_running_loop()
         for defn in self.definitions.values():
             if not defn.enabled:
                 continue
@@ -173,29 +175,36 @@ class EventSourceManager:
                 )
                 continue
             if defn.kind == EventSourceKind.FILE_WATCH:
-                source = FileWatchSource(defn, vfs=vfs, emit=self._handle_event, loop=self._loop)
+                watch_source = FileWatchSource(defn, vfs=vfs, emit=self._handle_event, loop=loop)
                 try:
-                    source.start()
-                    self._file_sources.append(source)
+                    watch_source.start()
+                    self._file_sources.append(watch_source)
                 except Exception as exc:
                     logger.warning(f"Failed to start file watch source '{defn.id}': {exc}")
             elif defn.kind == EventSourceKind.INTERVAL_POLL:
-                source = IntervalPollSource(
+                # 循环变量经默认参数绑定，闭包不在循环结束后捕获（ruff B023）
+                def _poll_seen(sid: str = defn.id) -> set[str]:
+                    return self._state.poll_snapshot(sid)
+
+                def _save_poll_seen(names: set[str], sid: str = defn.id) -> None:
+                    self._state.save_poll_snapshot(sid, names)
+
+                poll_source = IntervalPollSource(
                     defn,
                     vfs=vfs,
                     emit=self._handle_event,
-                    get_seen=lambda sid=defn.id: self._state.poll_snapshot(sid),
-                    save_seen=lambda names, sid=defn.id: self._state.save_poll_snapshot(sid, names),
+                    get_seen=_poll_seen,
+                    save_seen=_save_poll_seen,
                 )
-                source.start()
-                self._poll_sources.append(source)
+                poll_source.start()
+                self._poll_sources.append(poll_source)
             elif defn.kind == EventSourceKind.WEBHOOK:
                 self._webhook_server.register(defn)
             elif defn.kind == EventSourceKind.CRON:
                 try:
-                    source = CronSource(defn, emit=self._handle_event)
-                    source.start()
-                    self._cron_sources.append(source)
+                    cron_source = CronSource(defn, emit=self._handle_event)
+                    cron_source.start()
+                    self._cron_sources.append(cron_source)
                 except Exception as exc:
                     logger.warning(f"Failed to start cron source '{defn.id}': {exc}")
 

@@ -412,12 +412,12 @@ class RecordsFacade:
                 count += len(results)
 
         if origin in ("user", "all") and self.store and self.store.user is not None:
-            results = await self.store.user.search(query=q, limit=limit)
-            if results:
-                await self.store.user.touch_many([e.id for e in results])
-                sections.append("【收藏 · user】\n" + format_collection_results(results, query=q))
-                ids.extend(e.id for e in results)
-                count += len(results)
+            user_results = await self.store.user.search(query=q, limit=limit)
+            if user_results:
+                await self.store.user.touch_many([e.id for e in user_results])
+                sections.append("【收藏 · user】\n" + format_collection_results(user_results, query=q))
+                ids.extend(e.id for e in user_results)
+                count += len(user_results)
 
         if not sections:
             return FacadeResult(True, "没有找到相关记录。", {"count": 0, "ids": []})
@@ -449,15 +449,15 @@ class RecordsFacade:
                 count += len(entries)
 
         if origin in ("user", "all") and self.store and self.store.user is not None:
-            entries = await self.store.user.list_entries(limit=limit)
-            if entries:
+            user_entries = await self.store.user.list_entries(limit=limit)
+            if user_entries:
                 if lines:
                     lines.append("")
-                lines.append(f"收藏（user）· {len(entries)} 条：")
-                for e in entries:
-                    created = e.created_at.strftime("%Y-%m-%d") if e.created_at else ""
-                    lines.append(f"- `{e.id}` [{e.source_type}] {e.title} · {created}")
-                count += len(entries)
+                lines.append(f"收藏（user）· {len(user_entries)} 条：")
+                for user_e in user_entries:
+                    created = user_e.created_at.strftime("%Y-%m-%d") if user_e.created_at else ""
+                    lines.append(f"- `{user_e.id}` [{user_e.source_type}] {user_e.title} · {created}")
+                count += len(user_entries)
 
         if not lines:
             return FacadeResult(True, "暂无记录。", {"count": 0})
@@ -479,12 +479,12 @@ class RecordsFacade:
                 )
 
         if origin in ("user", "all") and self.store and self.store.user is not None:
-            entry = await self.store.user.read(eid)
-            if entry is not None:
+            user_entry = await self.store.user.read(eid)
+            if user_entry is not None:
                 await self.store.user.touch(eid)
                 return FacadeResult(
                     True,
-                    "【收藏 · user】\n" + format_collection_show(entry),
+                    "【收藏 · user】\n" + format_collection_show(user_entry),
                     {"id": eid, "origin": "user"},
                 )
 

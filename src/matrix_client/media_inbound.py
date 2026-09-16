@@ -9,6 +9,7 @@ from typing import Any
 from loguru import logger
 
 from src.coara.turn_context import turn
+from src.core.workspace_layout import UPLOAD_DIR_NAME
 from src.matrix_client.remote_channel import MATRIX_REMOTE_INTERACTION_CHANNEL
 from src.matrix_client.remote_vision import (
     build_image_blocks_from_matrix_upload,
@@ -16,7 +17,7 @@ from src.matrix_client.remote_vision import (
 )
 from src.matrix_client.response_stream import LocalToolSummaryFn, stream_coara_reply_to_matrix
 
-SendRoomText = Callable[[str, str], Awaitable[None]]
+SendRoomText = Callable[[str, str], Awaitable[Any]]
 
 # Matches the gomatrix server-side MaxRequestSize (20MB).
 MAX_MATRIX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -33,8 +34,9 @@ def matrix_media_content(event: Any) -> dict:
 
 
 def matrix_media_meta(event: Any) -> tuple[str | None, str | None]:
-    content = matrix_media_content(event)
-    info = content.get("info") if isinstance(content.get("info"), dict) else {}
+    content: dict[str, Any] = matrix_media_content(event) or {}
+    raw_info = content.get("info")
+    info: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
     mime_type = info.get("mimetype")
     filename = content.get("filename") or getattr(event, "filename", None)
     return mime_type, filename
@@ -113,9 +115,11 @@ def build_media_batch_handler(
     """
 
     async def _handle(room: Any, event: Any) -> None:
-        mime_type, filename = matrix_media_meta(event)
-        filename = filename or event.body
+        mime_type, declared_name = matrix_media_meta(event)
         caption, quoted_mxc = strip_quote_mxc_marker(event.body or "")
+        # 端上无附言时 body 回落成文件名，那不算用户正文
+        if caption.strip() and caption.strip() == (declared_name or "").strip():
+            caption = ""
 
         # 视觉门控：当前模型不支持图像时直接告知，不静默占位（用户以为已发图）
         try:
@@ -194,8 +198,8 @@ async def process_matrix_media_inbound(
     logger.info(f"[Matrix] Media ({msgtype}) from {sender_label}: {(event.body or '')[:80]}")
     file_bridge.set_current_room(room.room_id)
 
-    mime_type, filename = matrix_media_meta(event)
-    filename = filename or event.body
+    mime_type, declared_name = matrix_media_meta(event)
+    filename = declared_name or event.body
 
     resp = await client.download(event.url)
     if not isinstance(resp, DownloadResponse):
@@ -209,7 +213,7 @@ async def process_matrix_media_inbound(
         return
 
     workspace = workspace_dir.resolve()
-    uploads_dir = workspace / "uploads"
+    uploads_dir = workspace / UPLOAD_DIR_NAME
     uploads_dir.mkdir(exist_ok=True)
     raw_name = getattr(event, "filename", None) or filename or "upload.bin"
     # Strip any directory components so a crafted filename cannot escape uploads/.
@@ -243,9 +247,16 @@ async def process_matrix_media_inbound(
     except Exception as _exc:  # noqa: BLE001 — 索引故障不影响收文件
         logger.warning(f"recent_files record failed (matrix inbound): {_exc}")
 
-    rel_path = file_path.relative_to(workspace)
     # 入站不再包内容标签：内核按 source=matrix 现包（inject_user_message）。
-    file_body = f"发送了文件: @{rel_path}"
+    # body 是端上的文件附言，必须随文件一起进回合（端上无附言时回落成文件名，那不算正文）
+    caption, _ = strip_quote_mxc_marker(event.body or "")
+    caption = caption.strip()
+    if caption and caption == (declared_name or "").strip():
+        caption = ""
+    # 文本带绝对路径：模型据此一步 read，不必先 glob/shell 猜文件落点
+    file_body = f"发送了文件（用户附件，已存入工作空间 {UPLOAD_DIR_NAME}/）: {file_path.resolve()}"
+    if caption:
+        file_body = f"{file_body}\n{caption}"
 
     async def _send_text(room_id: str, body: str) -> bool:
         result = await send_chunk(room_id, body)

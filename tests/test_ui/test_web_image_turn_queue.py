@@ -55,6 +55,7 @@ class _FakeCoara:
         image_blocks: list[dict] | None = None,
         *,
         source: str = "",
+        client_msg_id: str = "",
     ) -> None:
         self._continuation_inputs.append(ContinuationInput(text=text, image_blocks=image_blocks, source=source))
 

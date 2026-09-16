@@ -39,7 +39,7 @@ def workspace_llm_chrome_fields(target: Any) -> dict[str, str]:
         if entry is not None:
             out["workspace_name"] = str(entry.name or "")
     except Exception:
-        pass
+        logger.debug(f"resolve workspace name for {wid} failed; binding shows id only", exc_info=True)
     return out
 
 

@@ -58,6 +58,13 @@ class _FileWriteOp:
     path: Path
     text: str
     append: bool = True
+    # 非空时取代 text/append：执行自定义写（如 write_json_atomic 原子落盘）。
+    # web_views 的 sidecar 元数据写走它——与 jsonl 落帧共用一条 FIFO 保序、同享
+    # flush 等待语义，避免 sidecar 写卡在回合协程里拖慢流式输出。
+    callback: Any = None
+    # 写完置位（成对等待）：跨进程 view_seq 分配在文件锁内依赖 sidecar 高水位
+    # 已真实落盘，投递后须等 callback 执行完才能放锁（见 web_views 序号路径）。
+    done: threading.Event | None = None
 
 
 class _AsyncFileWriter:
@@ -155,9 +162,12 @@ class _AsyncFileWriter:
                 append_groups: dict[Path, list[str]] = {}
                 overwrite_ops: list[_FileWriteOp] = []
                 for operation in batch:
-                    if operation.append:
+                    if operation.callback is not None:
+                        operation.callback()
+                    elif operation.append:
                         append_groups.setdefault(operation.path, []).append(operation.text)
-                    else:
+                    elif operation.path != Path():
+                        # sentinel（path 为空 Path()）只是屏障，不落盘
                         overwrite_ops.append(operation)
 
                 for path, lines in append_groups.items():
@@ -166,6 +176,10 @@ class _AsyncFileWriter:
 
                 for operation in overwrite_ops:
                     operation.path.write_text(operation.text, encoding="utf-8")
+
+                for operation in batch:
+                    if operation.done is not None:
+                        operation.done.set()
         except Exception as exc:
             logger.warning(f"Failed to append trace batch: {exc}")
         finally:
@@ -190,6 +204,8 @@ class TraceStore:
     _MAX_WRITTEN_EVENT_KEYS = 10_000
     _shared_writers: dict[str, tuple[_AsyncFileWriter, int]] = {}
     _shared_writers_lock = threading.Lock()
+    # 子智能体会话投影是否已挂到当前 writer（attach_session/reset 维护）
+    _subagent_sessions_attached: bool = False
 
     def __init__(self, workspace_dir: Path | str, *, coara_home: Path | str | None = None):
         self.workspace_dir = Path(workspace_dir)
@@ -460,7 +476,7 @@ class TraceStore:
                 for old_file in files[:to_remove]:
                     old_file.unlink(missing_ok=True)
         except OSError:
-            pass
+            logger.debug("trace detail file pruning failed", exc_info=True)
 
     def _rotate_jsonl_if_needed(self, path: Path) -> None:
         """Rotate JSONL file if it exceeds size cap; keep one backup (.1).
@@ -479,7 +495,7 @@ class TraceStore:
                 backup.unlink(missing_ok=True)
                 path.rename(backup)
         except OSError:
-            pass
+            logger.debug("trace jsonl rotation failed", exc_info=True)
 
     def _build_llm_input_preview(self, llm_input: dict[str, Any]) -> dict[str, Any]:
         preview: dict[str, Any] = {
@@ -659,7 +675,7 @@ class TraceStore:
         self._session_build_msg_idx = len(messages)
         self._session_build_evt_idx = len(events)
 
-        if had_new_data or not getattr(self, "_subagent_sessions_attached", False):
+        if had_new_data or not self._subagent_sessions_attached:
             self._attach_subagent_sessions()
             self._subagent_sessions_attached = True
 

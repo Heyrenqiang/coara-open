@@ -274,6 +274,41 @@ function hBound(msg: Record<string, unknown>): void {
 }
 
 // ---------------------------------------------------------------------------
+// 水位地板 —— _capMessages 裁掉的最旧行（seq 低于当前最小值）被 hydrate 快照
+// 带回时不得复活追加到尾部（中间内容看似消失、随后又在底部冒出的丢数据兼跳变）。
+// ---------------------------------------------------------------------------
+{
+  reset();
+  const s = useStore.getState;
+  // 已被裁剪过的列表：最旧行从 seq=10 起（1-9 已被 _capMessages 丢掉）
+  s().loadHistory(
+    [
+      { role: "user", text: "问10", seq: 10 },
+      { role: "assistant", text: "答10", seq: 11 },
+    ],
+    11,
+  );
+  // hydrate 快照窗口覆盖 seq 1-12：1-9 是被裁掉的历史，10/11 命中既有行，
+  // 12 是新行追加尾部。1-9 绝不得复活。
+  s().loadHistory(
+    [
+      { role: "user", text: "问1", seq: 1 },
+      { role: "assistant", text: "答1", seq: 2 },
+      { role: "user", text: "问5", seq: 5 },
+      { role: "user", text: "问10", seq: 10 },
+      { role: "assistant", text: "答10", seq: 11 },
+      { role: "assistant", text: "答11", seq: 12 },
+    ],
+    12,
+  );
+  const texts = s().messages.map((m) => m.text);
+  assert(
+    texts.join("|") === "问10|答10|答11",
+    `seq floor: capped history must not resurrect at tail, got ${texts.join("|")}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 顺序 —— 无 seq 的乐观用户消息是锚点：后续带 seq 的帧不得把它顶到最下面
 //（用户报的现象：新发消息固定在列表最底，chunk 一直在它上面刷新）
 // ---------------------------------------------------------------------------

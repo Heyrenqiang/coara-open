@@ -50,7 +50,7 @@ async def test_upload_writes_small_file(tmp_path, monkeypatch) -> None:
     response = await server._handle_upload(request)
 
     assert response.status == 200
-    assert (tmp_path / ".coara" / "uploads" / "hello.txt").read_bytes() == b"hello world"
+    assert (tmp_path / "uploads" / "hello.txt").read_bytes() == b"hello world"
 
 
 @pytest.mark.asyncio
@@ -62,7 +62,7 @@ async def test_upload_rejects_oversized_file_and_cleans_partial(tmp_path, monkey
     response = await server._handle_upload(request)
 
     assert response.status == 413
-    assert not (tmp_path / ".coara" / "uploads" / "big.bin").exists()
+    assert not (tmp_path / "uploads" / "big.bin").exists()
 
 
 @pytest.mark.asyncio
@@ -80,7 +80,7 @@ async def test_upload_sanitizes_windows_reserved_and_trailing_dots(tmp_path, mon
     response = await server._handle_upload(request)
 
     assert response.status == 200
-    uploads = tmp_path / ".coara" / "uploads"
+    uploads = tmp_path / "uploads"
     names = {p.name for p in uploads.iterdir()}
     # Reserved names prefixed so they're creatable on Win32
     assert "_CON.txt" in names

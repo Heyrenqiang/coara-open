@@ -68,27 +68,27 @@ class StreamAggregator:
             self.finish_reason = chunk.finish_reason
 
         if chunk.usage:
-            for key, value in chunk.usage.items():
+            for usage_key, value in chunk.usage.items():
                 try:
                     numeric = int(value)
                 except (TypeError, ValueError):
-                    logger.debug(f"Dropping non-numeric usage value: {key}={value!r}")
+                    logger.debug(f"Dropping non-numeric usage value: {usage_key}={value!r}")
                     continue
-                if key == "input_tokens" or key == "prompt_tokens":
+                if usage_key == "input_tokens" or usage_key == "prompt_tokens":
                     self.usage["input_tokens"] = numeric
-                elif key == "output_tokens" or key == "completion_tokens":
+                elif usage_key == "output_tokens" or usage_key == "completion_tokens":
                     # Anthropic/OpenAI stream usage is cumulative on output side.
                     self.usage["output_tokens"] = max(self.usage.get("output_tokens", 0), numeric)
-                elif key == "total_tokens":
+                elif usage_key == "total_tokens":
                     self.usage["total_tokens"] = max(self.usage.get("total_tokens", 0), numeric)
                 else:
-                    self.usage[key] = numeric
+                    self.usage[usage_key] = numeric
 
     def build_response(self, *, wire_blocks: bool = False) -> LLMResponse:
         content = "".join(self.content_parts)
         reasoning_content = "".join(self.reasoning_parts).strip() or None
 
-        tool_calls = []
+        tool_calls: list[ToolCall] = []
         for tc in self.tool_calls.values():
             raw_args = "".join(self._arg_buffers.get(tc.index, [])).strip()
             arguments = parse_tool_call_arguments(raw_args) if raw_args else {}
@@ -108,13 +108,13 @@ class StreamAggregator:
                 provider_content_blocks.append({"type": "thinking", "thinking": reasoning_content})
             if content:
                 provider_content_blocks.append({"type": "text", "text": content})
-            for tc in tool_calls:
+            for tool_call in tool_calls:
                 provider_content_blocks.append(
                     {
                         "type": "tool_use",
-                        "id": tc.id,
-                        "name": tc.name,
-                        "input": tc.arguments,
+                        "id": tool_call.id,
+                        "name": tool_call.name,
+                        "input": tool_call.arguments,
                     }
                 )
         elif reasoning_content and not tool_calls:
@@ -168,11 +168,11 @@ async def collect_stream(
     except Exception as exc:
         # 失败断点信息随异常带出（与 turn_completion 层同一模式）：外层仅在
         # 零 chunk 时才允许整包重试，provider 已返回的部分 usage 供 usage
-        # 收集以 partial 形态入账
-        exc.stream_received_delta = received_delta
-        exc.stream_chunks_seen = chunks_seen
+        # 收集以 partial 形态入账。断点信息动态挂载在异常对象上（读取侧走 getattr）
+        exc.stream_received_delta = received_delta  # type: ignore[attr-defined]
+        exc.stream_chunks_seen = chunks_seen  # type: ignore[attr-defined]
         if aggregator.usage:
-            exc.partial_usage = dict(aggregator.usage)
+            exc.partial_usage = dict(aggregator.usage)  # type: ignore[attr-defined]
         raise
 
     return aggregator.build_response(wire_blocks=wire_blocks)

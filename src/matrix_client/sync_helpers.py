@@ -181,10 +181,10 @@ class MatrixMessageDispatcher:
 
     def schedule(
         self,
-        coro: Awaitable[None],
+        coro: Awaitable[Any],
         *,
         label: str = "matrix-message",
-        on_busy: Callable[[], Awaitable[None]] | None = None,
+        on_busy: Callable[[], Awaitable[Any]] | None = None,
         busy_timeout: float = 120.0,
         session_key: str = "",
     ) -> None:
@@ -223,7 +223,7 @@ class MatrixMessageDispatcher:
 
     def schedule_unlocked(
         self,
-        coro: Awaitable[None],
+        coro: Awaitable[Any],
         *,
         label: str = "matrix-sideband",
     ) -> None:

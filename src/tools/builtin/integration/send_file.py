@@ -12,15 +12,13 @@ from src.tools.builtin.integration.outbound_file import OutboundFileRouter, Outb
 
 class SendFileTool(BaseTool):
     name = "send_file"
-    description = """将文件发送给用户（手机端 或 Web端）
+    description = """将文件发送给用户
 
 注意事项
-- 只在用户有需要的时候发，但是用户在手机端或web端对话时，要求生成某某内容的时候，一般都有需要
-- 工作区内外的本地文件都直接发送，`path` 传绝对路径
-- `target` 默认 `auto`，Web 回合发到浏览器，Matrix/手机回合发到房间；也可显式 `web` / `matrix`
-- 发哪一端由「本条用户消息来自哪一端」决定，不得跨端：本轮来自手机就发手机，来自 Web 就发 Web；
-  某一端发不出去，例如手机端单文件上限 20MB，就如实告诉用户，不要改发另一端
-- 手机端（Matrix）单文件上限 20MB，超过必被拒；给手机发大文件前先确认文件大小
+- 只在情境里有注明手机端或web端的时候发
+- 只在用户有需要的时候发
+- 发手机端有文件大小限制，不能超过20MB，超过20MB的文件不要发
+- 如果回复正文里已经给出了文件的 Markdown 链接，就不要再 send_file，因为用户在终端点击链接也能查看内容
 """
     display_name = "Send File"
     category = "system"
@@ -36,15 +34,6 @@ class SendFileTool(BaseTool):
             "caption": {
                 "type": "string",
                 "description": "随文件附带的说明文字，可选",
-            },
-            "room_id": {
-                "type": "string",
-                "description": "Matrix 房间 ID，可选；传入则强制发到手机端",
-            },
-            "target": {
-                "type": "string",
-                "enum": ["auto", "matrix", "web"],
-                "description": "发送目标，auto 按当前回合路由；matrix=手机；web=浏览器",
             },
         },
         "required": ["path"],
@@ -82,8 +71,6 @@ class SendFileInvocation(ToolInvocation):
         if not raw_path or not isinstance(raw_path, str):
             raise ValueError("path is required")
         self.caption = str(params.get("caption") or "")
-        self.room_id = str(params.get("room_id") or "")
-        self.target = str(params.get("target") or "auto").strip().lower() or "auto"
         self._bridge = bridge
         self._workspace_root = workspace_root
         self.path = self._resolve_path(raw_path)
@@ -99,19 +86,11 @@ class SendFileInvocation(ToolInvocation):
             return ToolResult.error(
                 f"send_file 仅手机端 / Web 端可用，当前端（{source or '本地'}）不支持；请直接以文本回复文件路径。"
             )
-        # 端绑定：只发到本条用户消息来的端，不允许显式跨端（用户明确要求：不能乱发）。
-        if self.target in self._ALLOWED_SOURCES and self.target != source:
-            here = "手机端" if source == "matrix" else "Web 端"
-            return ToolResult.error(
-                f"send_file 只能发到本条用户消息来的端（当前为{here}），不允许跨端发送。"
-                "目标端发不出去就如实告诉用户，不要改发另一端口。"
-            )
         try:
             result = await self._bridge.send_file(
                 self.path,
                 caption=self.caption,
-                room_id=self.room_id,
-                target=self.target,
+                target=source,
                 owner=self._owner(),
             )
         except Exception as exc:

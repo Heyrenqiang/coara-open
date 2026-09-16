@@ -10,7 +10,7 @@ const { Title } = Typography;
  * 统一承载：返回 · 标题 · meta（与标题同行的次要信息）· subline（第二行，如面包屑）· actions。
  * 此前 FileView / ToolView 各自复制了一份相同的头部样式，收敛到此处。
  */
-export interface PageHeaderProps {
+interface PageHeaderProps {
   title: ReactNode;
   /** 与标题同行的次要信息：大小、行数、状态… */
   meta?: ReactNode;

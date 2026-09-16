@@ -24,7 +24,7 @@ def _configured(key: str) -> float | None:
         if value is not None:
             return float(value)
     except Exception:
-        pass
+        pass  # 配置读取回落：有意静默用内置默认（热路径，不记日志）
     return None
 
 

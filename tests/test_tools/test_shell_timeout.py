@@ -8,6 +8,7 @@ BashBackgroundRunner 任务。
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,10 @@ from src.agent.executor import ToolExecutor
 from src.core.types import ToolCall
 from src.tools.builtin.runtime.shell import ShellTool
 from tests.helpers import make_test_coara
+
+# 全文件 PowerShell 命令语义（Start-Sleep / Write-Output / 进程树终止），
+# Linux runner 上 shell 工具路径不同，判据不成立——按平台整文件跳过
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell 专属用例")
 
 
 @pytest.mark.asyncio

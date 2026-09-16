@@ -16,7 +16,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,office]"
 
       - name: Ruff
         run: |

@@ -47,6 +47,17 @@ coara tray            # 无头内核 + 系统托盘
 首次启动若没有可用 API key，会进交互式配置向导。配置样例见
 `config.yaml.example`、`providers.yaml.example` 与 `.env.example`。
 
+## 手机连接（扫码配对）
+
+```
+cd gomatrix && go build -o gomatrix.exe ./cmd/gomatrix   # Linux/mac 去掉 .exe
+coara tray                  # 起内核与托盘
+```
+
+托盘右键「手机连接（二维码）」，手机 App 扫码即连。终端内可用 `/qrcode`
+取同一份二维码。gomatrix 由 coara 托管拉起，无需手动启动；同局域网
+直接可连，远程访问另需 cloudflared（不配不影响局域网配对）。
+
 ## 开发模式
 
 内核按可编辑模式安装，改 Python 代码即时生效，不用重装：

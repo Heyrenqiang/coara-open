@@ -4,8 +4,6 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-**真正能干活的全栈 AI Agent 内核** —— 自托管、多智能体、三端协同的个人 AI 助手运行时。Python 3.11+ / asyncio。
-
 [官网](https://coara.top) · [使用文档](https://coara.top/docs.html) · [贡献指南](CONTRIBUTING.md)
 
 ## coara 是什么
@@ -18,7 +16,7 @@ coara 是一个常驻的无头内核（headless kernel）：内核里跑着多�
 |------|------|
 | 内核 | 回合编排、会话生命周期、输出路由、端注册表、子智能体委派 |
 | 端 | CLI（终端）· Web UI（浏览器）· Matrix（手机 App / 桌面） |
-| 能力 | 内置工具 · 技能加载 · 多智能体 · 工作流编排 · 事件源 · 宝箱加密存储 |
+| 能力 | 内置工具 · 技能加载 · 多智能体 · 工作流编排 · 事件源 |
 | 数据 | 全在自己机器上，模型服务商自由切换 |
 
 ## 功能特性
@@ -27,7 +25,6 @@ coara 是一个常驻的无头内核（headless kernel）：内核里跑着多�
 - **多智能体并行** — 主助手按需创建子智能体分头推进，前台/后台委派
 - **工作流编排** — 画布编排节点，定时、文件变化、webhook 触发执行（独立引擎 `wdl/`）
 - **技能系统** — 面向模型的运行时指令包，按需发现、激活、组合
-- **宝箱加密** — scrypt + AES-GCM 的本地加密存储，凭据与文档安全落盘
 - **自托管** — 一键安装，不依赖任何云服务，数据不出本机
 
 ## 快速开始

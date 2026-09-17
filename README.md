@@ -32,30 +32,15 @@ coara 是一个常驻的无头内核（headless kernel）：内核里跑着多�
 
 ## 快速开始
 
-### 一键安装（推荐）
-
-```powershell
-# Windows
-irm https://coara.top/install.ps1 | iex
-```
-
-```bash
-# Linux / macOS
-curl -fsSL https://coara.top/install.sh | bash
-```
-
-### 从源码运行
-
 ```bash
 git clone https://github.com/Heyrenqiang/coara-open.git
 cd coara-open
 pip install -e ".[dev]"
 
-coara            # 拉起常驻内核并接入终端
-coara status     # 查看运行时状态
+coara
 ```
 
-首次启动若无可用 API key，会进入交互式配置向导。配置样例见 `config.yaml.example`、`providers.yaml.example` 与 `.env.example`。
+一条 `coara` 命令拉起常驻内核并接入终端，gomatrix 手机接入层由内核自动托管拉起。首次启动若无可用 API key，会进入交互式配置向导。配置样例见 `config.yaml.example`、`providers.yaml.example` 与 `.env.example`。
 
 Web UI 需要先构建前端（Node 18+）：
 
@@ -67,12 +52,7 @@ npm run build    # 产物落到 src/ui/static/dist
 
 ## 手机连接（扫码配对）
 
-```bash
-cd gomatrix && go build -o gomatrix ./cmd/gomatrix   # Windows: -o gomatrix.exe
-coara tray   # 起内核与系统托盘
-```
-
-托盘右键「手机连接（二维码）」，手机 App 扫码即连。gomatrix 由 coara 托管拉起，无需手动启动；同局域网直接可连。
+gomatrix 由内核自动托管拉起，无需手动编译或启动。托盘右键「手机连接（二维码）」，手机 App 扫码即连，同局域网直接可连。
 
 ## 架构速览
 

@@ -1,0 +1,874 @@
+/* React Flow base styles — must be imported before our overrides */
+@import '@xyflow/react/dist/style.css';
+
+/* Workflow canvas styles — powered by design tokens from theme.ts */
+
+/* Custom node — 圆形智能体节点：圆面只放类型图标，标题/摘要外置 */
+.custom-node {
+  background: var(--wf-color-bg);
+  border: 1.5px solid var(--wf-color-border-strong);
+  border-radius: 50%;
+  box-shadow: var(--wf-shadow-node);
+  color: var(--wf-color-text);
+  font-family: var(--wf-font-family);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Handle 半出圆面，不能裁切 */
+  overflow: visible;
+}
+
+.custom-node:hover {
+  box-shadow: var(--wf-shadow-node-hover);
+  transform: translateY(-1px);
+}
+
+/* 圆面图标按节点类型着语义色 */
+.node-circle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wf-color-text-tertiary);
+  pointer-events: none;
+}
+.custom-node.node-type-agent { border-color: var(--wf-color-node-run-accent); }
+.custom-node.node-type-agent .node-circle-icon { color: var(--wf-color-node-run-accent); }
+
+/* 选中态：用节点自身强调色做光环，而非统一蓝色。
+   光环色 = accent 的低 alpha 派生（见 theme.ts color.node.*-ring）。 */
+.custom-node.node-type-agent.selected { border-color: var(--wf-color-node-run-accent); box-shadow: 0 0 0 3px var(--wf-color-node-run-ring); }
+
+/* routes=one 的节点：标题右侧小标签（用智能体语义色，避免引用已删令牌） */
+.node-routes-tag {
+  margin-left: 6px;
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 14px;
+  font-weight: 600;
+  border-radius: 3px;
+  color: var(--wf-color-node-run-accent);
+  background: var(--wf-color-node-run-subtle);
+}
+
+/* NodeResizer — 四边线 + 角点，选中后可拖边改大小 */
+.react-flow__resize-control {
+  position: absolute;
+}
+.react-flow__resize-control.handle {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--wf-color-border-strong);
+  border-radius: 2px;
+  background: var(--wf-color-bg);
+  z-index: 10;
+  transition: all 0.12s ease;
+}
+.react-flow__resize-control.handle:hover {
+  border-color: var(--wf-color-brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wf-color-brand) 20%, transparent);
+}
+.react-flow__resize-control.line {
+  border-color: transparent;
+  border-width: 2px;
+  z-index: 9;
+}
+.react-flow__resize-control.line:hover {
+  border-color: var(--wf-color-brand);
+}
+.react-flow__node.selected .react-flow__resize-control.line.left,
+.react-flow__node.selected .react-flow__resize-control.line.right {
+  cursor: col-resize;
+}
+.react-flow__node.selected .react-flow__resize-control.line.top,
+.react-flow__node.selected .react-flow__resize-control.line.bottom {
+  cursor: row-resize;
+}
+/* 子节点在容器内的样式微调（避免被父容器遮挡） */
+.react-flow__node[style*="position"] {
+  z-index: 5;
+}
+
+.node-step-id { font-size: var(--wf-font-size-xs); color: var(--wf-color-text-tertiary); font-family: var(--wf-font-mono); }
+
+/* 节点标题在圆上方居中（外置，不占圆面） */
+.custom-node .node-title-external {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(100% + 6px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  max-width: 220px;
+  font-size: var(--wf-font-size-sm);
+  font-weight: 600;
+  color: var(--wf-color-text);
+  white-space: nowrap;
+  pointer-events: none;
+  line-height: 1.2;
+}
+.node-title-external-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 任务摘要在圆下方居中：最多两行，超出省略（全文见 title 悬浮） */
+.custom-node .node-desc-external {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: calc(100% + 6px);
+  width: 176px;
+  text-align: center;
+  font-size: var(--wf-font-size-xs);
+  color: var(--wf-color-text-secondary);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  pointer-events: none;
+}
+.custom-node .node-desc-muted {
+  color: var(--wf-color-text-tertiary);
+}
+
+/* Node status badge */
+.node-status-badge {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--wf-radius-pill);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white; /* 固定白字：badge 背景为饱和状态色，深色模式下同样需要白字作反色 */
+  border: 2px solid var(--wf-color-bg);
+  z-index: 5;
+  pointer-events: all;
+  box-shadow: var(--wf-shadow-card);
+  font-size: 10px;
+}
+.node-status-badge span { display: flex; align-items: center; justify-content: center; }
+
+/* Node toolbar (hover actions) */
+.node-toolbar {
+  position: absolute;
+  top: -46px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  background: var(--wf-color-bg);
+  border: 1px solid var(--wf-color-border);
+  border-radius: var(--wf-radius-md);
+  padding: 3px;
+  box-shadow: var(--wf-shadow-dropdown);
+  z-index: 10;
+}
+.node-toolbar-btn {
+  background: transparent;
+  border: none;
+  color: var(--wf-color-text-secondary);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: var(--wf-radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+.node-toolbar-btn:hover { background: var(--wf-color-surface-hover); color: var(--wf-color-text); }
+.node-toolbar-btn-danger:hover { background: var(--wf-color-error-subtle); color: var(--wf-color-error); }
+.node-toolbar-btn-icon { display: flex; }
+
+/* Handles — 按角度落在圆周上（CanvasNode 内联 left/top + translate(-50%,-50%) 定位）。
+   数据口空心=未绑定上游，实心（port-bound）=已绑定；执行口始终实心。 */
+.handle-exec { background: var(--wf-color-text-tertiary); border: 2px solid var(--wf-color-bg); width: 10px; height: 10px; }
+.handle-data { background: var(--wf-color-bg); border: 2px solid var(--wf-color-brand); width: 9px; height: 9px; }
+.handle-data.port-bound { background: var(--wf-color-brand); }
+
+/* Config panel fields — 配置页偏紧凑 */
+.config-field { margin-bottom: 8px; }
+.config-label {
+  display: block;
+  font-size: 11px;
+  color: var(--wf-color-text-secondary);
+  margin-bottom: 2px;
+  font-weight: 500;
+}
+.config-input {
+  width: 100%;
+  background: var(--wf-color-surface);
+  border: 1px solid var(--wf-color-border);
+  border-radius: var(--wf-radius-sm);
+  color: var(--wf-color-text);
+  padding: 5px 8px;
+  font-size: var(--wf-font-size-sm);
+  font-family: var(--wf-font-family);
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.config-input:focus { border-color: var(--wf-color-focus); box-shadow: 0 0 0 2px var(--wf-color-focus-ring); }
+.config-input[readonly] { color: var(--wf-color-text-tertiary); cursor: default; }
+.config-textarea { resize: vertical; min-height: 52px; font-family: var(--wf-font-mono); }
+.config-hint { font-size: 10px; color: var(--wf-color-text-tertiary); margin-top: 2px; }
+.config-error { font-size: 10px; color: var(--wf-color-error); margin-top: 2px; }
+.config-field-error .config-input { border-color: var(--wf-color-error); }
+
+/* Chip list field (tools/skills editor) — 紧凑 */
+.chip-list-field { display: flex; flex-direction: column; gap: 4px; }
+.chip-list-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-height: 0;
+}
+.chip-list-items:empty { display: none; }
+.chip-list-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--wf-color-surface);
+  border: 1px solid var(--wf-color-border);
+  color: var(--wf-color-text-secondary);
+  border-radius: var(--wf-radius-sm);
+  padding: 1px 6px;
+  font-size: 11px;
+  font-family: var(--wf-font-mono);
+  line-height: 1.4;
+}
+.chip-list-remove {
+  background: none;
+  border: none;
+  color: var(--wf-color-text-tertiary);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+}
+.chip-list-remove:hover { color: var(--wf-color-error); }
+.chip-list-input-wrap { position: relative; }
+.chip-list-input { padding-right: 8px; padding-top: 4px; padding-bottom: 4px; }
+.chip-list-suggestions {
+  position: absolute;
+  left: 0; right: 0; top: 100%;
+  z-index: 20;
+  margin: 4px 0 0;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--wf-color-bg);
+  border: 1px solid var(--wf-color-border-strong);
+  border-radius: var(--wf-radius-sm);
+  list-style: none;
+  box-shadow: var(--wf-shadow-dropdown);
+  padding: 0;
+}
+.chip-list-suggestion {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: var(--wf-font-mono);
+  color: var(--wf-color-text);
+  cursor: pointer;
+}
+.chip-list-suggestion:hover { background: var(--wf-color-surface-hover); }
+
+/* Config panel section groups — 扁平紧凑 */
+.config-section {
+  border: none;
+  border-radius: 0;
+  margin: 0 0 8px;
+  overflow: visible;
+  border-bottom: 1px solid var(--wf-color-border);
+  padding-bottom: 8px;
+}
+.config-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.config-section-header {
+  background: transparent;
+  padding: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--wf-color-text-secondary);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.config-section-header:hover { color: var(--wf-color-text); }
+.config-section-body { padding: 0; }
+.config-section-collapsed .config-section-body { display: none; }
+.config-section-toggle { font-size: 10px; transition: transform 0.12s; }
+.config-section-collapsed .config-section-toggle { transform: rotate(-90deg); }
+
+/* React Flow overrides */
+.react-flow__node { border: none !important; background: transparent !important; }
+.react-flow__handle { opacity: 0; transition: opacity 0.15s, transform 0.15s; }
+.react-flow__node:hover .react-flow__handle,
+.react-flow__node.selected .react-flow__handle { opacity: 1; }
+.react-flow__handle:hover { transform: scale(1.2); }
+
+/* 边的视觉分化：执行流=实线中性灰，数据流=虚线品牌蓝并带流动动画。
+   两类流向在画布上一眼可辨，符合 n8n / Dify 的工作流可视化惯例。 */
+.react-flow__edge-path { stroke: var(--wf-color-text-tertiary); stroke-width: 1.5; }
+.react-flow__edge.edge-exec .react-flow__edge-path { stroke: var(--wf-color-text-tertiary); stroke-width: 1.5; }
+.react-flow__edge.edge-data-flow .react-flow__edge-path {
+  stroke: var(--wf-color-brand);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+}
+.react-flow__edge.edge-data-flow.animated .react-flow__edge-path {
+  animation: wf-dash-flow 0.8s linear infinite;
+}
+@keyframes wf-dash-flow { to { stroke-dashoffset: -14; } }
+
+/* on=error 的内核边：红色虚线 + "error" 小标签（重试/兜底路由） */
+.react-flow__edge.edge-exec-error .react-flow__edge-path {
+  stroke: var(--wf-color-error);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
+}
+.react-flow__edge.edge-exec-error .react-flow__edge-textbg {
+  fill: var(--wf-color-bg);
+}
+
+.routable-waypoint {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--wf-color-bg);
+  border: 2px solid var(--wf-color-brand);
+  cursor: grab;
+  z-index: 1000;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+.routable-waypoint:active {
+  cursor: grabbing;
+}
+.routable-waypoint.selected {
+  background: var(--wf-color-brand);
+  border-color: var(--wf-color-bg);
+}
+.routable-edge-hit {
+  cursor: grab !important;
+}
+.routable-edge-hit:active {
+  cursor: grabbing !important;
+}
+.routable-edge-hint {
+  font-size: 10px;
+  color: var(--wf-color-text-tertiary);
+  white-space: nowrap;
+  background: var(--wf-color-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  opacity: 0.9;
+  border: 1px solid var(--wf-color-border);
+}
+
+.react-flow__edge.selected .react-flow__edge-path { stroke: var(--wf-color-brand); stroke-width: 2; }
+
+/* Selected data edge: full-route trace so bundled/merged corridors remain
+   attributable — soft glow underlay + marching dashes flowing source→target. */
+.routable-edge-highlight {
+  fill: none;
+  stroke: var(--wf-color-brand);
+  stroke-width: 6;
+  opacity: 0.22;
+  pointer-events: none;
+}
+.routable-edge-highlight-flow {
+  fill: none;
+  stroke: var(--wf-color-brand);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 10 8;
+  animation: wf-edge-flow 0.7s linear infinite;
+  pointer-events: none;
+}
+@keyframes wf-edge-flow { to { stroke-dashoffset: -18; } }
+.react-flow__edge-textbg { fill: var(--wf-color-bg); }
+.react-flow__edge-text { fill: var(--wf-color-brand); font-size: 10px; }
+
+.react-flow__controls button {
+  background: var(--wf-color-bg);
+  color: var(--wf-color-text);
+  border-color: var(--wf-color-border);
+  border-radius: var(--wf-radius-sm);
+}
+.react-flow__controls button:hover { background: var(--wf-color-surface-hover); }
+.react-flow__minimap { background: var(--wf-color-surface); width: 100px !important; height: 72px !important; border: 1px solid var(--wf-color-border); border-radius: var(--wf-radius-md); }
+.react-flow__minimap-mask { fill: var(--wf-color-border-strong); }
+
+.node-io-line { margin-top: 6px; font-size: 10px; color: var(--wf-color-brand); }
+
+/* Expression field */
+.expr-field { margin-bottom: var(--wf-spacing-3); }
+.expr-field label {
+  display: block;
+  font-size: var(--wf-font-size-xs);
+  color: var(--wf-color-text-secondary);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+.expr-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.expr-chip {
+  background: var(--wf-color-brand-subtle);
+  border: 1px solid var(--wf-color-brand-border);
+  color: var(--wf-color-brand);
+  border-radius: var(--wf-radius-pill);
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--wf-font-mono);
+  cursor: pointer;
+}
+.expr-chip:hover { background: var(--wf-color-brand); color: white; }
+.expr-input-wrap { position: relative; }
+.expr-input-wrap input,
+.expr-input-wrap textarea {
+  width: 100%;
+  background: var(--wf-color-surface);
+  border: 1px solid var(--wf-color-border);
+  border-radius: var(--wf-radius-sm);
+  color: var(--wf-color-text);
+  padding: 6px 8px;
+  font-size: var(--wf-font-size-sm);
+  font-family: var(--wf-font-mono);
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.expr-input-wrap input:focus,
+.expr-input-wrap textarea:focus {
+  border-color: var(--wf-color-focus);
+  box-shadow: 0 0 0 2px var(--wf-color-focus-ring);
+}
+.expr-input-wrap textarea { resize: vertical; min-height: 60px; }
+.expr-dropdown {
+  position: absolute;
+  left: 0; right: 0; top: 100%;
+  z-index: 20;
+  margin: 4px 0 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--wf-color-bg);
+  border: 1px solid var(--wf-color-border-strong);
+  border-radius: var(--wf-radius-sm);
+  list-style: none;
+  box-shadow: var(--wf-shadow-dropdown);
+  padding: 0;
+}
+.expr-dropdown-item {
+  padding: 6px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--wf-color-border);
+}
+.expr-dropdown-item:last-child { border-bottom: none; }
+.expr-dropdown-item.active { background: var(--wf-color-surface-hover); }
+.expr-dropdown-item:hover { background: var(--wf-color-surface-hover); }
+.expr-dd-template { font-family: var(--wf-font-mono); color: var(--wf-color-brand); }
+.expr-dd-group { color: var(--wf-color-text-tertiary); font-size: 10px; }
+.expr-hint { font-size: 10px; color: var(--wf-color-text-tertiary); margin-top: 3px; }
+
+/* Form helpers */
+.form-group { margin-bottom: var(--wf-spacing-3); }
+.form-group label {
+  display: block;
+  font-size: var(--wf-font-size-xs);
+  color: var(--wf-color-text-secondary);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+.form-group input,
+.form-group textarea,
+.form-group select {
+  width: 100%;
+  background: var(--wf-color-surface);
+  border: 1px solid var(--wf-color-border);
+  border-radius: var(--wf-radius-sm);
+  color: var(--wf-color-text);
+  padding: 6px 8px;
+  font-size: var(--wf-font-size-sm);
+  outline: none;
+}
+.form-group-static {
+  font-size: var(--wf-font-size-sm);
+  color: var(--wf-color-text-secondary);
+  line-height: 1.5;
+}
+.form-hint {
+  font-size: 11px;
+  color: var(--wf-color-text-tertiary);
+  margin: var(--wf-spacing-2) 0;
+  line-height: 1.5;
+}
+.empty-state {
+  padding: var(--wf-spacing-5);
+  text-align: center;
+  color: var(--wf-color-text-tertiary);
+  font-size: var(--wf-font-size-sm);
+}
+
+/* Editor layout */
+.workflow-editor-root:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  background: var(--wf-color-bg);
+}
+.workflow-editor-root::backdrop {
+  background: var(--wf-color-bg);
+}
+
+.editor-inner-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--wf-color-surface);
+  border-bottom: 1px solid var(--wf-color-border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.editor-inner-toolbar .spacer { flex: 1; }
+/* 工具栏按钮全部走 antd 原生主题（ConfigProvider 已对齐 brand 色），
+   不再用裸 CSS 覆盖。 */
+
+.app-body { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.canvas-area { width: 100%; height: 100%; }
+
+/* 长文本 Tag（运行错误等）截断，完整内容在 Tooltip 里 */
+.toolbar-tag-ellipsis {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Activity bar */
+.activity-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 40px;
+  background: var(--wf-color-surface);
+  border-right: 1px solid var(--wf-color-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 8px;
+  gap: 4px;
+  z-index: 20;
+}
+.activity-item {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: var(--wf-radius-sm);
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--wf-color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+.activity-item:hover { background: var(--wf-color-surface-hover); color: var(--wf-color-text); }
+.activity-item.active { background: var(--wf-color-brand-subtle); color: var(--wf-color-brand); }
+
+/* Floating side panels — docked flush */
+.side-panel-floating {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--wf-color-bg);
+  border: none;
+  box-shadow: none;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+.side-left {
+  left: 40px;
+  border-right: 1px solid var(--wf-color-border);
+}
+.side-right {
+  right: 0;
+  border-left: 1px solid var(--wf-color-border);
+}
+/* edge-resize：热区在面板内侧贴边，保证能收到 hover / 拖拽 */
+.panel-edge-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 50;
+  touch-action: none;
+  pointer-events: auto;
+  background: transparent;
+}
+.panel-edge-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.panel-edge-resize-w {
+  left: 0;
+  width: 10px;
+  cursor: col-resize;
+}
+.panel-edge-resize-w::after {
+  left: 0;
+}
+.panel-edge-resize-e {
+  right: 0;
+  width: 10px;
+  cursor: col-resize;
+}
+.panel-edge-resize-e::after {
+  right: 0;
+}
+.panel-edge-resize:hover::after,
+.panel-edge-resize:active::after {
+  background: var(--wf-color-brand);
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--wf-color-border);
+  font-size: var(--wf-font-size-sm);
+  font-weight: 600;
+  color: var(--wf-color-text);
+  flex-shrink: 0;
+}
+.panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--wf-spacing-3);
+}
+/*
+ * 配置面板：不要给 .node-config-panel / .config-section 套左右 padding，
+ * 否则分隔线缩进，看起来像套了一层隐形框。
+ * 通栏画线，文字/控件自己内缩。
+ */
+.config-panel-container .panel-scroll {
+  padding: 8px 0;
+}
+.config-panel-container .node-config-panel {
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+}
+.config-panel-container .panel-scroll > .form-group,
+.config-panel-container .panel-scroll > .form-hint,
+.config-panel-container .panel-scroll > .config-meta-grid,
+.config-panel-container .node-config-panel > .form-hint,
+.config-panel-container .node-config-panel > .form-group,
+.config-panel-container .config-section-header,
+.config-panel-container .config-section-body > .config-field,
+.config-panel-container .config-section-body > .form-group,
+.config-panel-container .config-section-body > .form-hint,
+.config-panel-container .config-section-body > .expr-field {
+  padding-left: 12px;
+  padding-right: 12px;
+  box-sizing: border-box;
+}
+
+.config-panel-container .config-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 8px;
+  margin-bottom: 8px;
+}
+.config-panel-container .config-meta-grid .form-group {
+  margin-bottom: 0;
+}
+.config-panel-container .config-meta-desc {
+  grid-column: 1 / -1;
+}
+.config-panel-container .config-meta-grid label {
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+.config-panel-container .config-meta-grid input,
+.config-panel-container .config-meta-grid select {
+  padding: 5px 8px;
+}
+.config-panel-container .config-step-id {
+  margin: 4px 0 0;
+  font-size: 10px;
+  font-family: var(--wf-font-mono);
+  color: var(--wf-color-text-tertiary);
+}
+.config-panel-container .form-hint {
+  margin: 4px 0 8px;
+  font-size: 10px;
+}
+.config-panel-container .form-group {
+  margin-bottom: 8px;
+}
+.config-panel-container .config-field {
+  margin-bottom: 8px;
+}
+.config-panel-container .config-field-nolabel {
+  margin-bottom: 6px;
+}
+.config-panel-container .config-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+.config-panel-container .config-inline-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.config-panel-container .config-inline-row label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--wf-color-text-secondary);
+}
+.config-panel-container .config-inline-row .config-input {
+  width: 100%;
+  padding: 5px 8px;
+}
+.config-panel-container .config-section-body > .config-field .config-label {
+  margin-bottom: 2px;
+}
+.config-panel-container .chip-list-field .config-input {
+  padding: 4px 8px;
+}
+.config-panel-container .expr-field {
+  margin-bottom: 6px;
+}
+.config-panel-container .expr-field label {
+  margin-bottom: 2px;
+}
+
+.config-panel-container .config-section {
+  padding-left: 0;
+  padding-right: 0;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* Palette items */
+.palette-panel .panel-scroll { padding: 8px; }
+.palette-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--wf-radius-sm);
+  cursor: grab;
+  transition: background 0.12s;
+  margin-bottom: 4px;
+}
+.palette-item:hover { background: var(--wf-color-surface-hover); }
+.palette-item:active { cursor: grabbing; }
+.palette-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--wf-radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+/* 节点类型浅底 + 强调色文字，与画布 .node-icon 同一组 token */
+.palette-icon-agent { background: var(--wf-color-node-run-subtle); color: var(--wf-color-node-run-accent); }
+.palette-text-wrap { flex: 1; min-width: 0; }
+.palette-text { font-size: var(--wf-font-size-sm); font-weight: 600; color: var(--wf-color-text); }
+.palette-desc { font-size: 10px; color: var(--wf-color-text-tertiary); margin-top: 2px; }
+
+/* WDL panel */
+.wdl-panel .panel-scroll { display: flex; flex-direction: column; padding: 0; }
+.wdl-status-bar {
+  padding: 6px 10px;
+  font-size: var(--wf-font-size-xs);
+  border-bottom: 1px solid var(--wf-color-border);
+  flex-shrink: 0;
+}
+.wdl-status-ok { color: var(--wf-color-success); background: var(--wf-color-success-subtle); }
+.wdl-status-error { color: var(--wf-color-error); background: var(--wf-color-error-subtle); }
+.wdl-status-warning { color: var(--wf-color-warning); background: var(--wf-color-warning-subtle); }
+.wdl-textarea {
+  flex: 1;
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 10px;
+  font-family: var(--wf-font-mono);
+  font-size: var(--wf-font-size-sm);
+  background: var(--wf-color-bg);
+  color: var(--wf-color-text);
+  min-height: 200px;
+}
+
+/* Config panel container */
+.config-panel-container {
+  overflow: visible;
+}
+
+/* Help panel */
+.help-panel h3 { font-size: var(--wf-font-size-md); margin: 0 0 var(--wf-spacing-2); }
+.help-panel h3:not(:first-child) { margin-top: var(--wf-spacing-4); }
+.help-panel .form-hint div { margin-bottom: 2px; }
+.help-glyph-row { display: flex; align-items: center; gap: 6px; }
+
+/* 节点 WDL 源码预览（Modal 内只读 <pre>） */
+.wdl-source-preview {
+  max-height: 400px;
+  overflow: auto;
+  margin: 0;
+  background: var(--wf-color-surface);
+  border: 1px solid var(--wf-color-border);
+  border-radius: var(--wf-radius-sm);
+  padding: var(--wf-spacing-3);
+  font-family: var(--wf-font-mono);
+  font-size: var(--wf-font-size-sm);
+  line-height: 1.5;
+  color: var(--wf-color-text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Generic buttons */
+.btn-ghost {
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.btn-ghost:hover { background: var(--wf-color-surface-hover); }
+.btn-small { font-size: var(--wf-font-size-xs); padding: 2px 6px; }

@@ -1,0 +1,7 @@
+agent:
+  name: janitor
+  role: 工作空间管家，负责概况维护与记录沉淀
+  # 工具表不在此裁剪：装配时与父会话完全一致（一个不加、一个不减）
+  tools:
+    include: ["*"]
+    exclude: []

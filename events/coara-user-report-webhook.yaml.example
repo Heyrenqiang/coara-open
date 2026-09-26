@@ -1,0 +1,30 @@
+# Developer machine: receive end-user `/report` POSTs into local workspace 「用户反馈」.
+# Copy to <workspace>/.coara/matters/definitions/coara-user-report.yaml（workspace = 下方 workspace 字段登记的空间）
+#
+# Prerequisites:
+#   coara ws add <path> --name 用户反馈
+#   Named Cloudflare tunnel → events.webhook_port
+#   Bake URL into src/coara/report_defaults.py before shipping to end users
+#
+# End users do NOT configure report.webhook_url.
+
+id: coara-user-report
+enabled: true
+kind: webhook
+workspace: 用户反馈
+
+webhook_secret: change-me-in-production
+
+# salience: low / normal / high（high 上浮前台待处理视图）
+# handle:   park（默认，挂住等用户）/ janitor（叫醒管家过目）
+# 旧 trigger_mode 已废弃并被忽略；处置模式只写 handle（缺省 park）
+salience: normal
+handle: park
+priority: normal
+cooldown_seconds: 5
+
+routing_domain: coara-product
+suggested_delegate: coaras
+
+message_template: |
+  {{details}}

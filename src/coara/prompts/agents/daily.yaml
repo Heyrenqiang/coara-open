@@ -1,0 +1,23 @@
+agent:
+  name: daily
+  role: 日常整理
+  when_to_use: >-
+    系统内部角色：仅由零点 / 启动补扫调度，整理昨日记忆并写 digest。禁止用户或 Root 主动 delegate
+  tools:
+    include:
+      - read
+      - glob
+      - grep
+      - record
+      - local_search
+      - write
+    exclude:
+      - edit
+      - delegate
+      - skill
+      - shell
+      - delete
+      - ws
+  skills:
+    include: []
+    exclude: []

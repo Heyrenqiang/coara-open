@@ -1,0 +1,569 @@
+"""Tests for WebUI settings-handlers CRUD endpoints.
+
+覆盖：reminders / event-sources / workspaces 的 CRUD 与 token 守卫，
+events 写后 reload，路径注入防护。
+"""
+
+from __future__ import annotations
+
+import socket
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+import yaml
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+
+from src.ui.settings_handlers import SettingsHandlers
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _make_app(handlers: SettingsHandlers) -> web.Application:
+    app = web.Application()
+    handlers.register_routes(app.router)
+    return app
+
+
+def _make_root_stub(tmp_path: Path) -> Any:
+    """构造一个 RootCoara-形状的 stub，含 reminders / event-sources / workspaces。"""
+
+    # ---------- reminder_service ----------
+    reminders: dict[str, dict[str, Any]] = {}
+
+    class _Reminder:
+        async def add_one_time_reminder(self, message, *, minutes=0, hours=0, days=0):
+            rid = f"once-{len(reminders)}"
+            reminders[rid] = {"id": rid, "message": message, "enabled": True, "kind": "one_time"}
+            return f"created {rid}"
+
+        async def add_interval_reminder(self, message, *, minutes=0, hours=0, days=0):
+            rid = f"int-{len(reminders)}"
+            reminders[rid] = {"id": rid, "message": message, "enabled": True, "kind": "interval"}
+            return f"created {rid}"
+
+        async def add_cron_reminder(self, cron, message):
+            rid = f"cron-{len(reminders)}"
+            reminders[rid] = {
+                "id": rid,
+                "message": message,
+                "cron": cron,
+                "enabled": True,
+                "kind": "cron",
+            }
+            return f"created {rid}"
+
+        async def list_reminders(self):
+            return list(reminders.values())
+
+        async def remove_reminder(self, rid):
+            if rid not in reminders:
+                return f"missing {rid}"
+            del reminders[rid]
+            return f"deleted {rid}"
+
+        async def set_reminder_enabled(self, rid, enabled):
+            if rid not in reminders:
+                raise ValueError(f"找不到 Reminder: {rid}")
+            reminders[rid]["enabled"] = enabled
+            return f"{'enabled' if enabled else 'disabled'} {rid}"
+
+    # ---------- event_source_manager ----------
+    es_loaded: dict[str, dict[str, Any]] = {}
+    reload_calls: list[int] = []
+
+    class _EsManager:
+        def list_status(self):
+            return [
+                {"id": eid, "enabled": meta.get("enabled", True), "kind": meta.get("kind")}
+                for eid, meta in es_loaded.items()
+            ]
+
+        async def reload(self):
+            reload_calls.append(len(reload_calls))
+            es_loaded.clear()
+            # 空间自治布局：扫各工作空间 .coara/matters/definitions/
+            for w in workspaces.values():
+                dir_path = Path(w["path"]) / ".coara" / "matters" / "definitions"
+                for p in sorted(dir_path.glob("*.yaml")):
+                    with p.open(encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+                    es_loaded[data["id"]] = data
+
+    # ---------- workspace_manager ----------
+    workspaces: dict[str, dict[str, Any]] = {}
+
+    class _Entry:
+        """模拟 WorkspaceEntry：resolved_path 是方法（不进 vars 序列化）。
+        kind/status 用真枚举——handler 侧按 .value 与枚举比较取值。"""
+
+        def __init__(self, w: dict[str, Any]):
+            from src.workspace.types import WorkspaceKind, WorkspaceStatus
+
+            self.id = w["id"]
+            self.name = w["name"]
+            self.path = w["path"]
+            self.kind = WorkspaceKind(w["kind"]) if not isinstance(w["kind"], WorkspaceKind) else w["kind"]
+            self.summary = w["summary"]
+            self.tags = w["tags"]
+            self.status = WorkspaceStatus(w["status"]) if not isinstance(w["status"], WorkspaceStatus) else w["status"]
+            self.home_view = w.get("home_view") or ""
+
+        def resolved_path(self) -> Path:
+            return Path(self.path)
+
+    class _Registry:
+        document = SimpleNamespace(default_workspace=None)
+
+        @staticmethod
+        def _entry_obj(w: dict[str, Any]) -> _Entry:
+            return _Entry(w)
+
+        def list_active(self):
+            return [self._entry_obj(w) for w in workspaces.values()]
+
+        def resolve_name_or_id(self, identifier: str):
+            for w in workspaces.values():
+                if w["id"] == identifier or w["name"] == identifier:
+                    return self._entry_obj(w)
+            return None
+
+    class _WsManager:
+        registry = _Registry()
+        coara_home = tmp_path
+
+        def list_workspaces(self):
+            return [self.registry._entry_obj(w) for w in workspaces.values()]
+
+        def add_workspace(self, path, *, name=None, summary=None):
+            wid = f"ws-{len(workspaces)}"
+            chosen = name or path.name
+            entry = {
+                "id": wid,
+                "name": chosen,
+                "path": str(path),
+                "kind": "normal",
+                "summary": summary or "",
+                "tags": [],
+                "status": "active",
+            }
+            workspaces[wid] = entry
+            if _WsManager.registry.document.default_workspace is None:
+                _WsManager.registry.document.default_workspace = wid
+            return SimpleNamespace(**entry)
+
+        def remove_workspace(self, wid):
+            if wid not in workspaces:
+                return False
+            del workspaces[wid]
+            if _WsManager.registry.document.default_workspace == wid:
+                _WsManager.registry.document.default_workspace = next(iter(workspaces), None)
+            return True
+
+        def rename_workspace(self, wid, new_name):
+            if wid not in workspaces:
+                return None
+            workspaces[wid]["name"] = new_name
+            return SimpleNamespace(**workspaces[wid])
+
+        def set_persistent_default(self, wid):
+            if wid not in workspaces:
+                return False
+            _WsManager.registry.document.default_workspace = wid
+            return True
+
+    return SimpleNamespace(
+        reminder_service=_Reminder(),
+        event_source_manager=_EsManager(),
+        workspace_manager=_WsManager(),
+        _sessions={},
+        _fixtures=SimpleNamespace(
+            tmp_path=tmp_path,
+            reminders=reminders,
+            es_loaded=es_loaded,
+            reload_calls=reload_calls,
+            workspaces=workspaces,
+        ),
+    )
+
+
+@pytest.fixture
+def settings_env(tmp_path: Path):
+    """构造 handlers + app，coara_home 落在 tmp_path。"""
+    coara_home = tmp_path
+    root = _make_root_stub(coara_home)
+    handlers = SettingsHandlers(
+        workspace_dir=tmp_path,
+        coara_home=coara_home,
+        root=root,
+    )
+    app = _make_app(handlers)
+    return handlers, app, root
+
+
+# ----------------------------------------------------------------------
+# token 守卫
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_routes_require_token(settings_env) -> None:
+    _, app, _ = settings_env
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/v1/reminders")
+        assert resp.status == 401
+
+
+# ----------------------------------------------------------------------
+# Reminders
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reminders_crud(settings_env) -> None:
+    handlers, app, _ = settings_env
+    token = handlers.auth_token
+
+    async with TestClient(TestServer(app)) as client:
+        # one_time
+        r1 = await client.post(
+            f"/api/v1/reminders?token={token}",
+            json={"kind": "one_time", "message": "喝水", "minutes": 30},
+        )
+        assert r1.status == 200, await r1.text()
+        # interval
+        r2 = await client.post(
+            f"/api/v1/reminders?token={token}",
+            json={"kind": "interval", "message": "起身", "minutes": 60},
+        )
+        assert r2.status == 200
+        # cron
+        r3 = await client.post(
+            f"/api/v1/reminders?token={token}",
+            json={"kind": "cron", "message": "晨检", "cron": "0 8 * * *"},
+        )
+        assert r3.status == 200
+
+        rows = await (await client.get(f"/api/v1/reminders?token={token}")).json()
+        assert len(rows["reminders"]) == 3
+
+        rid = rows["reminders"][0]["id"]
+        toggle = await client.post(
+            f"/api/v1/reminders/{rid}/toggle?token={token}",
+            json={"enabled": False},
+        )
+        assert toggle.status == 200
+
+        delete = await client.delete(f"/api/v1/reminders/{rid}?token={token}")
+        assert delete.status == 200
+        rows = await (await client.get(f"/api/v1/reminders?token={token}")).json()
+        assert len(rows["reminders"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_reminders_unknown_kind_rejected(settings_env) -> None:
+    handlers, app, _ = settings_env
+    token = handlers.auth_token
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            f"/api/v1/reminders?token={token}",
+            json={"kind": "weekly", "message": "x"},
+        )
+        assert resp.status == 400
+
+
+# ----------------------------------------------------------------------
+# Event sources
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_event_sources_create_reload_delete(settings_env) -> None:
+    handlers, app, root = settings_env
+    token = handlers.auth_token
+
+    async with TestClient(TestServer(app)) as client:
+        # 先得有工作空间
+        ws_dir = root._fixtures.tmp_path / "ws-ev"
+        ws_dir.mkdir()
+        root.workspace_manager.add_workspace(ws_dir, name="ws-ev")
+
+        payload = {
+            "id": "demo-file-watch",
+            "enabled": True,
+            "kind": "file_watch",
+            "workspace": "ws-ev",
+            "watch_path": "feedback/inbox",
+            "watch_pattern": "*.json",
+            "watch_events": ["created"],
+            "cooldown_seconds": 30,
+        }
+        create = await client.post(f"/api/v1/event-sources?token={token}", json=payload)
+        assert create.status == 200, await create.text()
+        # 写盘后第一次 reload
+        assert len(root._fixtures.reload_calls) == 1
+
+        # 列表
+        rows = await (await client.get(f"/api/v1/event-sources?token={token}")).json()
+        ids = {s["id"] for s in rows["event_sources"]}
+        assert "demo-file-watch" in ids
+
+        # 启停
+        toggle = await client.post(
+            f"/api/v1/event-sources/demo-file-watch/toggle?token={token}",
+            json={"enabled": False},
+        )
+        assert toggle.status == 200
+        # toggle 也触发 reload
+        assert len(root._fixtures.reload_calls) == 2
+
+        # 删除
+        delete = await client.delete(f"/api/v1/event-sources/demo-file-watch?token={token}")
+        assert delete.status == 200
+        rows = await (await client.get(f"/api/v1/event-sources?token={token}")).json()
+        assert "demo-file-watch" not in {s["id"] for s in rows["event_sources"]}
+
+
+@pytest.mark.asyncio
+async def test_event_sources_invalid_id_rejected(settings_env) -> None:
+    handlers, app, _ = settings_env
+    token = handlers.auth_token
+    async with TestClient(TestServer(app)) as client:
+        # 路径注入
+        resp = await client.delete(f"/api/v1/event-sources/..%2Fevil?token={token}")
+        # aiohttp 解码后是 "../evil"，应用层会 400
+        assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_event_sources_invalid_payload_rejected(settings_env) -> None:
+    handlers, app, root = settings_env
+    token = handlers.auth_token
+    ws_dir = root._fixtures.tmp_path / "ws-ev2"
+    ws_dir.mkdir()
+    root.workspace_manager.add_workspace(ws_dir, name="ws-ev2")
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            f"/api/v1/event-sources?token={token}",
+            json={
+                "id": "bad",
+                "kind": "no_such_kind",
+                "workspace": "ws-ev2",
+            },
+        )
+        assert resp.status == 400
+
+
+# ----------------------------------------------------------------------
+# Workspaces
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_workspaces_crud(settings_env) -> None:
+    handlers, app, root = settings_env
+    token = handlers.auth_token
+
+    with tempfile.TemporaryDirectory() as td:
+        ws_a = Path(td) / "a"
+        ws_a.mkdir()
+        ws_b = Path(td) / "b"
+        ws_b.mkdir()
+
+        async with TestClient(TestServer(app)) as client:
+            # add a
+            r1 = await client.post(
+                f"/api/v1/workspaces?token={token}",
+                json={"path": str(ws_a), "name": "ws-a", "summary": "first"},
+            )
+            assert r1.status == 200, await r1.text()
+            assert "ws-a" in {w["name"] for w in root._fixtures.workspaces.values()}
+
+            # add b
+            r2 = await client.post(
+                f"/api/v1/workspaces?token={token}",
+                json={"path": str(ws_b), "name": "ws-b"},
+            )
+            assert r2.status == 200
+
+            # list
+            rows = await (await client.get(f"/api/v1/workspaces?token={token}")).json()
+            assert len(rows["workspaces"]) == 2
+
+            # rename
+            wid = next(iter(root._fixtures.workspaces))
+            rename = await client.post(
+                f"/api/v1/workspaces/{wid}/rename?token={token}",
+                json={"name": "renamed"},
+            )
+            assert rename.status == 200
+            assert root._fixtures.workspaces[wid]["name"] == "renamed"
+
+            # set default
+            other = [w for w in root._fixtures.workspaces if w != wid][0]
+            default_resp = await client.post(f"/api/v1/workspaces/{other}/default?token={token}")
+            assert default_resp.status == 200
+            assert root.workspace_manager.registry.document.default_workspace == other
+
+            # delete
+            delete = await client.delete(f"/api/v1/workspaces/{wid}?token={token}")
+            assert delete.status == 200
+            assert wid not in root._fixtures.workspaces
+
+
+@pytest.mark.asyncio
+async def test_workspaces_delete_disk_removes_directory(settings_env) -> None:
+    """delete_disk=1 才删磁盘；缺省只取消登记，目录与文件保持不动。"""
+    handlers, app, root = settings_env
+    token = handlers.auth_token
+    ws_dir = root._fixtures.tmp_path / "purge-me"
+    ws_dir.mkdir()
+    (ws_dir / "note.txt").write_text("x", encoding="utf-8")
+    wid = root.workspace_manager.add_workspace(ws_dir, name="purge-me").id
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.delete(f"/api/v1/workspaces/{wid}?token={token}")
+        body = await resp.json()
+        assert resp.status == 200
+        assert body["disk_deleted"] is False
+        assert ws_dir.is_dir()
+
+        wid2 = root.workspace_manager.add_workspace(ws_dir, name="purge-me").id
+        resp2 = await client.delete(f"/api/v1/workspaces/{wid2}?delete_disk=1&token={token}")
+        body2 = await resp2.json()
+        assert resp2.status == 200, await resp2.text()
+        assert body2["disk_deleted"] is True
+        assert not ws_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_workspaces_delete_disk_refuses_busy_session(settings_env) -> None:
+    """有在飞回合的缓存会话时拒绝删盘，且登记不被移出。"""
+    handlers, app, root = settings_env
+    token = handlers.auth_token
+    ws_dir = root._fixtures.tmp_path / "busy"
+    ws_dir.mkdir()
+    wid = root.workspace_manager.add_workspace(ws_dir, name="busy").id
+
+    class _Coara:
+        @staticmethod
+        def is_turn_busy() -> bool:
+            return True
+
+    root._sessions[wid] = SimpleNamespace(coara=_Coara())
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.delete(f"/api/v1/workspaces/{wid}?delete_disk=1&token={token}")
+        assert resp.status == 400
+        assert wid in root._fixtures.workspaces
+        assert ws_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_workspaces_delete_disk_refuses_coara_home(settings_env) -> None:
+    """登记指向 coara_home 本身时只移出登记，绝不删盘。"""
+    handlers, app, root = settings_env
+    token = handlers.auth_token
+    home = root._fixtures.tmp_path
+    wid = root.workspace_manager.add_workspace(home, name="home-guard").id
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.delete(f"/api/v1/workspaces/{wid}?delete_disk=1&token={token}")
+        body = await resp.json()
+        assert resp.status == 200
+        assert body["disk_deleted"] is False
+        assert wid not in root._fixtures.workspaces
+        assert home.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_workspaces_add_missing_dir_created(settings_env, tmp_path) -> None:
+    handlers, app, _ = settings_env
+    token = handlers.auth_token
+    # 仅推荐根（coara_home/workspace）下允许自动建目录
+    target = tmp_path / "workspace" / "brand-new-space"
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            f"/api/v1/workspaces?token={token}",
+            json={"path": str(target), "name": "新空间"},
+        )
+        assert resp.status == 200
+        assert target.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_workspaces_add_missing_dir_outside_recommended_root_rejected(settings_env, tmp_path) -> None:
+    handlers, app, _ = settings_env
+    token = handlers.auth_token
+    outside = tmp_path / "elsewhere" / "sneaky"
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            f"/api/v1/workspaces?token={token}",
+            json={"path": str(outside), "name": "越界"},
+        )
+        assert resp.status == 400
+        assert not outside.exists()
+
+
+# ----------------------------------------------------------------------
+# /api/fs/browse 目录浏览
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fs_browse_lists_dirs_only(settings_env, tmp_path: Path) -> None:
+    handlers, app, _ = settings_env
+    token = handlers.auth_token
+    root_dir = tmp_path / "browse-me"
+    (root_dir / "alpha").mkdir(parents=True)
+    (root_dir / "beta").mkdir()
+    (root_dir / "notes.txt").write_text("x", encoding="utf-8")
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/fs/browse?token={token}&path={root_dir}")
+        assert resp.status == 200, await resp.text()
+        data = await resp.json()
+        names = [d["name"] for d in data["dirs"]]
+        assert names == ["alpha", "beta"]  # 只列目录，按名称排序
+        assert Path(data["path"]) == root_dir
+        assert data["parent"] is not None
+        for d in data["dirs"]:
+            assert Path(d["path"]).is_absolute()
+
+
+@pytest.mark.asyncio
+async def test_fs_browse_rejects_relative_path(settings_env) -> None:
+    handlers, app, _ = settings_env
+    token = handlers.auth_token
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/fs/browse?token={token}&path=some/relative/dir")
+        assert resp.status == 400
+        # token 守卫
+        no_token = await client.get("/api/fs/browse")
+        assert no_token.status in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_fs_browse_empty_path_uses_recommended_root(settings_env, tmp_path: Path) -> None:
+    handlers, app, root = settings_env
+    token = handlers.auth_token
+    # 推荐根目录＝coara_home/workspace（新建空间默认落点）
+    ws_a = tmp_path / "workspace" / "proj-a"
+    ws_b = tmp_path / "workspace" / "proj-b"
+    ws_a.mkdir(parents=True)
+    ws_b.mkdir(parents=True)
+    root.workspace_manager.add_workspace(ws_a, name="proj-a")
+    root.workspace_manager.add_workspace(ws_b, name="proj-b")
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/fs/browse?token={token}")
+        assert resp.status == 200, await resp.text()
+        data = await resp.json()
+        assert Path(data["path"]) == (tmp_path / "workspace").resolve()
+        assert {d["name"] for d in data["dirs"]} == {"proj-a", "proj-b"}

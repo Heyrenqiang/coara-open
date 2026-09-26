@@ -1,0 +1,119 @@
+/* Flow live / workbench styles — 与 workflow editor 同一套 --wf-* design token。 */
+
+/* ── 工作台：顶栏 + 全宽画布 ─────────────────────────────────────────── */
+
+.flow-workbench-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.flow-workbench-canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: var(--wf-color-bg);
+}
+
+.flow-workbench-editor {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 左侧草案列表栏 */
+.flow-workbench-drafts {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--wf-color-border);
+  background: var(--wf-color-surface);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.flow-workbench-drafts-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--wf-color-border);
+}
+.flow-workbench-drafts-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wf-color-text-tertiary);
+}
+.flow-workbench-drafts-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+}
+.flow-workbench-draft-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--wf-color-text);
+}
+.flow-workbench-draft-item:hover {
+  background: var(--wf-color-border);
+}
+.flow-workbench-draft-item.active {
+  background: var(--wf-color-brand-subtle);
+  color: var(--wf-color-brand);
+}
+.flow-workbench-draft-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.flow-workbench-draft-del {
+  color: var(--wf-color-text-tertiary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.flow-workbench-draft-del:hover {
+  color: var(--wf-color-error);
+}
+.flow-workbench-drafts.collapsed {
+  width: 40px;
+}
+.flow-workbench-drafts.collapsed .flow-workbench-drafts-head,
+.flow-workbench-drafts.collapsed .flow-workbench-drafts-list {
+  display: none;
+}
+.flow-workbench-drafts-expand {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--wf-color-text-tertiary);
+  font-size: 16px;
+}
+.flow-workbench-drafts-expand:hover {
+  color: var(--wf-color-brand);
+}
+
+.flow-workbench-editor > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.flow-live-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

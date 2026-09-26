@@ -1,0 +1,224 @@
+# Coara V8 剩余问题清单
+
+> 本文是仓库唯一在册的问题台账，逐条列出**当前仍存在**的问题：现象、源码位置、影响、修复方案与复杂度（S=局部小改 / M=跨模块 / L=跨端或新功能）。
+>
+> 编号 #1–#N 按当前问题清单连续编排，仅记录当前仍存在的问题；已修复/已裁定的条目不再保留。
+>
+> 2026-08-14 全系统审计（六路并行 105 项发现）后大清理：**当日已修复 52 项**（含 P0 全部数据丢失级与 P1 安全主要项）；审计原始报告见 ref-doc/全系统审计-2026-08-14.md 存档段落。
+>
+> 2026-08-16 工作流内核化战役：全切 kernel（WdlRunner/wdl_legacy/迁移脚本/dsl_parser/qc_agent/approval_html 及 wdl 解析栈删除），随删出册 #11/#15/#16/#17/#19 共 5 条；同轮修复的存量 bug（YAML on 布尔陷阱、prune 时区混用、kernel 实例行缺失）见文末战役记录。
+>
+> 2026-08-20 修复战役（九路并行）：**P2 全部 18 条出册**、P3 五条出册、human_approval 死路径整条拆除、CLI 输入卡顿根治（httpx 默认构造同步加载 CA 实测 570ms）、工作空间切换两 bug 同根修复；版本号策略出册（全端 1.0.0 同源）、git 历史凭据决策挪至 manual/18 §18.9；详见文末战役记录。
+>
+> 2026-08-20（深夜）三项拍板落地：Matrix owner 名单已配置（`security.owner_matrix_ids: ["@phone:coara.local"]`，原 #2 出册）；i18n 判死出册（中文优先单用户产品，不做国际化框架）。
+>
+> 2026-09-09 全仓复审（三路并行扫描 + 台账逐条复核）：**出册 3 条**——原 #7 错误恢复指引（已由 `_user_facing_llm_error`/`_user_facing_turn_error` 集中映射落地）、原 #8 唤醒回合不回 Matrix 发起端（`_mirror_awakened_reply` 已闭合，见战役记录）、原 #17 matrix homeserver 探测覆盖 .env（已加占位符/迁移场景护栏）；**数字更新**——getattr 防御 32→60 处（扩散）、吞异常 54→49 处；**新增 7 条**（#7 端/通道状态载体并行、#11 计费与通知静默吞、#21 provider 包装样板、#22 前端类型漂移与死 action、#23 fire-and-forget 任务引用、#24 registry docstring 失实、#26 仓库磁盘卫生）；全仓编号重排。方法与明细见文末战役记录。
+>
+> 2026-09-11 web 端显示一致性改造：**新增 9 条**（#27–#35，见「本轮遗留」节）。改造把「端上显示＝服务端权威（视图带 + 此刻 runtime）」立成硬约束并落地（帧带归属、`view_seq` 对账、原子提交、折叠区契约、standby 流），但游标口径、条数常量、线重置、兜底路径与补注入判据留下若干缺口，逐条登记。
+>
+> 面向用户的安全已知限制汇总见 [`manual/18-安全与治理.md`](./manual/18-安全与治理.md) §18.9。
+>
+> 2026-09-16 架构梳理批次启动（方案经拍板：零功能变化、纯优化修复）：**#3 吞异常出册**——62 处基线逐处处置（用户可感知路径升 warning、热路径 debug、有意静默补注释，LLM 流关闭补 exc_info），控制流零改动，2248+384 全绿；新代码门禁入 CONVENTIONS.md（禁新增 getattr 防御与裸吞异常，存量只减不增）。
+
+---
+
+## P0：需先拍板的决策项
+
+（暂无。原 #1 条目随相关能力于 2026-09-25 整体移除，编号保留空位。）
+
+---
+
+## P1：仍存在的问题（6 条）
+
+### #2 动态属性访问（getattr 防御）残留（高；较上次审计扩散）
+
+- **位置**：全仓 `getattr(self, "_…", default)` 模式现有 **60 处**（2026-09-09 复测）：`src/coara/base.py` 24、`src/cli/root_shim.py` 8、`src/ui/web_server.py` 8、`src/llm/_http_provider.py` 6、`src/coara/root.py` 3、`src/ui/handlers/workspace.py` 4 等；旧单引号风格 `getattr(self, '_…'` 已清零（仅 base.py:708 残留 1 处）
+- **问题**：访问未在 `__init__` 声明的属性；类型检查/IDE 补全失效，拼写错误不被捕获。数字较上次（32）上升，扩散来自新代码沿用该风格
+- **方案**：`__init__` 声明全部实例属性；turn-scoped 属性用 TurnRuntime dataclass；新代码禁止再引入。M。
+- **处置进展（2026-09-16）**：新代码门禁已入 docs/CONVENTIONS.md（禁止新增，存量只减不增）；**已收口**——全仓 81 处基线消 47（动态回填属性全部入 `__init__` 声明），保留 34 处均带「有意防御」注释（__new__ 测试夹具不跑 __init__、测试桩替身、外部注入合法缺席三类）；2250+384 全绿
+
+### #4 CoaraBase 职责过重（God Object）
+
+- **位置**：`src/coara/base.py`（1500+ 行），12+ 职责（消息/LLM/工具/技能/子智能体/会话/持久化/Trace/中断/Plan/上下文/流式）
+- **问题**：修改任何关注点都可能影响其他；测试需 mock 整个基类
+- **方案**：提取 ForegroundDelegateTracker、SessionStateManager、ToolBootstrapMixin 等。L。
+- **处置进展（2026-09-16）**：六组已抽为 mixin（`src/coara/base_mixins/`：continuation/foreground_delegates/prompt_skills/tools_registry/trace/persistence），方法逐字搬运、属性全部留宿主 __init__、外部调用面与测试形状零改动（含 `_emit_trace` 实例 monkeypatch 与 staticmethod 类名调用两个红线实跑验证）；base.py 2460→约 1550 行。剩余各组（构造/回合主循环/输出路由/LLM 调用/上下文守卫/中断/plan/会话生命周期）与宿主生命周期强耦合，属核心宿主职责，不再强行外抽——God Object 已降为「核心宿主 + 六个职责 mixin」。2250+384 全绿
+
+### #5 RootCoara 的 janitor 编排逻辑不应在 Root
+
+- **位置**：`src/coara/root.py`（1270 行）`_janitor_startup_scan`/`_janitor_finalize_pending`/`_janitor_maybe_renew`/`_janitor_scan_expired`
+- **方案**：提取 JanitorScheduler 组件。M。
+- **已收口（2026-09-16）**：四件编排与状态迁入 `src/coara/janitor_scheduler.py`（组件自持已维护 epoch/在飞表/补扫单飞）；Root 保留同名转发——`_janitor_activity_at`/`_janitor_pending` 属性转发到组件同一份字典、`_janitor_maybe_renew` 留 monkeypatch 钩子、`_janitor_startup_scan_done` 带 setter；watcher tick 形态不变（`start_idle_timeout_watcher` 源码仍含 curator_tick，兼容 test_daily_schedule_chain 源码断言）。2250+384 全绿
+
+### #6 依赖版本范围过宽
+
+- **位置**：`pyproject.toml:12-67` 全部 `>=`（openai/pydantic 等）；无 requirements.lock/uv.lock/poetry.lock（2026-09-09 复核仍无变化）
+- **影响**：不同环境行为不一致；上游 breaking change 直接影响生产；无法可复现构建
+- **方案**：pip-compile/uv pip compile 生成 lock 文件锁精确版本。M。
+- **已收口（2026-09-16）**：`requirements.lock`（uv pip compile，office+desktop extras，274 行精确版本）入仓；`Build-Release.ps1` 的 Invoke-PipInstallTarget 在锁文件存在时 `-r requirements.lock` 携带两个本地 wheel 同条安装，缺失降级告警。构建机已装 uv 0.12.13；依赖演进后重新生成：`uv pip compile pyproject.toml --extra office --extra desktop -o requirements.lock`。用户机不解析依赖（fat 包），lock 唯一生效点是构建机
+
+### #7 端/通道状态载体并行 + 端来源分类双谓词（2026-09-09 新增）
+
+- **位置**：同一「当前端/通道」概念由 3–4 种状态载体共同表达——`src/coara/base.py:226,512,697,789`（旧 `session_origin` 字典）、`src/coara/turn_context.py:26,48,73`（`EndChannel` ContextVar）、`_active_turn_source`（base.py 多处）、`src/coara/segment.py:28`（`SegmentTracker.source/channel_id`）；另有来源分类双谓词——`src/coara/continuation_leftover.py:26,31,35`（`is_web_source/is_matrix_source/is_cli_source`）与 `src/coara/turn_source.py`（自称「单一事实源」的 `cli_shows_source/web_shows_source`）
+- **问题**：谓词语义已漂移（`is_matrix_source` 仅认 `"matrix"`；`cli-` 前缀处理范围不同）；某条路径只更新载体之一而漏改其余时，输出路由/可见性不一致——channel_id 端内路由上线后此风险被放大
+- **方案**：判定谓词收敛进 turn_source.py 单一事实源（continuation_leftover 改为转发引用）；状态载体收敛到 Segment + EndChannel 两套并文档化各自职责。M。
+- **处置进展（2026-09-16）**：谓词侧已收敛——`turn_source.py` 新增 `turn_source_family`/`same_turn_family` 唯一族抽象，`registry._turn_family` 转发；`continuation_leftover.is_web_source` 转发 `web_shows_source`，is_matrix/is_cli 的差异注释显式化并有测试钉住。载体侧已收口——摸底确认四套载体权威域各自清晰（Segment=路由、EndChannel=审批、_active_turn_source=trace、session_origin=唤醒回投），职责表入 `docs/架构契约.md`；不做物理合并（置空窗口是功能）
+
+### #8 无错误恢复指引的 provider 侧残留（2026-09-09 新增，收窄自原 #7）
+
+- **现状**：用户可见层已解决——`turn_orchestrator.py:172,226` 的 `_user_facing_llm_error`/`_user_facing_turn_error` 集中映射（401/402/403/429/超时/空响应等均给中文恢复指引）；剩余为 provider 层仍抛技术性 `LLMError` 字符串（`src/llm/openai.py:535`），靠集中映射兜底
+- **方案**：低优先——provider 侧维持技术串即可，无需逐 provider 写文案；仅当集中映射漏掉新错误类别时补映射分支。S。
+
+---
+
+## 待评估（3 条）
+
+### #9 [P2] 事件投递机制边界模糊
+
+- **现状**：EventBus vs UnifiedScheduler 的判定规则在 AGENTS.md 有文档，但代码中多处边界模糊
+- **建议**：引入 StateChangeBus（状态变更）与 NotificationBus（纯通知）分离
+
+### #10 [P1] 配置加载链复杂且重复
+
+- **位置**：`src/core/config.py`
+- **问题**：单次 `load()` 入口（:210）但内部多趟解析：`_iter_yaml_load_paths`（:182）先合并一遍 YAML 路径再 `_iter_config_yaml_paths(merged)` 二次枚举、`_load_env`（:369）、`_load_llm_preferences_files`（:390）、`_load_providers`（:431）/`_load_llm_profiles`（:434）独立 load。深度合并逻辑复杂
+- **注**：2026-08-14 已修写入优先级（补 users/default 层）；2026-09-09 复核加载链较台账原述略降但仍未根本简化
+- **处置进展（2026-09-16）**：趟 2 从全量深合并降为只扫 `coara_home` 单键（鸡生蛋语义不变，test_config_paths 全绿）；新增 `coara config show`（来源链 + 脱敏合并配置 + 加载告警，密钥经 mask_secrets）。剩余「一次 load 一次合并」不可行——趟 2/3 二次枚举是 coara_home 写进 YAML 的鸡生蛋解，不可删
+
+### #11 [P2] 回合终态归类口径三处跟进（2026-08-20 评审发现）
+
+- **已收口（2026-09-16 拍板执行）**：
+  1. 上下文超限/停滞停止/迭代上限三条 FAILED 路径现记显式失败标记（LLMError 哨兵），session_log 终态记 failed，与状态机/trace 口径一致；delegate 失败分类对 LLMError 判 permanent，行为不变
+  2. GeneratorExit/CancelledError 保持记 completed，finally 显式注释固化有意语义（detach 取消是切空间正常生命周期，记 failed 污染失败率）
+  3. switch strip 后补磁盘副作用注记，与 Ctrl+C/异常回滚两条中断路径对齐；三处文档口径同步（COARA_ARCHITECTURE.md ×2、工作空间与目录.md、多工作空间与工作空间动态.md）
+
+---
+
+## P3：观察级
+
+| 编号 | 条目 | 备注 |
+|------|------|------|
+| #13 | 测试 SimpleNamespace mock 过多（352 处/55 文件） | 纯测试债，迁移工作量巨大价值低；不主动做，新测试优先用 typed mock 类 |
+| #14 | AGENTS.md 过长 | 拆分风险大于收益（每会话注入的契约，动它影响所有 agent 行为）；暂缓，单独评估 |
+| #15 | 无用户反馈闭环 | 产品决策非优化项；/report 已走子智能体内部通道，缺 issue tracker/稳定反馈端点 |
+
+> 2026-09-16 P3 批次核销 12 条：#12 单例生命周期表入架构契约、#16 文件桥惰性索引、#17 EventBus 退订清残留、#18 switch_llm_global 前台判定同源化、#20 file_watch 去抖改 Timer 线程、#21 AgentRegistry 单例收敛、#22 LLMError 包装样板抽 helper、#23 前端类型补全 + 死 action 删除、#24 fire-and-forget 收编、#25 docstring 失实修正、#26 磁盘卫生约 19MB；web 改造遗留 #30 sidecar 节流写移出事件循环、#33 折叠封顶显式标记 + 老 brief 反查、#34 补注入判据收窄同步核销。2253+384 全绿
+
+------|------|------|
+| #12 | 全局单例过多（tool_registry/llm_service/context_window_manager/BashBackgroundRunner/BackgroundAgentManager） | 短期文档化每个单例生命周期与重置方法 |
+| #13 | 测试 SimpleNamespace mock 过多（352 处/55 文件） | 定义共享 typed mock 类 |
+| #14 | AGENTS.md 过长 | 拆分，架构深挖进 COARA_ARCHITECTURE.md |
+| #15 | 无用户反馈闭环 | /report 已走子智能体内部通道，缺 issue tracker/稳定反馈端点 |
+| #16 | `src/ui/web_file_bridge.py:74-85` resolve_file 未命中全目录 iterdir 前缀匹配 | 投递目录大时 O(n)；可建索引（2026-09-09 复核仍在） |
+| #17 | `src/coara/event_bus.py:59-63` 订阅表 defaultdict 空列表残留 + 退订 O(topics) | 轻微内存驻留；topic 数有限（复核仍在） |
+| #18 | `src/coara/root.py` switch_llm_global 用 manager.active_entry 判前台，后台空间回合中执行可错位 | 窗口小；可改显式前台引用（复核仍在，行号现为 :406/:516/:538） |
+| #20 | `src/event_sources/sources/file_watch.py:21,67,89` 共享 4 线程 debounce 池，`_fire` 线程内 sleep 阻塞，慢路径（网络盘 resolve）可占满 | 新事件排队延迟甚至丢失；可加超时/队列上限（复核仍在） |
+| #21 | `src/prompt/agent_registry.py:35-41` _agents 类属性 + `__new__` 单例冗余，绕过单例构造共享状态 | 主要影响测试隔离（复核仍在） |
+| #22 | 各 provider 重复 LLMError 包装样板（`openai.py:530-537`、`responses.py:312,446`） | 重试已集中 retry.py，异常包装可抽公共 helper；2026-09-09 新增 |
+| #23 | 前端 `ServerMessage` 联合类型（`src/ui/web/src/lib/ws.ts:34`）未覆盖 `subagent_start/complete/failed`、`background_agent_*` 等生命周期事件（后端 `trace_broadcast.py:63-67` 下发、store.ts 用裸 Set 消费） | TS 契约不健全，运行期靠 trace_batch 兜底不崩溃；`store.ts` 另有 3 个零调用死 action（`clearTraceEvents`/`resetModuleSession`）可删；2026-09-09 新增 |
+| #24 | fire-and-forget 任务引用丢失集合：`src/coara/base.py:798`（diff ensure_future）、`src/coara/mobile_sync.py:218,308,366,405`（create_task 不存引用）、`src/ui/web_server.py:453`（browser focus） | 异常时仅「Task exception never retrieved」噪声，不影响主流程；可统一收编到持引用容器；2026-09-09 新增 |
+| #25 | `src/ui/web_socket_registry.py:11` docstring 声称「single event loop, no locks needed」但实现有 `asyncio.Lock()`（:56） | 文档误导，改注释即可；2026-09-09 新增 |
+| #26 | 仓库磁盘卫生（均为 gitignored，不入库）：src+tests 约 1545 个 .pyc/61+ `__pycache__`、`build/` 501 个 .py（旧 wheel 残留）、`MagicMock/` 56 文件（mock.coara_home 测试残渣）、`gomatrix/gomatrix.exe~` 18MB | 可选定期清理；git 追踪层面无冗余（`standalone/makevideo` 为 embody/screenshot 工具引擎，活跃）；2026-09-09 新增 |
+
+---
+
+## 本轮遗留（2026-09-11：web 端刷新/切空间同一把尺改造）
+
+### #27 [P1] 快照游标覆盖整线，消息切片只回 limit 条（不同源）——已闭环 09-13
+
+- **位置**：`src/ui/web_views.py::WebViewStore.build_messages`（`latest_seq` 取全部帧的 `view_seq` 最大值；`messages` 在出口处 `[-limit:]` 截断）、`src/ui/handlers/session.py::_load_view_messages/_load_view_snapshot`
+- **问题**：游标宣称「这条线已到 N」，端上据此丢弃 `view_seq <= N` 的实时帧；但返回的切片只有最近 `limit` 条——被丢弃的帧既不在切片里、也没在端上渲染，长线上就是「判定已覆盖、行却不在屏上」，且此后不会再补（该序号永远不会再来一次）
+- **方案**：游标与切片同源——`latest_seq = 切片末条 seq`（另给 `slice_from_seq` 表达切片起点），或让端上以「快照覆盖区间」而非单点游标做裁量。M
+
+### #28 [P2] 历史条数两个常量不统一（刷新 200 / 切空间 100）——已收口 09-13
+
+- **位置**：`src/ui/handlers/session.py::_DEFAULT_HISTORY_LIMIT = 100`（切空间响应与 `/api/session/messages` 默认）、`src/ui/web/src/views/ChatView.tsx`（`fetchSessionMessages(200, …)`）
+- **问题**：同一把尺两个数——F5 首屏取 200 条、切空间快照取默认 100 条，长度与游标随路径不同；出问题时两种路径的表现不一致，难对账
+- **方案**：收敛为一个跨端常量（服务端默认调 200，或前端刷新也走默认），并在 `docs/消息渲染契约.md` §九 记明。S
+
+### #29 [P2] `reset_line` 只换世代，序号不会真的从 1 重来——已收口 09-13
+
+- **位置**：`src/ui/web_views.py::WebViewStore.reset_line`（世代 +1、`latest_seq = 0`）与 `_next_view_seq`（取 `max(read_latest_view_seq(path), meta.latest_seq)` 再 +1）
+- **问题**：`reset_line` 不截断 jsonl，首次分配仍从文件尾部续号——docstring 宣称的「序号从 1 重新开始」在文件非空时不成立；且世代变化只体现在下一次快照的 `epoch` 上，已连端在下次快照前仍按旧 epoch 处理实时帧（本地缓存该丢的没丢）
+- **方案**：`reset_line` 同时归档/截断该线文件（或把「线已重建」作为一条显式帧下发，端上立即作废本地内容与游标）。S
+
+### #31 [P3] standby 流「LRU」名不副实（实为 FIFO）——已关闭 09-13（FIFO 即设计，代价已在代码注释写明）
+
+- **位置**：`src/ui/web_server.py::_standby_stream_for`（`_MAX_STANDBY_STREAMS = 8`，超限 `pop(next(iter(self._standby_streams)))`）
+- **问题**：淘汰按插入序，命中复用不刷新位置——用得最多的那条线可能先被淘汰（连它的 replay buffer 一起丢），而注释写的是「只留最近若干条」
+- **方案**：命中时把键重新插到末尾实现真 LRU（或改注释明确 FIFO 语义与代价）。S
+
+### #32 [P2] 子智能体帧投递失败只记 debug——已收口 09-13
+
+- **位置**：`src/coara/base.py::_route_subagent_tool_line`（`except → logger.debug`）、子智能体 chunk 投递路径同款、`src/ui/web_views.py::_persist_line_meta` 失败也是 debug
+- **问题**：这几条帧没有第二个来源（`subagent_chunk` 不落带、工具行只投不发第二遍），投递/落盘失败即永久缺失；而默认日志级别下 debug 不可见，排障时表现为「展开区少一段」且查不到原因
+- **方案**：失败至少 warning，并带上 `source / session_id / tool_call_id` 键名（与 `EndRegistry` 的 route miss 日志同格式，一眼对上）。S
+
+### #35 [P2] `delegate(action=message)` 对运行中的前台子智能体不可用——已修 09-13
+
+- **位置**：`src/tools/builtin/delegate/delegate.py::_execute_message` → `lookup_running_subagent`（只查 `_RUNNING_SUBAGENTS`，即带 channel 的前台 coaras）
+- **问题**：运行中的前台 aide（或任何未登记进该表的活实例）查不到 → `_execute_message` 直接落回 `_execute_resume`：用户以为发的是途中消息，实际动作被静默替换成「追加任务 / 断点续跑」，报错文案也随之误导
+- **方案**：查不到活实例时按 `coara_id` / `BackgroundAgentManager` 兜底找活实例再投递；确无活实例则给明确错误（「该任务不在运行中，如要追加任务请用 resume」），不做静默动作替换。S
+
+---
+
+## 附：2026-09-09 全仓复审记录
+
+**方法**：三路并行扫描（运行时核心 / UI·CLI·前端 / 外围子系统+台账复核）+ 仓库卫生核查。另：当日早间完成未提交改动集（89 文件，+3421/−1095）两轮 review，提交前修掉 2 处（MatrixApiService.kt `nextSyncRetryDelay` when 合并行格式损坏；delegate.py auto-resume 兜底 `ToolResult.error` 补 metadata 使回滚注记可取 task_id）；新增测试 10 文件全绿（61+8 passed）。
+
+**出册（3 条）**：
+- 原 #7 无错误恢复指引：`_user_facing_llm_error`/`_user_facing_turn_error` 集中映射已覆盖 API key/402/403/429/超时/空响应/上下文异常等全部已知类别并给中文恢复指引；provider 层残留降级为新 #8 观察项
+- 原 #8 后台完成唤醒回合不回 Matrix 发起端：`root.py:1457` 起 `origin_source in ("matrix","event")` 时 `_mirror_awakened_reply`（:1464-1486）从历史取最终正文经 `matrix_notify.send_to_user` 送回；web 侧 `stream_awakened_turn` 已带 `workspace_dir` 落盘锚定。残留：`TaskRecord.origin_source` 仍只存 source 字符串，回投经 `matrix_notify` 单例兜底而非按 room_id 定向（多房间场景待观察）
+- 原 #17（P3）matrix_connect 探测失败覆盖 .env：现仅占位符/迁移场景才 `persist_matrix_homeserver`，占位符密码直接报错不写回
+
+**数字更新**：getattr 防御 32→60（扩散，见 #2）；`except Exception: pass` 54→49（部分缓解，见 #3）。
+
+**新增 7 条**：#7（端/通道状态载体并行 + 双谓词漂移）、#8（provider 技术串残留）、#22（provider 包装样板）、#23（前端类型漂移 + 死 action）、#24（fire-and-forget 任务引用）、#25（registry docstring 失实）、#26（磁盘卫生）。
+
+**阴性结论（核查过、确认无问题）**：`_remote_mirror`/`CLI_BACKGROUND_RESULT`/Ctrl+B 退后台全仓零残留；TODO/FIXME/HACK 标记全仓为零（技术债全部由本台账跟踪）；前端 22 组件 + 16 lib 工具 + 11 handler mixin 无死代码；`src/llm/_debug.py`、`orphan_repair.py` 均被引用非死代码；`web_server.py` deferred-remote-ctx 的 `send_text` 现供 collect/diff/remote_channel 桥接（approval_bridge.py:123 等 6 处消费 get_turn_send_text），非死参数——web 端正文单一走 EndRegistry+TurnStream，与它端一致。
+
+---
+
+## 附：2026-08-20 修复战役记录
+
+九路并行批次，**P2 全部 18 条出册 + P3 五条出册 + 两项拍板落地 + 两个线上 bug 根治**：
+
+- **回合与调度**：#15/#20 回合失败误记 completed（显式 turn_failure 变量替代 sys.exc_info()）；#16 压缩快照串空间任务清单（按 coara 解析 TaskStore）；#17 工具中断漏登磁盘副作用（中断注记含已执行清单）；#18 flow 悬空边到达残留（wait() 同步 drop_arrivals）；#19 flow reset 竞态（epoch 世代守卫，连 _maybe_start 重试回调一并封死）；#14 引擎死亡终态事件丢失（reader 排干残量）
+- **存储并发**：#21 session_log seq 缓存推进+单进程假设文档化；#22 todos store 与 lock 同键共生逐出；#23 records 写路径实例锁串行化；#24 registry 热重载清空挂载快照；#26 task_store 进程级实例缓存
+- **UI 与通道**：#27 JSONL 截断全量重读改锁内读文本+锁外解析；#28 会话增量缓存实例锁；#29 retract 全程持 io_lock；#30 WS 断连后向死连接发送（发送前查 closed+顺手清引用）；#31 上下文预算等长替换漏检（system+tools 内容指纹）；#32 审批 send 30s 限时
+- **human_approval 死路径整条拆除**（内核化后无源）：web approve 端点/引擎 approve_step/bridge 事件枚举/前端审批按钮/相关测试，grep 零残留
+- **P3 出册**：aiohttp ClientSession 每请求新建（新增 http_session 共享单例；实锤 `_homeserver_link_watchdog` 原每 60s 新建一次——与 httpx 同类卡顿源）；手机 ACK done_callback 不取异常；by_hash/by_url 单值覆盖改 list；search touch 写放大批量化；测试临时文件泄漏复核（3c02f4c6 已修，后继测试已走 tmp_path）
+- **CLI 输入卡顿根治**（用户实测实锤）：`httpx.AsyncClient()` 默认构造同步加载 Windows CA 证书库 570ms——gomatrix 看门狗每 10s 新建一次致每 10s 冻结事件循环半秒；loopback 探测三处改 `verify=False, trust_env=False`（顺带消除代理环境变量劫持 127.0.0.1 的隐患），遥测 https 客户端线程内构造；工具栏命中率 8MB 日志尾全量 JSON 解析（80ms GIL）加 session_id 字节预过滤降至 17ms
+- **工作空间切换两 bug 同根修复**：主循环被旧回合流钉死——`iter_while_foreground` 只在下一 chunk 到达时检查前台状态，静默期（长工具/等首包）主循环永久卡死，新前台空间的 /model 等输入堆队列不执行、切回后输出不上屏（注册表 mtime 取证实锤 /model 未执行）；修：detach 改 0.2s 轮询 + 重挂自愈（ensure_streaming 按 block 实际状态重开，reset 竞争不再丢 chunk）
+- **出册/挪移**：版本号策略（全端 1.0.0 同源已事实统一）；git 历史凭据决策记录挪至 manual/18 §18.9
+
+验证：见文末测试基线（全量 pytest + ruff + WebUI build + go test）。
+
+---
+
+## 附：2026-08-16 内核化战役记录
+
+**当日完成**（全量 1246 passed / ruff 全绿 / Web UI build 绿，时点 2026-08-16 下午）：
+
+- **工作流全切 kernel**：WorkflowScheduler 只建 KernelGraphRunner；export→save→run 断链闭环（集成测试 + 实跑验证）；WdlRunner、wdl_legacy、迁移脚本、dsl_parser、qc_agent（QC gatekeeping 随内核化无入口）、approval_html 及 wdl 解析栈（parse/validate/emit/document/graph/normalize）全部删除；wdl 包仅剩 schedule 工具；Web 编辑器画布对齐内核图（前端 17 文件重写）
+- **shell 前后台语义**：前台超时即失败（无并行、无分离），进程树被终止并返回明确超时错误，模型据此决策重试或改用 `timeout_ms=0` 后台；get_execution_timeout 全仓统一 (default_timeout, args) 签名
+- **ptc 加固**：import/open/exec/eval 静态预检（提交时拦截带行号）；未捕获 ToolCallError 附修复建议；内置 pathlib/datetime
+- **修复存量 bug**：YAML 1.1 裸词 `on` 解析为布尔使 error 边静默降级（serde 兼容还原）；prune 时区混用（本地 now vs sqlite UTC，东八区误归档刚完成实例）；KernelGraphRunner 不建实例行致终态假写；kernel resume 未认领致 fencing 终态被拒；aiosqlite 连接线程不 close 拖住测试进程退出（AGENTS.md 记录错误模式）
+- **随删出册**：原 #11（WDL 控制流 resume 断链）、#15（QC 门禁解析缺省）、#16（for 回写不一致）、#17（dsl 条件除零）、#19（scanner WAITING 双路竞争）——载体已删或场景消失
+
+---
+
+## 附：2026-08-14 审计-修复战役记录
+
+**当日已修 52 项**（出册），要点：
+
+- **P0 数据丢失级**：updates sweep 时区混用 TypeError（aware/naive 统一，janitor 自动过目恢复）；配置写入优先级补 users/default 层（WebUI 保存不再被遮蔽）；OpenAI 流式 usage chunk 丢弃（choices=[] 带 usage 的最终 chunk 不再被 continue 跳过——zhipu/minimax/deepseek-chat 全系费用与命中率统计的数据源洞）
+- **P1 安全**：/attachments 静态目录 token 鉴权；providers 接口 mask_secrets 脱敏 + 保存回填闭环；Referrer-Policy: no-referrer 全响应 + meta 兜底；Matrix 信任收敛 owner 名单（空名单回退+告警，2026-08-20 已配置出册）；prompt extends/INCLUDE 根目录约束（拒绝对路径与 .. 逃逸）；@-mention 目录越界与超限全量读
+- **运行时**：MCP 三连（启动失败泄漏子进程、stop 误取消等待者→McpError 异常路径、read_loop EOF 唤醒 pending）+ start 并发锁；flow run() 节点引用防 GC；UnifiedScheduler 空闲路径不丢已出队消息；/new 失败锁死解除；disabled 工具段缓存失效；工作流完成事件带 session 戳路由回原会话；分离工具跨会话注入拦截；shell 超时交接泄漏与临时脚本残留；grep 取消终止/reap
+- **数据域**：todos 损坏隔离+拒写护栏（.corrupt 保留）；agent 记忆去重 hash 口径统一（compose_body 单一真相）；session_log shadow 倒挂与 seq 缓存过期；AGENTS.md 字节口径；一次性提醒 delivering 先行持久化；背景注入状态文案
+- **工具与体验**：缓存命中返回拷贝（metadata 不再被污染）；delegate depends_on 字符串规范化；run_before hook 单点异常不炸批；upload Windows 保留名；.env 原子写；图片读盘出事件循环；Retry-After 封顶 60s；abort 重发；parsed-stream 泄漏；POSIX 进程组自杀守卫；mask_secrets 词边界
+- **架构增强**：CLI toolbar 命中率与 WebUI 同源（events.jsonl 单事实源，session_cache_hit_ratio）；delegate resume 支持已完成任务追加指令（审计→修复合一，消除重复劳动）；子智能体白名单显式排除 tool 装载器与未揭示挂起工具（spawn 时工具面一次定死）
+
+验证：全量 pytest 1233 passed / 19 skipped（基线 1202，+31 新增回归用例），ruff 回归基线（仅剩 3 处既有长文档串 E501）。
+
+修复明细逐项见 ref-doc/全系统审计-2026-08-14.md。

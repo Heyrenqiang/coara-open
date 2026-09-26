@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="referrer" content="no-referrer" />
+<title>coara devtools</title>
+<style>
+  :root { --blue:#3b82f6; --border:#ececec; --text2:#6b7280; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; color:#1f2937; background:#fafafa; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+  header { padding:10px 18px; border-bottom:1px solid var(--border); background:#fff; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; flex-shrink:0; }
+  header h1 { margin:0; font-size:16px; font-weight:600; display:flex; align-items:center; gap:8px; }
+  header .sub { font-size:11px; color:var(--text2); margin-top:2px; }
+  header .tags { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  header .tag { font-size:12px; padding:2px 10px; border-radius:999px; background:#f3f4f6; color:#374151; }
+  header .tabs { display:flex; gap:4px; margin-left:12px; }
+  header .tab { font-size:13px; padding:4px 12px; border:1px solid transparent; border-radius:8px; background:transparent; color:#6b7280; cursor:pointer; }
+  header .tab:hover { color:#1f2937; background:#f3f4f6; }
+  header .tab.on { color:var(--blue); background:#eff6ff; border-color:#93c5fd; }
+  button { font:inherit; font-size:13px; padding:4px 14px; border:1px solid #d9d9d9; border-radius:8px; background:#fff; cursor:pointer; }
+  button:hover { border-color:var(--blue); color:var(--blue); }
+  button.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+  button.primary:hover { filter:brightness(1.05); color:#fff; }
+  button:disabled { opacity:.45; cursor:default; }
+  main { flex:1; display:flex; min-height:0; }
+  .panel { flex:1; display:flex; min-height:0; }
+  .panel.hidden { display:none; }
+  #list { width:340px; flex-shrink:0; border-right:1px solid var(--border); overflow:auto; padding:12px; background:#fff; }
+  #detail { flex:1; overflow:auto; padding:20px; }
+  #panel-ctx { flex-direction:column; overflow:auto; padding:20px 24px; gap:16px; }
+  .ctx-row { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:#fff; margin-bottom:6px; }
+  .ctx-row.sentinel { background:#f9fafb; border-style:dashed; }
+  .ctx-row .lbl { flex:1; font-size:14px; font-weight:500; }
+  .ctx-row .meta { font-size:11px; color:var(--text2); }
+  .ctx-row .btns { display:flex; gap:4px; }
+  .ctx-preview { border:1px solid var(--border); border-radius:8px; background:#fff; padding:12px; }
+  .ctx-preview pre { max-height:220px; }
+  .ctx-seg { margin-bottom:10px; }
+  .ctx-seg .hd { font-size:12px; color:var(--text2); margin-bottom:4px; }
+  .ctx-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .ctx-note { font-size:12px; color:var(--text2); }
+  .ws-name { font-size:13px; font-weight:600; margin:12px 0 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ws-name:first-child { margin-top:0; }
+  .card { background:#fff; border:1px solid var(--border); border-radius:8px; padding:6px 8px; margin-bottom:4px; cursor:pointer; transition:background .15s,border-color .15s; }
+  .card:hover { background:#fafafa; border-color:#d9d9d9; }
+  .card.sel { background:#eff6ff; border-color:#93c5fd; box-shadow:inset 3px 0 0 var(--blue); }
+  .card .row { display:flex; align-items:center; gap:6px; min-width:0; }
+  .badge { flex-shrink:0; font-size:11px; line-height:18px; padding:0 8px; border-radius:999px; color:#fff; }
+  .meta { font-size:11px; color:var(--text2); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .time { font-size:10px; color:rgba(0,0,0,.45); flex-shrink:0; white-space:nowrap; }
+  .preview { margin-top:3px; font-size:11px; line-height:1.5; color:rgba(0,0,0,.55); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .err-dot { width:7px; height:7px; border-radius:50%; background:#dc2626; flex-shrink:0; }
+  .empty { padding-top:80px; text-align:center; color:var(--text2); font-size:13px; }
+  .spin { padding:40px; text-align:center; color:var(--text2); font-size:13px; }
+  .tagrow { display:flex; flex-wrap:wrap; gap:6px 4px; align-items:center; margin-bottom:12px; }
+  .t { font-size:12px; padding:1px 8px; border-radius:6px; border:1px solid #d9d9d9; background:#fff; }
+  .t.blue { color:var(--blue); border-color:#93c5fd; background:#eff6ff; }
+  .t.kind { color:#fff; border:none; }
+  .task { padding:8px 12px; border-radius:8px; background:#fafafa; border:1px solid var(--border); white-space:pre-wrap; word-break:break-word; font-size:13px; line-height:1.5; margin-bottom:12px; }
+  .task .lbl { font-size:12px; color:var(--text2); display:block; margin-bottom:4px; }
+  .usage { font-size:12px; color:var(--text2); margin-bottom:12px; }
+  .usage .money { color:#b45309; font-weight:600; }
+  .err { padding:8px 12px; border-radius:8px; background:#fff2f0; border:1px solid #ffccc7; color:#cf1322; font-size:13px; margin-bottom:12px; white-space:pre-wrap; }
+  details { border:1px solid var(--border); border-radius:8px; background:#fff; margin-bottom:8px; }
+  details > summary { cursor:pointer; padding:7px 12px; font-size:13px; list-style:none; display:flex; align-items:center; gap:8px; min-width:0; }
+  details > summary::-webkit-details-marker { display:none; }
+  details > summary::before { content:"▸"; color:var(--text2); font-size:11px; flex-shrink:0; }
+  details[open] > summary::before { content:"▾"; }
+  details > summary .pv { font-size:12px; color:var(--text2); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  details > summary .fx { flex-shrink:0; white-space:nowrap; }
+  details > summary .right { margin-left:auto; display:flex; gap:10px; align-items:center; flex-shrink:0; }
+  details > summary .tok { font-size:11px; color:var(--text2); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  details > summary .cost { color:#b45309; font-weight:600; white-space:nowrap; font-size:12px; font-variant-numeric:tabular-nums; }
+  details .body { padding:4px 12px 10px; }
+  pre { margin:0; max-height:480px; overflow:auto; font-family:var(--mono); font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+  .round-user { margin:6px 0 8px; padding:8px 12px; border-radius:8px; background:#eff6ff; white-space:pre-wrap; word-break:break-word; font-size:13px; }
+  .round-user.ctx { background:#fafafa; opacity:.75; }
+  .reason { background:#f5f5f5; border:1px solid var(--border); border-radius:8px; padding:8px 12px; color:#8c8c8c; font-style:italic; font-size:12px; white-space:pre-wrap; word-break:break-word; margin-bottom:8px; }
+  .content { white-space:pre-wrap; word-break:break-word; font-size:13px; line-height:1.6; margin-bottom:8px; }
+  .tc { font-family:var(--mono); font-size:12px; padding:2px 0; word-break:break-all; }
+  .tc b { font-family:var(--mono); font-size:12px; }
+  .tc span { color:var(--text2); }
+  details.nested { border:none; margin-bottom:0; }
+  details.nested > summary { padding:4px 0; font-size:12px; }
+  details.nested .body { padding:2px 0 6px 16px; }
+  details.nested pre { max-height:200px; }
+  .sub { color:var(--text2); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <div>
+      <h1>🐞 coara devtools <span style="font-size:12px;font-weight:400;color:var(--text2)">开发测试</span></h1>
+      <div class="sub">LLM 镜像与上下文模块实验台；coara 不在跑也能用</div>
+    </div>
+    <div class="tabs" id="tabs">
+      <button type="button" class="tab on" data-tab="llm">LLM log</button>
+      <button type="button" class="tab" data-tab="ctx">上下文模块</button>
+    </div>
+  </div>
+  <div class="tags" id="headtags"></div>
+</header>
+<main>
+  <div id="panel-llm" class="panel">
+    <div id="list"><div class="spin">加载中…</div></div>
+    <div id="detail"><div class="empty">请选择左侧的智能体查看详情</div></div>
+  </div>
+  <div id="panel-ctx" class="panel hidden">
+    <div class="ctx-note">默认：用户规则 → 环境 → AGENTS.md → ws.md → 对话 → situation.md。用户规则用系统提醒，situation 用情境标签，其余用系统消息。保存写入 system/context_modules.yaml；下次会话/注入生效。</div>
+    <div class="ctx-actions">
+      <button type="button" class="primary" id="ctx-save">保存</button>
+      <button type="button" id="ctx-reload">重新加载</button>
+      <button type="button" id="ctx-preview">预览拼装</button>
+      <span class="ctx-note" id="ctx-status"></span>
+    </div>
+    <div id="ctx-list"></div>
+    <div class="ctx-preview" id="ctx-preview-box" style="display:none"></div>
+  </div>
+</main>
+<script>
+(function () {
+  const params = new URLSearchParams(location.search);
+  if (params.get("token")) {
+    sessionStorage.setItem("coara.auth.token", params.get("token"));
+    history.replaceState(null, "", location.pathname);
+  }
+  const token = sessionStorage.getItem("coara.auth.token") || "";
+  const q = () => (token ? "?token=" + encodeURIComponent(token) : "");
+  const qAnd = () => (token ? "&token=" + encodeURIComponent(token) : "");
+
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const oneLine = (t, n) => { const f = String(t || "").replace(/\s+/g, " ").trim(); return f.length > n ? f.slice(0, n) + "…" : f; };
+  const fmtShort = (iso) => { if (!iso) return ""; const d = new Date(iso); if (isNaN(d)) return ""; const p = (x) => String(x).padStart(2, "0"); return p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes()); };
+  const fmtFull = (iso) => { if (!iso) return "—"; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString("zh-CN"); };
+  const num = (n) => Number(n || 0).toLocaleString();
+  /** 工具调用展示：有名字列名字（截断 + 省略号），无名字回退纯计数。 */
+  function toolLabel(names, count) {
+    const list = (names || []).filter(Boolean);
+    if (list.length) {
+      const joined = list.join("、");
+      const short = joined.length > 40 ? joined.slice(0, 40) + "…" : joined;
+      return short + (count > 0 ? "（" + count + " 次）" : "");
+    }
+    return count > 0 ? "工具 " + count + " 次" : "";
+  }
+
+  const TYPE_COLORS = { "主会话": "#3b82f6", coaras: "#8b5cf6", janitor: "#f59e0b", daily: "#22c55e", aide: "#06b6d4" };
+  const colorOf = (kind) => TYPE_COLORS[kind] || "#9ca3af";
+  const isRoot = (a) => a.agent_id === "root" || a.kind === "主会话" || a.overview === "主会话";
+  const modeAccess = (ov, root) => { if (root || !ov) return ""; const p = ov.split(" · "); return p.length >= 3 ? p[0] + "·" + p[p.length - 1] : ov; };
+
+  let data = null, selected = null, detail = null;
+  let lastFingerprint = "";
+  let detailStale = false; // silent poll never auto-reloads detail (keeps open/scroll)
+
+  async function api(path) {
+    const res = await fetch(path + (path.includes("?") ? qAnd() : q()));
+    if (!res.ok) {
+      let msg = "HTTP " + res.status;
+      try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (e) {}
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
+  // ---------- LLM log ----------
+  async function load(silent) {
+    try {
+      const next = await api("/api/dev/llm-calls");
+      const fp = JSON.stringify(next);
+      const changed = fp !== lastFingerprint;
+      data = next;
+      if (!changed) {
+        if (!silent) maybeReloadDetail();
+        return;
+      }
+      lastFingerprint = fp;
+      renderList();
+      if (selected) {
+        const hit = data.workspaces.find((w) => w.workspace === selected.workspace);
+        const sum = hit && hit.agents.find((a) => a.agent_id === selected.agent);
+        if (!sum) {
+          selected = null;
+          detail = null;
+          detailStale = false;
+          renderDetail();
+          renderList();
+          renderHead();
+          return;
+        }
+        const newer = detail && (sum.ts !== detail.ts || sum.llm_call !== detail.llm_call);
+        if (silent) {
+          // 静默轮询：只刷左侧列表，绝不重拉详情（展开的回合/小轮与滚动会保留）
+          if (newer) {
+            detailStale = true;
+            renderHead();
+          }
+        } else {
+          maybeReloadDetail();
+        }
+      } else if (!silent) {
+        const first = data.workspaces[0] && data.workspaces[0].agents[0];
+        if (first) {
+          selected = { workspace: data.workspaces[0].workspace, agent: first.agent_id };
+          loadDetail(false);
+        } else {
+          renderHead();
+        }
+      }
+    } catch (e) {
+      if (!silent) document.getElementById("list").innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+    }
+  }
+
+  function maybeReloadDetail() {
+    if (!selected || !data) return;
+    const hit = data.workspaces.find((w) => w.workspace === selected.workspace);
+    const sum = hit && hit.agents.find((a) => a.agent_id === selected.agent);
+    if (!sum) return;
+    if (!detail || detailStale || sum.ts !== detail.ts || sum.llm_call !== detail.llm_call) {
+      loadDetail(true);
+    }
+  }
+
+  function renderList() {
+    const el = document.getElementById("list");
+    const keepScroll = el.scrollTop;
+    if (!data || !data.workspaces.length) { el.innerHTML = '<div class="empty">暂无 LLM 调用记录<br>（各智能体跑过一轮后会出现在这里）</div>'; return; }
+    let html = "";
+    for (const ws of data.workspaces) {
+      html += '<div class="ws-name" title="' + esc(ws.workspace) + '">' + esc(ws.name) + "</div>";
+      for (const a of ws.agents) {
+        const root = isRoot(a);
+        const kind = root ? "主会话" : (a.kind || a.agent_id);
+        const bits = [];
+        const ma = modeAccess(a.overview || "", root); if (ma) bits.push(ma);
+        if (a.model) bits.push(a.model);
+        if (a.llm_call > 0) bits.push("第" + a.llm_call + "小轮");
+        if (a.tool_call_count > 0) { const tl = toolLabel(a.tool_names, a.tool_call_count); if (tl) bits.push(tl); }
+        const sel = selected && selected.workspace === ws.workspace && selected.agent === a.agent_id;
+        html += '<div class="card' + (sel ? " sel" : "") + '" data-ws="' + esc(ws.workspace) + '" data-agent="' + esc(a.agent_id) + '">'
+          + '<div class="row"><span class="badge" style="background:' + colorOf(kind) + '">' + esc(kind) + "</span>"
+          + (a.has_error ? '<span class="err-dot"></span>' : "")
+          + '<span class="meta" title="' + esc(bits.join(" · ")) + '">' + esc(bits.join(" · ") || "—") + "</span>"
+          + '<span class="time">' + esc(fmtShort(a.ts)) + "</span></div>"
+          + (a.user_input ? '<div class="preview" title="' + esc(a.user_input) + '">' + esc(root ? a.user_input : "任务：" + a.user_input) + "</div>" : "")
+          + "</div>";
+      }
+    }
+    el.innerHTML = html;
+    el.scrollTop = keepScroll;
+    el.querySelectorAll(".card").forEach((c) => c.addEventListener("click", () => {
+      selected = { workspace: c.getAttribute("data-ws"), agent: c.getAttribute("data-agent") };
+      detailStale = false;
+      renderList();
+      loadDetail(false);
+    }));
+  }
+
+  function snapshotDetailView() {
+    const el = document.getElementById("detail");
+    const openKeys = [];
+    el.querySelectorAll("details").forEach((d, i) => { if (d.open) openKeys.push(i); });
+    return { scrollTop: el.scrollTop, openKeys };
+  }
+
+  function restoreDetailView(snap) {
+    if (!snap) return;
+    const el = document.getElementById("detail");
+    const nodes = el.querySelectorAll("details");
+    (snap.openKeys || []).forEach((i) => { if (nodes[i]) nodes[i].open = true; });
+    requestAnimationFrame(() => { el.scrollTop = snap.scrollTop || 0; });
+  }
+
+  async function loadDetail(preserveView) {
+    if (!selected) return;
+    const el = document.getElementById("detail");
+    const snap = preserveView ? snapshotDetailView() : null;
+    if (!preserveView) el.innerHTML = '<div class="spin">加载中…</div>';
+    try {
+      detail = await api("/api/dev/llm-calls/detail?workspace=" + encodeURIComponent(selected.workspace) + "&agent=" + encodeURIComponent(selected.agent));
+      detailStale = false;
+      renderDetail();
+      if (snap) restoreDetailView(snap);
+    } catch (e) {
+      detail = null;
+      detailStale = false;
+      el.innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+    }
+    renderHead();
+  }
+
+  function renderHead() {
+    const el = document.getElementById("headtags");
+    let html = "";
+    if (detail) {
+      html += '<span class="tag" title="本会话已累计 LLM API 调用次数">共 ' + (detail.llm_call || 0) + " 小轮</span>";
+      const tl = toolLabel(detail.tool_names, detail.tool_call_count || 0);
+      if (tl) html += '<span class="tag" title="本会话已累计工具调用次数">' + esc(tl) + "</span>";
+    }
+    html += '<button id="refresh">刷新</button>';
+    el.innerHTML = html;
+    document.getElementById("refresh").addEventListener("click", () => { load(false); });
+  }
+
+  function costLabel(obj) {
+    if (!obj) return "";
+    if (obj.cost_state === "priced" && obj.cost_total_display) return obj.cost_total_display;
+    if (obj.cost_state === "unpriced") return "未配价";
+    return "";
+  }
+
+  function tokensLine(u) {
+    if (!u) return "";
+    const pin = num(u.prompt_tokens || u.input_tokens || 0);
+    const pout = num(u.completion_tokens || u.output_tokens || 0);
+    const total = num(u.total_tokens || ((u.prompt_tokens || u.input_tokens || 0) + (u.completion_tokens || u.output_tokens || 0)));
+    let s = "tokens：输入 " + pin + " / 输出 " + pout + " / 合计 " + total;
+    if (u.cache_hit_ratio != null) s += " · 缓存命中率 " + (Math.round(u.cache_hit_ratio * 1000) / 10) + "%";
+    return s;
+  }
+
+  function argsPreview(args) {
+    let s; try { s = typeof args === "string" ? args : JSON.stringify(args); } catch (e) { s = String(args); }
+    s = s || ""; return s.length > 200 ? s.slice(0, 200) + "…" : s;
+  }
+
+  function assistantParts(a) {
+    if (!a) return "";
+    let h = "";
+    if (a.reasoning_content) h += '<div class="reason">' + esc(a.reasoning_content) + "</div>";
+    if (a.content) h += '<div class="content">' + esc(a.content) + "</div>";
+    (a.tool_calls || []).forEach((c) => {
+      h += '<div class="tc"><b>' + esc(c.name || "?") + "</b> <span>" + esc(argsPreview(c.arguments)) + "</span></div>";
+    });
+    return h;
+  }
+
+  function toolResultBlock(tr) {
+    const content = tr.content || "";
+    const pv = content ? oneLine(content, 50) + (tr.truncated ? " … 已截断" : "") : "（空结果）";
+    return '<details class="nested"><summary><span class="fx sub">→ ' + esc(tr.tool || "tool_result") + '</span><span class="pv">' + esc(pv) + "</span></summary>"
+      + '<div class="body"><pre>' + esc(content + (tr.truncated ? "\n… 已截断" : "")) + "</pre></div></details>";
+  }
+
+  function renderDetail() {
+    const el = document.getElementById("detail");
+    const d = detail;
+    if (!d) { el.innerHTML = '<div class="empty">请选择左侧的智能体查看详情</div>'; return; }
+    const root = isRoot(d);
+    let h = '<div class="tagrow">';
+    const kindLabel = root ? "主会话" : (d.overview || d.kind || d.agent_id);
+    h += '<span class="t kind" style="background:' + colorOf(root ? "主会话" : (d.kind || d.agent_id)) + '">' + esc(kindLabel) + "</span>";
+    if (d.model) h += '<span class="t blue">' + esc(d.model) + "</span>";
+    if (d.provider_name) h += '<span class="t">' + esc(d.provider_name) + "</span>";
+    h += '<span class="t">本会话第 ' + (d.llm_call || 0) + " 小轮</span>";
+    const tl = toolLabel(d.tool_names, d.tool_call_count || 0);
+    if (tl) h += '<span class="t" title="本会话已累计工具调用次数">' + esc(tl) + "</span>";
+    if (d.temperature != null) h += '<span class="t">temperature ' + esc(d.temperature) + "</span>";
+    if (d.max_tokens != null && d.max_tokens > 0) h += '<span class="t">max_tokens ' + esc(d.max_tokens) + "</span>";
+    h += '<span class="sub">' + esc(fmtFull(d.ts)) + "</span>";
+    if (d.session_id) h += '<span class="sub" title="' + esc(d.session_id) + '">session ' + esc(String(d.session_id).slice(0, 16)) + "…</span>";
+    h += "</div>";
+
+    if (d.user_input && !root && d.agent_id !== "root") {
+      h += '<div class="task"><span class="lbl">任务描述</span>' + esc(d.user_input) + "</div>";
+    }
+
+    const latestUsage = d.response && d.response.usage;
+    if (latestUsage) {
+      h += '<div class="usage">' + esc(tokensLine(latestUsage));
+      const latestCost = costLabel(latestUsage);
+      if (latestCost) h += ' · <span class="money">' + esc(latestCost) + "</span>";
+      h += "</div>";
+    }
+    const sc = d.session_cost;
+    if (sc && sc.llm_turns) {
+      let sessCost = sc.cost_total_display || "¥0";
+      if (sc.cost_state === "unpriced") sessCost = "未配价";
+      const costHtml = sc.cost_state === "priced"
+        ? '<span class="money">' + esc(sessCost) + "</span>"
+        : esc(sessCost);
+      h += '<div class="usage">本会话累计 ' + costHtml
+        + "（" + num(sc.rounds || 0) + " 回合 · " + num(sc.llm_turns) + " 小轮"
+        + " · 入 " + esc(sc.input_display || "0")
+        + " / 出 " + esc(sc.output_display || "0") + "）</div>";
+    }
+
+    if (d.error) h += '<div class="err">调用出错：' + esc(d.error) + "</div>";
+
+    if (d.system_prompt) {
+      h += '<details><summary><span class="fx">系统提示词（' + num(d.system_prompt.length) + ' 字符）</span></summary><div class="body"><pre>' + esc(d.system_prompt) + "</pre></div></details>";
+    }
+    if (d.tools && d.tools.length) {
+      h += '<details><summary><span class="fx">工具 Schema（' + d.tools.length + ' 个）</span></summary><div class="body"><pre>' + esc(JSON.stringify(d.tools, null, 2)) + "</pre></div></details>";
+    }
+
+    const conv = d.conversation || [];
+    const response = d.response;
+    if (conv.length || response) {
+      h += '<div class="sub" style="margin:10px 0 6px">对话回合（' + conv.length + ' 回合，点击展开）</div>';
+      conv.forEach((round, ri) => {
+        const isLast = ri === conv.length - 1;
+        const iters = (round.iterations || []).slice();
+        // 当前 response = 最后一回合的末尾小轮（写盘时尚未入 conversation）
+        const foldResponse = isLast && response;
+        const roundTools = [];
+        const collect = (calls) => (calls || []).forEach((c) => { const n = c && c.name; if (n && roundTools.indexOf(n) < 0) roundTools.push(n); });
+        iters.forEach((it) => collect(it.assistant && it.assistant.tool_calls));
+        if (foldResponse) collect(response.tool_calls);
+        const toolCount = iters.reduce((acc, it) => acc + ((it.assistant && it.assistant.tool_calls) || []).length, 0)
+          + (foldResponse && response.tool_calls ? response.tool_calls.length : 0);
+        const nSmall = iters.length + (foldResponse ? 1 : 0);
+        let label = "第 " + (round.round || (ri + 1)) + " 回合";
+        if (nSmall) label += " · " + nSmall + " 小轮";
+        if (roundTools.length) label += " · " + toolLabel(roundTools, toolCount);
+        const roundCost = costLabel(round);
+        const pv = round.user ? oneLine(round.user, 80) : "（无用户消息）";
+        let roundTok = "";
+        const rin = Number(round.input_tokens || 0);
+        const rout = Number(round.output_tokens || 0);
+        if (rin || rout) roundTok = "入 " + num(rin) + " / 出 " + num(rout);
+        let body = "";
+        if (round.user) body += '<div class="round-user' + (round.context ? " ctx" : "") + '">' + (round.context ? "[上下文] " : "") + esc(round.user) + "</div>";
+        iters.forEach((it, idx) => {
+          body += renderSmallRound(it, idx + 1);
+        });
+        if (foldResponse) {
+          body += renderSmallRound(
+            { assistant: response, usage: response.usage, _is_current: true },
+            iters.length + 1
+          );
+        }
+        h += '<details' + (isLast ? " open" : "") + '><summary><span class="fx">' + esc(label) + '</span><span class="pv">' + esc(pv) + "</span>"
+          + summaryRight(roundTok, roundCost)
+          + '</summary><div class="body">' + body + "</div></details>";
+      });
+      // 无 conversation 仅有 response（极少见）：单独一回合
+      if (!conv.length && response) {
+        const aloneCost = costLabel(response.usage);
+        const u = response.usage || {};
+        const aloneTok = (u.prompt_tokens || u.input_tokens || u.completion_tokens || u.output_tokens)
+          ? ("入 " + num(u.prompt_tokens || u.input_tokens || 0) + " / 出 " + num(u.completion_tokens || u.output_tokens || 0))
+          : "";
+        h += '<details open><summary><span class="fx">第 1 回合 · 1 小轮</span><span class="pv">当前响应</span>'
+          + summaryRight(aloneTok, aloneCost)
+          + '</summary><div class="body">'
+          + renderSmallRound({ assistant: response, usage: response.usage, _is_current: true }, 1)
+          + "</div></details>";
+      }
+    }
+    el.innerHTML = h;
+  }
+
+  function summaryRight(tok, cost) {
+    if (!tok && !cost) return "";
+    return '<span class="right">'
+      + (tok ? '<span class="tok">' + esc(tok) + "</span>" : "")
+      + (cost ? '<span class="cost">' + esc(cost) + "</span>" : "")
+      + "</span>";
+  }
+
+  function renderSmallRound(it, numIdx) {
+    const assistant = it.assistant || {};
+    const calls = assistant.tool_calls || [];
+    const u = it.usage;
+    // 原设计：左侧标签 + 中间工具名/正文预览；入出与花费靠右
+    let itLabel = "小轮 " + numIdx;
+    if (it._is_current) itLabel += "（当前）";
+    if (calls.length) {
+      const names = calls.map((c) => c && c.name).filter(Boolean);
+      itLabel += "（" + toolLabel(names, calls.length) + "）";
+    }
+    if (assistant.reasoning_content) itLabel += "（思考）";
+    const itPv = assistant.content
+      ? oneLine(assistant.content, 60)
+      : calls.map((c) => c.name).filter(Boolean).join("、");
+    let tok = "";
+    if (u) {
+      tok = "入 " + num(u.prompt_tokens || u.input_tokens || 0)
+        + " / 出 " + num(u.completion_tokens || u.output_tokens || 0);
+    }
+    const itCost = costLabel(u);
+    let inner = "";
+    if (u) {
+      inner += '<div class="usage" style="margin:4px 0 8px">' + esc(tokensLine(u));
+      if (u.cost_state === "priced" && u.cost_total_display) {
+        inner += ' · <span class="money">' + esc(u.cost_total_display) + "</span>";
+        if (u.has_cost_breakdown || (u.cost_miss || u.cost_hit || u.cost_out)) {
+          inner += "（非命中 " + esc(u.cost_miss_display || formatMoney(u.cost_miss))
+            + " · 命中 " + esc(u.cost_hit_display || formatMoney(u.cost_hit))
+            + " · 输出 " + esc(u.cost_out_display || formatMoney(u.cost_out)) + "）";
+        }
+      } else if (u.cost_state === "unpriced") {
+        inner += " · 未配价";
+      }
+      inner += "</div>";
+    }
+    inner += assistantParts(assistant);
+    (it.tool_results || []).forEach((tr) => { inner += toolResultBlock(tr); });
+    return '<details class="nested"><summary><span class="fx sub">' + esc(itLabel) + '</span><span class="pv">' + esc(itPv) + "</span>"
+      + summaryRight(tok, itCost)
+      + '</summary><div class="body">' + inner + "</div></details>";
+  }
+
+  function formatMoney(v) {
+    const n = Number(v || 0);
+    if (!(n > 0)) return "¥0";
+    if (n >= 1) return "¥" + n.toFixed(2);
+    if (n >= 0.0001) return "¥" + n.toFixed(4);
+    return "<¥0.0001";
+  }
+
+  // ---------- tabs + context modules ----------
+  let activeTab = "llm";
+  let ctxOrder = [];
+
+  function setTab(tab) {
+    activeTab = tab;
+    document.querySelectorAll("#tabs .tab").forEach((el) => {
+      el.classList.toggle("on", el.dataset.tab === tab);
+    });
+    document.getElementById("panel-llm").classList.toggle("hidden", tab !== "llm");
+    document.getElementById("panel-ctx").classList.toggle("hidden", tab !== "ctx");
+    if (tab === "ctx") loadCtx();
+  }
+
+  document.getElementById("tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab");
+    if (btn && btn.dataset.tab) setTab(btn.dataset.tab);
+  });
+
+  function renderCtxList() {
+    const el = document.getElementById("ctx-list");
+    el.innerHTML = ctxOrder.map((s, i) => {
+      const sentinel = !!s.sentinel;
+      const meta = sentinel
+        ? "对话哨兵（固定轴，不可关）"
+        : (s.file ? s.file + " · " + (s.scope || "") : s.scope || "");
+      const wrap = s.id === "user_rules" ? "系统提醒" : (s.id === "situation" ? "情境" : (sentinel ? "" : "系统消息"));
+      return '<div class="ctx-row' + (sentinel ? " sentinel" : "") + '" data-i="' + i + '">'
+        + (sentinel
+          ? '<span class="meta">—</span>'
+          : '<input type="checkbox" ' + (s.enabled ? "checked" : "") + ' data-act="tog" />')
+        + '<div><div class="lbl">' + esc(s.label || s.id) + (wrap ? ' <span class="meta">(' + wrap + ")</span>" : "") + "</div>"
+        + '<div class="meta">' + esc(meta) + "</div></div>"
+        + '<div class="btns">'
+        + '<button type="button" data-act="up"' + (i === 0 ? " disabled" : "") + ">上移</button>"
+        + '<button type="button" data-act="dn"' + (i === ctxOrder.length - 1 ? " disabled" : "") + ">下移</button>"
+        + "</div></div>";
+    }).join("");
+  }
+
+  document.getElementById("ctx-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const row = btn.closest(".ctx-row");
+    if (!row) return;
+    const i = Number(row.dataset.i);
+    const act = btn.dataset.act;
+    if (act === "tog") {
+      if (ctxOrder[i].sentinel) return;
+      ctxOrder[i].enabled = !ctxOrder[i].enabled;
+      renderCtxList();
+      return;
+    }
+    if (act === "up" && i > 0) {
+      const t = ctxOrder[i - 1];
+      ctxOrder[i - 1] = ctxOrder[i];
+      ctxOrder[i] = t;
+      renderCtxList();
+    }
+    if (act === "dn" && i < ctxOrder.length - 1) {
+      const t = ctxOrder[i + 1];
+      ctxOrder[i + 1] = ctxOrder[i];
+      ctxOrder[i] = t;
+      renderCtxList();
+    }
+  });
+
+  async function loadCtx() {
+    const st = document.getElementById("ctx-status");
+    st.textContent = "加载中…";
+    try {
+      const data = await api("/api/dev/context-modules");
+      ctxOrder = data.order || [];
+      renderCtxList();
+      st.textContent = data.system_dir ? ("system: " + data.system_dir) : "";
+    } catch (e) {
+      const msg = String(e && e.message || e);
+      st.textContent = /404|HTTP 404/i.test(msg)
+        ? "接口不存在：请重启 coara-devtools 后再打开本页"
+        : msg;
+    }
+  }
+
+  document.getElementById("ctx-reload").addEventListener("click", () => loadCtx());
+  document.getElementById("ctx-save").addEventListener("click", async () => {
+    const st = document.getElementById("ctx-status");
+    st.textContent = "保存中…";
+    try {
+      const res = await fetch("/api/dev/context-modules" + q(), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          order: ctxOrder.map((s) =>
+            s.sentinel ? { id: s.id } : { id: s.id, enabled: !!s.enabled }
+          ),
+        }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || ("HTTP " + res.status));
+      ctxOrder = j.order || ctxOrder;
+      renderCtxList();
+      st.textContent = "已保存 " + (j.path || "");
+    } catch (e) {
+      st.textContent = e.message;
+    }
+  });
+  document.getElementById("ctx-preview").addEventListener("click", async () => {
+    const box = document.getElementById("ctx-preview-box");
+    box.style.display = "block";
+    box.innerHTML = '<div class="spin">预览中…</div>';
+    try {
+      // Preview uses saved yaml on disk; save first if dirty is caller's choice
+      const data = await api("/api/dev/context-modules/preview");
+      const segs = data.segments || [];
+      box.innerHTML = '<div class="ctx-note" style="margin-bottom:8px">工作空间：' + esc(data.workspace) + "（按磁盘上已保存配置）</div>"
+        + segs.map((s) => {
+          if (s.id === "conversation") {
+            return '<div class="ctx-seg"><div class="hd">—— 对话 ——</div></div>';
+          }
+          const state = !s.enabled ? "已禁用" : (s.present ? (s.wrap || "") : "无文件 / 跳过");
+          const body = s.present ? "<pre>" + esc(s.body) + "</pre>" : '<div class="meta">（空）</div>';
+          return '<div class="ctx-seg"><div class="hd">' + esc(s.label) + " · " + esc(state) + "</div>" + body + "</div>";
+        }).join("");
+    } catch (e) {
+      box.innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+    }
+  });
+
+  // ---------- init ----------
+  renderHead();
+  load(false);
+  setInterval(() => { if (activeTab === "llm") load(true); }, 15000);
+})();
+
+</script>
+</body>
+</html>

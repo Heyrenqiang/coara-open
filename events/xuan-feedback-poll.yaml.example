@@ -1,0 +1,29 @@
+# Copy to <workspace>/.coara/matters/definitions/xuan-feedback-poll.yaml（workspace = 下方 workspace 字段登记的空间）
+
+id: xuan-feedback-poll
+enabled: false
+kind: interval_poll
+workspace: 暄
+
+watch_path: feedback/inbox
+interval_seconds: 120
+poll_min_count: 1
+
+# salience: low / normal / high（high 上浮前台待处理视图）
+# handle:   park（默认，挂住等用户）/ janitor（叫醒管家过目）
+# 旧 trigger_mode 已废弃并被忽略；处置模式只写 handle（缺省 park）
+salience: normal
+handle: park
+priority: normal
+cooldown_seconds: 120
+
+routing_domain: xuan-maintenance
+suggested_delegate: coaras
+
+message_template: |
+  [事件 — 暄反馈轮询]
+  source_id: {{source_id}}
+  workspace: @{{workspace}}
+  event_type: {{event_type}}
+  {{details}}
+  归属工作空间 @{{workspace}}（定时轮询）：写入工作空间动态；用户主动查看与处理。

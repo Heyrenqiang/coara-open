@@ -1,0 +1,24 @@
+# Copy to: <workspace>/.coara/matters/definitions/stocks-watch-inbox-watch.yaml
+# Sensor only — pair with handle: janitor when the caretaker should review inbox events
+
+id: stocks-watch-inbox-watch
+enabled: false
+kind: file_watch
+workspace: stocks-watch
+
+watch_path: inbox
+watch_pattern: "*.json"
+watch_events: [created]
+
+# salience: low / normal / high（high 上浮前台待处理视图）
+# handle:   park（默认，挂住等用户）/ janitor（叫醒管家过目）
+salience: normal
+handle: park
+cooldown_seconds: 120
+priority: normal
+
+message_template: |
+  [inbox 事件 — {{source_id}}]
+  workspace: @{{workspace}}
+  event_type: {{event_type}}
+  {{details}}

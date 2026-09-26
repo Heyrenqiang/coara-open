@@ -1,0 +1,4 @@
+node_modules/
+# 加载词库：vite 构建/开发启动时从 src/cli/loading_phrases.json 同步生成，
+# 单一事实源在 CLI 侧，此副本为构建产物，不入库（防双份漂移）。
+src/lib/loading_phrases.json

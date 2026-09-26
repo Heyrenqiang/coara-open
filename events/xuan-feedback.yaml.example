@@ -1,0 +1,30 @@
+# Copy to <workspace>/.coara/matters/definitions/xuan-feedback.yaml（workspace = 下方 workspace 字段登记的空间）
+
+id: xuan-feedback
+enabled: false
+kind: file_watch
+workspace: 暄
+
+watch_path: feedback/inbox
+watch_pattern: "*.json"
+watch_events:
+  - created
+
+# salience: low / normal / high（high 上浮前台待处理视图）
+# handle:   park（默认，挂住等用户）/ janitor（叫醒管家过目）
+# 旧 trigger_mode 已废弃并被忽略；处置模式只写 handle（缺省 park）
+salience: normal
+handle: park
+priority: normal
+cooldown_seconds: 30
+
+routing_domain: xuan-maintenance
+suggested_delegate: coaras
+
+message_template: |
+  [事件 — 暄用户反馈]
+  source_id: {{source_id}}
+  workspace: @{{workspace}}
+  event_type: {{event_type}}
+  {{details}}
+  归属工作空间 @{{workspace}}：写入工作空间动态；janitor 用 review(action=list) 查看，处理 delegate(coaras, workspace={{workspace}})。

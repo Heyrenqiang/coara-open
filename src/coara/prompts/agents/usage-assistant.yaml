@@ -1,0 +1,15 @@
+agent:
+  name: usage-assistant
+  role: 用量助手
+  when_to_use: >-
+    WebUI 用量页面专属会话主体；帮用户用自然语言查询与分析用量
+    （tokens、费用、模型分布、异常消耗），不经 delegate 委派，由用量模块直接加载
+  tools:
+    include:
+      - shell
+      - read
+      - grep
+      - glob
+  skills:
+    include: []
+    exclude: []

@@ -1,0 +1,167 @@
+[project]
+name = "coara"
+version = "1.0.69"
+description = "An AI assistant runtime that can create and organize sub-agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "coara Team"}
+]
+
+dependencies = [
+    # LLM Providers
+    "openai>=3.14.0,<4",
+    
+    # Core Utilities
+    "pydantic>=2.9.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.9.0",
+    "click>=8.1.0",
+    "prompt_toolkit>=3.0.0",
+    "questionary>=2.0.0",
+
+    # Text Processing
+    "pygments>=2.18.0",
+    "python-frontmatter>=1.1.0",
+    "trafilatura>=2.0.0",
+    
+    # File Watching
+    "watchdog>=5.0.0",
+
+    # Text encoding detection for legacy (non-UTF-8) files
+    "charset-normalizer>=3.0",
+    
+    # HTTP & Networking
+    "httpx>=0.27.0",
+    "aiohttp>=3.10.0",
+    "matrix-nio>=0.25.2",
+    
+    # Process Management
+    "psutil>=6.0.0",
+    
+    # Async Database
+    "aiosqlite>=0.19.0",
+
+    # Scheduling
+    "croniter>=2.0.0",
+    
+    # Logging
+    "loguru>=0.7.0",
+
+    # 托盘 launcher（coara tray 系统托盘图标）：pystray + pillow 绘制图标；纯 Python 实现
+    # 注意 coara[office] 已含 pillow，此处冗余声明是为托盘在精简安装下也能用
+    "pystray>=0.19.0",
+    "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+# WDL 引擎为独立软件（仓库内 wdl/ 子项目），coara 仅作 WDL 的生产者与文件宿主
+#
+# coara 自持的内嵌 flow 能力不依赖 wdl-engine 是否安装（自持副本在
+# src/workflow/core/，分叉声明见其 model.py 文件头），本 extra 仅用于：
+#   - 装了 wdl-engine 时，tests/test_workflow/test_core_fork_parity.py 用 wdl 当 oracle 做等价性比对
+#   - 需要 wdl-engine 图模型/serde 的 WDL 生产侧场景
+wdl = [
+    "wdl-engine",
+]
+
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-timeout>=2.3.0",
+    "ruff==0.15.12",
+    "mypy>=1.13.0",
+    "pillow>=10.0.0",
+    "qrcode[pil]>=7.4.2",
+]
+office = [
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "pymupdf>=1.24.0",
+]
+desktop = [
+    # 桌面端截屏能力（screenshot 工具）
+    "mss>=10.0.0",
+    "pillow>=10.0.0",
+    # 桌面端邮件收发能力（email 工具，imap/smtp）
+    "imap-tools>=1.0.0",
+    # 打印机 PDF 生成（printer action=print 的 pages 参数）
+    "pypdf>=5.0.0",
+]
+
+[project.scripts]
+coara = "src.cli.main:cli"
+coara-devtools = "src.devtools.server:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+exclude = ["src.ui.web", "src.ui.web.*", "src.devtools", "src.devtools.*"]
+
+# Non-.py runtime assets (wheel otherwise ships Python only — breaks Web UI + subagents).
+# Paths are relative to each package directory. Do NOT include src/ui/web (Vite source / node_modules).
+[tool.setuptools.package-data]
+"src.coara" = ["prompts/**/*.md", "prompts/**/*.yaml"]
+"src.cli" = ["coara.ico"]
+"src.records" = ["loading_phrases.json"]
+"src.ui" = ["static/**/*"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+# wdl/ 是独立子项目，有自己的 pyproject 与 ruff 配置，不参与本仓 lint
+exclude = [".coara", "wdl"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Files embedding LLM prompt templates as triple-quoted strings;
+# long prompt lines are intrinsic and should not be force-wrapped.
+"src/tools/builtin/delegate/delegate.py" = ["E501"]
+"src/tools/builtin/scheduling/reminder.py" = ["E501"]
+"src/tools/builtin/file_io/write.py" = ["E501"]
+"src/tools/builtin/integration/tool.py" = ["E501"]
+"src/tools/builtin/runtime/shell.py" = ["E501"]
+"src/tools/builtin/code_mode/ptc.py" = ["E501"]
+# Standalone dev/utility scripts: sys.path manipulation before imports (E402)
+# and long Chinese text in output templates (E501).
+"scripts/dev/*.py" = ["E402", "E501"]
+"scripts/soft-copyright/*.py" = ["E501"]
+"skills/agnes/scripts/agnes_api.py" = ["E402"]
+
+[tool.mypy]
+# 尽力而为模式：部分文件用按文件的 # mypy: ignore-errors，不做 strict
+# 推荐命令：mypy src --ignore-missing-imports
+ignore_missing_imports = true
+# wdl/ 是独立子项目，有自己的 pyproject，排除避免与本仓重复检查
+exclude = ["^wdl/"]
+# 平台语义差异大，POSIX 专用 API（getpgid / fcntl.flock）在 Windows 上需 type: ignore
+# Windows 与 Linux 行为不同属预期，相关测试按 skipif 标注平台
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Keep the default loop on function scope (pytest-asyncio 1.x default is unset/None).
+asyncio_default_fixture_loop_scope = "function"
+# Default: core smoke (~280 tests). Extended detail: pytest -m extended. Full: pytest -m "".
+addopts = "-m 'not real_env and not e2e and not extended'"
+# Hard ceiling per test so a stuck test fails fast instead of hanging the run
+# forever (orphan pytest processes previously outlived killed shells).
+# thread method works on Windows; signal-based kill is POSIX-only.
+timeout = 120
+timeout_method = "thread"
+markers = [
+    "e2e: end-to-end tests that exercise multi-component runtime flows",
+    "real_env: tests or scripts that depend on real providers, network, or current workspace",
+    "extended: detailed edge-case and integration tests (excluded from default pytest run)",
+]
+filterwarnings = [
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]

@@ -1,0 +1,7 @@
+# Copy to: {coara_home}/workspaces-meta/stocks-watch.yaml
+name: stocks-watch
+path: D:/workspaces/stocks-watch
+workflows:
+  default_inputs:
+    watchlist: [AAPL, MSFT, NVDA]
+skills: [stock-watch]

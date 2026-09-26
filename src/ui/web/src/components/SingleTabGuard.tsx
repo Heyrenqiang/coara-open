@@ -1,0 +1,49 @@
+/**
+ * SingleTabGuard — WebUI 单标签守卫（静默模式）。
+ *
+ * 判定本标签为「后来者」（已有同源活标签）时，静默自我退出：
+ * 不渲染任何内容 + 尝试 window.close()。浏览器可能拒绝脚本关闭
+ * 非脚本打开的标签，此时标签保持空白，由用户手动关闭即可。
+ *
+ * 入口带 token 新开的标签优先接管；僵死/被挤掉的旧标签让路。
+ */
+
+import { useEffect, useState, type ReactNode } from "react";
+import { getAuthToken, tookTokenFromUrlThisLoad } from "../lib/auth";
+import { createSingleTabArbiter } from "../lib/singleTab";
+import { getWS } from "../lib/ws";
+
+function tabIsClaimingLive(): boolean {
+  const ws = getWS();
+  if (ws.isClosed()) return false;
+  if (!getAuthToken()) return false;
+  return true;
+}
+
+export function SingleTabGuard({ children }: { children: ReactNode }) {
+  const [duplicate, setDuplicate] = useState(false);
+
+  useEffect(
+    () =>
+      createSingleTabArbiter(() => setDuplicate(true), {
+        isClaimingLive: tabIsClaimingLive,
+        isFreshOpen: tookTokenFromUrlThisLoad,
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    if (!duplicate) return;
+    const t = setTimeout(() => {
+      try {
+        window.close();
+      } catch {
+        /* ignore */
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [duplicate]);
+
+  if (!duplicate) return <>{children}</>;
+  return null;
+}

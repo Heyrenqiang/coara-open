@@ -1,0 +1,49 @@
+/* 编排行的二级节点清单（三级折叠的第二级）：节点名 · 状态 · 耗时。 */
+.flow-node-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.flow-node-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--coara-text-secondary);
+  font: inherit;
+}
+
+.flow-node-row:hover {
+  color: var(--coara-text);
+}
+
+.flow-node-mark {
+  flex: none;
+  width: 12px;
+}
+
+.flow-node-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-node-status {
+  flex: none;
+  font-size: 12px;
+  color: var(--coara-text-tertiary);
+}
+
+/* 节点内容缩进一级，视觉上从属于上面的节点行：左缘参考线与展开区同一语言 */
+.flow-node-body {
+  margin: 2px 0 6px 5px;
+  padding-left: 12px;
+  border-left: 1px solid var(--coara-border-muted);
+}

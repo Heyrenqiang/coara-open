@@ -1,0 +1,10 @@
+agent:
+  name: coaras
+  role: 你的分身：能力与做事方式与你同宗
+  when_to_use: >-
+    需要并行多路，或把独立子任务从主对话里拆出去做时（含只读摸底与工程改动；只读时在 prompt 里写明禁止修改）
+  tools:
+    include: ["*"]
+  skills:
+    include: []
+    exclude: []

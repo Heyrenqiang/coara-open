@@ -1,0 +1,22 @@
+name: 开发周报生成
+description: 并行收集代码提交与任务进展，汇聚撰写周报，审校后出终稿
+nodes:
+  collect-commits:
+    task: |-
+      统计工作区仓库近 7 天的 git 提交：按模块/主题归类，提炼要点，给出量化
+      （提交数、涉及模块）。只读操作。输出变更要点清单。中文。
+  collect-tasks:
+    task: |-
+      阅读工作空间的动态收件箱与待办记录，提炼本周完成 / 进行中 / 待办三段清单。
+      只读操作。输出三段清单。中文。
+  draft:
+    task: |-
+      汇总两路上游输入，撰写结构化周报草稿：本周成果、进展与阻塞、风险、
+      下周计划。基于上游数据，不编造。输出草稿全文。
+  finalize:
+    task: |-
+      审校周报草稿：核对数据一致性、删冗余、统一措辞与排版。输出终稿全文。
+edges:
+  - {from: collect-commits, to: draft}
+  - {from: collect-tasks, to: draft}
+  - {from: draft, to: finalize}

@@ -1,0 +1,173 @@
+/* 模块会话浮窗样式（消息渲染复用主对话套件：chat-bubble-* / chat-markdown，见 index.css 与 MessageList） */
+
+/* CLI 风格工具 yield 行（✓ tool(...) / ✗ ...） */
+.flow-chat-yield {
+  margin: 2px 0;
+  padding: 0;
+  font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--coara-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.flow-chat-yield-err {
+  color: var(--coara-danger);
+}
+
+/* ── 面板壳（浮动窗 / 嵌入） ─────────────────────────────────────── */
+
+.flow-chat-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--coara-bg-subtle);
+}
+
+.flow-chat-panel-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 14px 8px;
+  min-height: 0;
+}
+
+.flow-chat-empty {
+  color: var(--coara-text-faint);
+  font-size: 12.5px;
+  line-height: 1.8;
+  padding: 28px 10px;
+  text-align: center;
+}
+
+.flow-chat-panel-input {
+  padding: 10px 12px;
+  background: var(--coara-surface);
+  flex-shrink: 0;
+}
+
+/* ── 浮动窗 ─────────────────────────────────────────────────────── */
+
+.flow-chat-float {
+  position: fixed;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  background: var(--coara-surface);
+  border: 1px solid var(--coara-border-muted);
+  border-radius: 10px;
+  box-shadow: var(--coara-shadow-pop-lg);
+  overflow: hidden;
+  min-width: 320px;
+  min-height: 280px;
+}
+
+.flow-chat-float-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 8px 12px;
+  background: var(--coara-bg-subtle);
+  border-bottom: 1px solid var(--coara-border-soft);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.flow-chat-float-bar:active {
+  cursor: grabbing;
+}
+
+.flow-chat-float-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--coara-text);
+}
+
+.flow-chat-float-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.flow-chat-float-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.flow-chat-float-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(
+    135deg,
+    transparent 50%,
+    var(--coara-border) 50%,
+    var(--coara-border) 60%,
+    transparent 60%,
+    transparent 75%,
+    var(--coara-border) 75%
+  );
+}
+
+.flow-chat-fab {
+  position: fixed;
+  z-index: 1100;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--coara-surface);
+  box-shadow: var(--coara-shadow-float);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  overflow: visible;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.flow-chat-fab:active {
+  cursor: grabbing;
+}
+
+.flow-chat-fab:hover:not(.flow-chat-fab-dragging) {
+  box-shadow: var(--coara-shadow-float-hover);
+  transform: translateY(-2px);
+}
+
+.flow-chat-fab-dragging {
+  cursor: grabbing;
+  transform: none;
+  transition: none;
+}
+
+.flow-chat-fab-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.flow-chat-fab-spin {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  font-size: 12px;
+  color: var(--coara-accent);
+  background: var(--coara-surface);
+  border-radius: 50%;
+  padding: 2px;
+  box-shadow: var(--coara-shadow-chip);
+}

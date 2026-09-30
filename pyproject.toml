@@ -1,6 +1,6 @@
 [project]
 name = "coara"
-version = "1.0.69"
+version = "1.0.87"
 description = "An AI assistant runtime that can create and organize sub-agents"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -93,11 +93,10 @@ desktop = [
 
 [project.scripts]
 coara = "src.cli.main:cli"
-coara-devtools = "src.devtools.server:main"
 
 [tool.setuptools.packages.find]
 include = ["src*"]
-exclude = ["src.ui.web", "src.ui.web.*", "src.devtools", "src.devtools.*"]
+exclude = ["src.ui.web", "src.ui.web.*"]
 
 # Non-.py runtime assets (wheel otherwise ships Python only — breaks Web UI + subagents).
 # Paths are relative to each package directory. Do NOT include src/ui/web (Vite source / node_modules).

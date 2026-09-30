@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.logger import logger
-from src.ui.web_views import WebViewStore
+from src.ui.web_views import WebViewStore, view_tape_subject
 
 _SHARED_STORE: WebViewStore | None = None
 _SHARED_LOCK = threading.Lock()
@@ -15,6 +15,9 @@ _SHARED_LOCK = threading.Lock()
 # 落带都重解析 coara_home。
 _PERSIST_CACHE: dict[tuple[str, str], Any] = {}
 _PERSIST_CACHE_MAX = 64
+
+# 供调用方 ``from src.ui.view_recorder import view_tape_subject`` 的再导出
+__all__ = ("record_view_frame", "shared_view_store", "view_tape_subject")
 
 
 def shared_view_store() -> WebViewStore:
@@ -44,6 +47,12 @@ def record_view_frame(frame: dict[str, Any], *, coara_home: Path | None = None) 
         return None
     workspace_dir = str(frame.get("workspace_dir") or "")
     if not workspace_dir:
+        logger.warning(
+            "view recorder skipped: empty workspace_dir kind={} source={} session={}",
+            frame.get("type") or frame.get("kind"),
+            frame.get("source"),
+            frame.get("session_id"),
+        )
         return None
     # 帧形态归一：内核帧把内容放在 payload 里、类别用 kind；端侧流对象的帧是
     # 平铺字段、类别用 type。落带与读取只认后者（make_persist 的形状），这里换算。
@@ -55,6 +64,8 @@ def record_view_frame(frame: dict[str, Any], *, coara_home: Path | None = None) 
         frame = merged
     if "type" not in frame and frame.get("kind"):
         frame = {**frame, "type": frame["kind"]}
+    # main / janitor desk → 根线；录像带页只读 conversation.jsonl
+    frame = {**frame, "subject": view_tape_subject(frame.get("subject"), desk=frame.get("desk"))}
     try:
         return _persist_for(workspace_dir, coara_home)(frame)
     except Exception as exc:  # noqa: BLE001 — 落带是观察动作，失败绝不中断回合

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 // 放行清单：令牌真源 + 画布专属令牌表（React Flow 节点/端口/状态色，
 // 全站令牌无对应语义；文件头有与 tokens.ts 的关系说明）。
-const ALLOW = new Set(["theme/tokens.ts", "features/workflow/editor/theme.ts"]);
+const ALLOW = new Set(["theme/tokens.ts", "plugins/workflow/workflow-domain/editor/theme.ts"]);
 
 const HEX = /#[0-9a-fA-F]{3,8}\b/g;
 const RGB = /\brgba?\(/g;

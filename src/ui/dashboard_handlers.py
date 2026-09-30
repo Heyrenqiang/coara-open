@@ -45,7 +45,7 @@ def _validate_draft_id(draft_id: str) -> str:
 class DashboardRestHandlers(DashboardAuthMixin):
     """State + REST handlers borrowed by the embedded Web UI server."""
 
-    _TOOL_OUTPUT_REF_PATTERN = re.compile(r"^[a-f0-9]{8}$")
+    _TOOL_OUTPUT_REF_PATTERN = re.compile(r"^[a-f0-9]{8,12}$")
     # Keep dashboard state cache bounded during long coara + web sessions.
     _MAX_CACHED_EVENTS = 3_000
     _MAX_CACHED_MESSAGES = 1_500
@@ -99,6 +99,7 @@ class DashboardRestHandlers(DashboardAuthMixin):
         router.add_get("/api/v1/meta", self.handle_api_v1_meta)
         router.add_get("/api/v1/modules", self.handle_api_v1_modules)
         router.add_get("/api/v1/skills", self.handle_api_v1_skills)
+        router.add_post("/api/v1/skills/deferred", self.handle_api_v1_skill_deferred)
         router.add_get("/api/v1/skills/{name}/content", self.handle_api_v1_skill_content)
         router.add_post("/api/v1/skills/{name}/content", self.handle_api_v1_skill_content_save)
         router.add_get("/api/v1/tools", self.handle_api_v1_tools)
@@ -119,6 +120,8 @@ class DashboardRestHandlers(DashboardAuthMixin):
         router.add_post("/api/v1/thinking", self.handle_api_v1_thinking_save)
         router.add_get("/api/v1/default-model", self.handle_api_v1_default_model)
         router.add_post("/api/v1/default-model", self.handle_api_v1_default_model_save)
+        router.add_get("/api/v1/trajectory", self.handle_api_v1_trajectory)
+        router.add_get("/api/v1/trajectory/workspaces", self.handle_api_v1_trajectory_workspaces)
 
     def reset_state_cache(self) -> None:
         """Drop incremental-read cursors; call after swapping ``store``/``workspace_dir``."""
@@ -645,10 +648,34 @@ class DashboardRestHandlers(DashboardAuthMixin):
             {
                 "skills": skills,
                 "default_include": default_include,
+                "deferred": list(skills_cfg.get("deferred") or []),
                 "pool_count": len(skills),
                 "recommended_count": len(default_include) if default_include != ["*"] else len(skills),
             }
         )
+
+    async def handle_api_v1_skill_deferred(self, request: web.Request) -> web.Response:
+        """切换技能挂起状态：body {"name": str, "deferred": bool}。新会话生效。"""
+        self._check_token(request)
+        if config_manager._config is None:
+            await config_manager.load()
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as exc:
+            raise web.HTTPBadRequest(text="Invalid JSON") from exc
+        name = str(payload.get("name") or "").strip()
+        deferred = payload.get("deferred")
+        if not name or not isinstance(deferred, bool):
+            raise web.HTTPBadRequest(text="name 与 deferred(bool) 必填")
+        from src.ui.control_plane import set_skill_deferred
+
+        try:
+            names = await set_skill_deferred(name, deferred, self.workspace_dir)
+        except SkillNotFoundError as exc:
+            raise web.HTTPNotFound(text=f"技能不存在：{name}") from exc
+        except ConfigError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+        return web.json_response({"ok": True, "deferred": names, "effective": "新会话生效"})
 
     async def handle_api_v1_skill_content(self, request: web.Request) -> web.Response:
         """读技能 SKILL.md 原文：锁定 frontmatter + 可编辑正文。"""
@@ -918,6 +945,63 @@ class DashboardRestHandlers(DashboardAuthMixin):
             raise web.HTTPBadRequest(text=str(exc)) from exc
         return web.json_response({"ok": True, "default_provider": applied_provider, "default_model": applied_model})
 
+    async def handle_api_v1_trajectory_workspaces(self, request: web.Request) -> web.Response:
+        """轨迹视图的工作空间清单：注册表条目 + 是否有录像带"""
+        self._check_token(request)
+        from src.workspace.registry import open_registry
+
+        items: list[dict[str, Any]] = []
+        try:
+            registry = open_registry(self.coara_home, self.coara_home)
+            for entry in registry.list_active():
+                ws_dir = entry.resolved_path()
+                from src.ui.web_views import resolve_web_view_path
+
+                tape = resolve_web_view_path(ws_dir, coara_home=self.coara_home, subject="root", session_id="")
+                items.append(
+                    {
+                        "name": str(getattr(entry, "name", "") or ws_dir.name),
+                        "workspace_dir": str(ws_dir),
+                        "has_tape": tape.exists() and tape.stat().st_size > 0,
+                    }
+                )
+        except Exception as exc:
+            raise web.HTTPInternalServerError(text=str(exc)) from exc
+        return web.json_response({"workspaces": items})
+
+    async def handle_api_v1_trajectory(self, request: web.Request) -> web.Response:
+        """轨迹窗口读取：?workspace_dir=…&before_offset=N（向上翻页）"""
+        self._check_token(request)
+        from src.ui.trajectory import read_trajectory_window
+        from src.ui.web_views import resolve_web_view_path
+
+        workspace_dir = (request.query.get("workspace_dir") or "").strip()
+        if not workspace_dir:
+            raise web.HTTPBadRequest(text="需要 workspace_dir 参数")
+        before_raw = (request.query.get("before_offset") or "").strip()
+        before_offset: int | None = None
+        if before_raw:
+            try:
+                before_offset = max(0, int(before_raw))
+            except ValueError as exc:
+                raise web.HTTPBadRequest(text="before_offset 需为整数") from exc
+
+        tape = resolve_web_view_path(workspace_dir, coara_home=self.coara_home, subject="root", session_id="")
+        if not tape.exists():
+            return web.json_response({"rows": [], "has_older": False, "oldest_offset": 0, "file_size": 0})
+        # 读前冲刷异步写队列，避免刷新/tip 落后于刚落带的帧
+        try:
+            from src.ui.view_recorder import shared_view_store
+
+            shared_view_store().flush(timeout=0.5)
+        except Exception:
+            logger.debug("trajectory tip flush skipped", exc_info=True)
+        try:
+            window = read_trajectory_window(tape, before_offset=before_offset)
+        except Exception as exc:
+            raise web.HTTPInternalServerError(text=str(exc)) from exc
+        return web.json_response(window)
+
     async def handle_api_v1_model_choices(self, request: web.Request) -> web.Response:
         """统一模型组合列表：所有已配置且有 API key 的 provider 声明的可用模型。"""
         self._check_token(request)
@@ -979,6 +1063,9 @@ class DashboardRestHandlers(DashboardAuthMixin):
 
         # 保存即生效：重读磁盘 + 热重载 provider（新增注册/变更重建/移除关闭），
         # 填完 key 要重启或手动 /model 才生效）。
+        # prefer_default：用户刚在某厂商卡片保存了真 key 时，优先把全局默认对齐到它
+        # （否则 heal 会卡在声明序里早已有 key 的 deepseek，看起来像「填了 MiniMax 还是 DeepSeek」）。
+        prefer_default = str(payload.get("prefer_default") or "").strip()
         hot_reload_ok = True
         healed_provider = ""
         try:
@@ -986,14 +1073,34 @@ class DashboardRestHandlers(DashboardAuthMixin):
             from src.llm.registry import reload_providers
 
             await reload_providers(config_manager)
-            # 默认为空或已失效时对齐到有 key 的声明序首位；活会话切绑由
-            # providers_changed → Root._subscribe_providers_changed 统一完成。
-            from src.cli.first_run_setup import heal_default_provider_if_needed
+            from src.cli.first_run_setup import (
+                heal_default_provider_if_needed,
+                provider_has_usable_key,
+                write_default_provider,
+            )
 
-            healed = heal_default_provider_if_needed(None)
+            healed: str | None = None
+            if prefer_default:
+                try:
+                    pref_cfg = config_manager.get_provider(prefer_default)
+                except Exception:
+                    pref_cfg = None
+                if pref_cfg is not None and provider_has_usable_key(pref_cfg):
+                    write_default_provider(prefer_default)
+                    healed = prefer_default
+            if healed is None:
+                # 默认为空或已失效时对齐到有 key 的声明序首位；活会话切绑由
+                # providers_changed → Root._subscribe_providers_changed 统一完成。
+                healed = heal_default_provider_if_needed(None)
             if healed:
                 await config_manager.reload()
                 healed_provider = healed
+                # 把未绑定空间的活会话 chrome 切到新默认（仅写 prefs 不够——顶栏仍显示旧厂商）
+                with contextlib.suppress(Exception):
+                    root = getattr(self, "root", None)
+                    model = str(getattr(config_manager.config, "default_model", "") or "")
+                    if root is not None and model:
+                        root.switch_llm_global(healed, model, origin_source="web")
             # 模型 available[].thinking 可能刚改：按当前活动模型重装思考基线
             with contextlib.suppress(Exception):
                 from src.llm.thinking_mode import apply_config_thinking
@@ -1019,7 +1126,9 @@ class DashboardRestHandlers(DashboardAuthMixin):
                 # heal 改写偏好在第一帧之后；再广播一帧让订阅方读到新默认。
                 broadcast_providers_changed()
 
-        return web.json_response({"ok": True, "hot_reload": hot_reload_ok})
+        return web.json_response(
+            {"ok": True, "hot_reload": hot_reload_ok, "default_provider": healed_provider or None}
+        )
 
     async def handle_api_v1_provider_presets(self, request: web.Request) -> web.Response:
         self._check_token(request)

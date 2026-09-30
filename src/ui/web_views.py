@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import re
 import threading
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.coara_home import resolve_coara_home, workspace_id_for
+from src.core.json_store import interprocess_file_lock
 from src.core.logger import logger
 from src.core.message_tags import (
     BACKGROUND_RESULT_OPEN,
@@ -21,6 +21,7 @@ from src.core.message_tags import (
     strip_llm_only,
 )
 from src.core.workspace_layout import UPLOAD_DIR_NAME
+from src.ui.jsonl_byte_window import iter_jsonl_lines_byte_range
 from src.ui.trace_store import _AsyncFileWriter, _FileWriteOp
 
 # message_tags 未导出裸常量；与 conversation_projection 同源
@@ -30,9 +31,14 @@ SYSTEM_INFO_OPEN = "<系统消息>"  # system_info() 同源
 _TAIL_READ_BYTES = 256 * 1024
 
 _META_SUFFIX = ".meta.json"
-# sidecar：低频字段节流；序号分配 force 立刻写高水位（防双进程撞号）
+# sidecar：快路径节流写；慢路径（校准）才同步落高水位
 _META_WRITE_MIN_INTERVAL_S = 1.0
+# 疑似外进程写：最多每 N 秒看一眼 sidecar（不每帧 stat/读盘）
+_FOREIGN_SEQ_CHECK_INTERVAL_S = 2.0
 _SEQ_LOCK_SUFFIX = ".seq.lock"
+# 快照读窗：只读**本线**字节窗口再 parse（一切皆工作空间——绝不跨空间扫带）
+_VIEW_READ_WINDOW_BYTES = 4 * 1024 * 1024
+_VIEW_READ_MAX_EXPAND = 4
 
 _FOLD_MAX_CALLS = 30
 _FOLD_MAX_FRAMES_PER_CALL = 100
@@ -60,42 +66,35 @@ def resolve_view_seq_lock_path(path: Path) -> Path:
     return path.with_name(path.name + _SEQ_LOCK_SUFFIX)
 
 
-@contextlib.contextmanager
 def _view_seq_file_lock(lock_path: Path):
     """Exclusive lock so two kernels cannot mint the same view_seq on one line."""
-    import os
-
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_path.open("a+b")
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]  # POSIX 专有，Windows 走 msvcrt 分支
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            if os.name == "nt":
-                import msvcrt
-
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]  # POSIX 专有，Windows 走 msvcrt 分支
-        handle.close()
+    return interprocess_file_lock(lock_path)
 
 
 def view_line_epoch(workspace_dir: str | Path | None, subject: str, *, generation: int = 0) -> str:
     """线身份 ``{ws}::{subject}[#世代]``；世代变则端上丢缓存全量重取。"""
     base = f"{str(workspace_dir or '')}::{subject}"
     return base if generation <= 0 else f"{base}#{generation}"
+
+
+# 外挂维护流 desk：帧必须落根线 conversation.jsonl（录像带页只读这条）
+_DESK_ROOT_SUBJECTS = frozenset({"janitor", "daily", "记录"})
+
+
+def view_tape_subject(agent_kind_or_subject: str | None, *, desk: str | None = None) -> str:
+    """会话 agent_kind / 帧 subject → 视图线名。
+
+    - ``main`` / 空串 → ``root``（``conversation.jsonl``）
+    - desk 为 janitor/daily/记录 → 强制 ``root``（外挂组靠 desk 折叠，不拆文件）
+    - ``flow`` / ``subagent`` / 模块 subject 保持原样分文件
+    """
+    desk_norm = str(desk or "").strip().lower()
+    if desk_norm in _DESK_ROOT_SUBJECTS or str(desk or "").strip() in _DESK_ROOT_SUBJECTS:
+        return "root"
+    raw = str(agent_kind_or_subject or "").strip()
+    if raw in ("", "main", "root"):
+        return "root"
+    return raw
 
 
 def resolve_web_view_path(
@@ -106,6 +105,7 @@ def resolve_web_view_path(
     session_id: str,
 ) -> Path:
     """root→空间一条 ``conversation.jsonl``；模块/flow→``{subject}__{session_id}.jsonl``。"""
+    subject = view_tape_subject(subject)
     if subject == "flow":
         from src.workflow.paths import workflow_assets_root
 
@@ -121,15 +121,29 @@ def resolve_web_view_path(
 
 
 class WebViewStore:
-    """web 会话视图存储：逐帧 append + view_seq 分配 + 常态读取聚合"""
+    """web 会话视图存储：逐帧 append + view_seq 分配 + 常态读取聚合。
+
+    一切皆工作空间：``view_seq`` 权威按**线**隔离——线 = 该空间的视图文件 Path
+    （``workspaces/<id>/web_views/conversation.jsonl`` 等）。进程内可有多条线并行占号，
+    共享的只是分配互斥锁与 writer，**绝无**跨空间共用一个序号水位。
+    """
 
     def __init__(self) -> None:
         self._writer = _AsyncFileWriter()
+        # 仅保护下方 per-line 字典的并发突变；不是「全局序号」。
         self._seq_lock = threading.Lock()
-        # 每文件已分配到的最大 view_seq（首次经尾部 + sidecar 校准）。
+        # 每条线（每个空间/subject 文件）已分配到的最大 view_seq。
         self._seq_cache: dict[Path, int] = {}
-        # 每文件元数据内存镜像：{"gen": int, "latest_seq": int, "dirty": bool, "written_ts": float}
+        # 每条线的元数据内存镜像：{"gen": int, "latest_seq": int, "dirty": bool, "written_ts": float}
         self._line_meta: dict[Path, dict[str, Any]] = {}
+
+    @staticmethod
+    def _line_key(path: Path) -> Path:
+        """线身份：解析后的绝对路径，避免同一空间因相对/未 resolve 路径拆成两套水位。"""
+        try:
+            return path.expanduser().resolve()
+        except OSError:
+            return path
 
     # 写路径
 
@@ -150,7 +164,9 @@ class WebViewStore:
         # 分隔线只由显式动作（新会话）落帧；web 端没有任何自动/隐式分隔线。
         # 时间只作为消息自身的属性存在（需要时间感时由消息行自己的时间承担）。
         try:
+            path = self._line_key(path)
             view_seq = self._next_view_seq(path)
+            body = payload or {}
             frame = {
                 "view_seq": view_seq,
                 "seq": int(seq),
@@ -160,8 +176,12 @@ class WebViewStore:
                 "subject": subject,
                 "session_id": session_id,
                 "kind": kind,
-                "payload": payload or {},
+                "payload": body,
             }
+            # desk 提到顶层：读端（trajectory）认顶层 desk；只塞 payload 时刷新后外挂组会散
+            desk = str(body.get("desk") or "").strip()
+            if desk:
+                frame["desk"] = desk
             self._writer.append_jsonl(path, frame)
             return view_seq
         except Exception as exc:  # noqa: BLE001 — 视图存储故障绝不中断回合
@@ -174,8 +194,13 @@ class WebViewStore:
         def persist(frame: dict[str, Any]) -> int | None:
             try:
                 session_id = str(frame.get("session_id") or "")
-                subject = str(frame.get("subject") or "root")
+                subject = view_tape_subject(frame.get("subject"), desk=frame.get("desk"))
                 if not session_id:
+                    logger.warning(
+                        "web view persist skipped: empty session_id kind={} source={}",
+                        frame.get("type") or frame.get("kind"),
+                        frame.get("source"),
+                    )
                     return None
                 path = resolve_web_view_path(
                     workspace_dir, coara_home=coara_home, subject=subject, session_id=session_id
@@ -189,10 +214,11 @@ class WebViewStore:
                         return None
                     payload = {"text": text}
                     tool_call_id = str(frame.get("tool_call_id") or "")
+                    parent_tool_call_id = str(frame.get("parent_tool_call_id") or "") or tool_call_id
                     if tool_call_id:
                         payload["tool_call_id"] = tool_call_id
-                    parent_tool_call_id = str(frame.get("parent_tool_call_id") or "")
                     if parent_tool_call_id:
+                        # 与 tool_call_id 同写：旧出口只传 tool_call_id 时这里补 parent，hydrate 才能归集
                         payload["parent_tool_call_id"] = parent_tool_call_id
                 elif kind == "diff":
                     # 落盘与广播分离——这里负责映射。
@@ -242,29 +268,103 @@ class WebViewStore:
         return persist
 
     def _next_view_seq(self, path: Path) -> int:
-        """分配下一个 view_seq：同一条线内单调，文件缺失/清空也不回退"""
-        with self._seq_lock, _view_seq_file_lock(resolve_view_seq_lock_path(path)):
-            # 他进程可能刚推进过高水位：丢掉内存镜像里的 latest_seq，从盘重读 （世代 gen 除外——见下方 merge 说明）。
-            stale = self._line_meta.pop(path, None)
-            meta = self._load_line_meta(path)
-            if stale is not None:
-                if stale.get("reset_baseline"):
-                    # reset_line 的 latest_seq=0 是重估基准：不接回（接回会挡住 jsonl 旧帧水位的重估）；gen 已随
-                    # reset_line 同步落盘。
-                    pass
-                elif bool(stale["write_pending"]):
-                    # 未投递的（dirty）当前不可能存在（序号路径同步落盘）。
-                    meta["latest_seq"] = max(int(meta["latest_seq"]), int(stale["latest_seq"] or 0))
-            disk_hi = max(read_latest_view_seq(path), int(meta["latest_seq"] or 0))
-            cached = self._seq_cache.get(path)
-            base = disk_hi if cached is None else max(int(cached), disk_hi)
+        """分配下一个 view_seq：同一条线内单调，文件缺失/清空也不回退。
+
+        快路径：内存水位 +1 + sidecar 节流写。慢路径：冷启动 / reset / 外进程争用时校准。
+        """
+        path = self._line_key(path)
+        with self._seq_lock:
+            if self._seq_fast_path_ready(path):
+                return self._mint_view_seq_fast(path)
+            return self._mint_view_seq_calibrated(path)
+
+    def _seq_fast_path_ready(self, path: Path) -> bool:
+        """内存高水位已校准且无线重置 / 外进程争用迹象。"""
+        if path not in self._seq_cache:
+            return False
+        meta = self._line_meta.get(path)
+        if meta is None or meta.get("reset_baseline"):
+            return False
+        return not self._foreign_seq_writer_suspected(path, meta)
+
+    def _foreign_seq_writer_suspected(self, path: Path, meta: dict[str, Any]) -> bool:
+        """sidecar 上的序号明显超前于本进程内存 → 可能有第二写者，触发一次校准。
+
+        本进程 dirty / write_pending 时磁盘落后是预期，不算外进程。
+        检查有间隔，避免快路径每帧 stat/读 sidecar。
+        """
+        if meta.get("dirty") or meta.get("write_pending"):
+            return False
+        now = time.time()
+        last = float(meta.get("foreign_check_ts") or 0.0)
+        if now - last < _FOREIGN_SEQ_CHECK_INTERVAL_S:
+            return False
+        meta["foreign_check_ts"] = now
+        meta_path = resolve_view_meta_path(path)
+        try:
+            st = meta_path.stat()
+        except OSError:
+            return False
+        # 本进程刚写过且 mtime 未变——跳过读内容
+        if st.st_mtime <= float(meta.get("written_ts") or 0.0) + 0.001:
+            return False
+        disk_seq = int(self._read_sidecar_dict(path).get("latest_seq") or 0)
+        return disk_seq > int(meta.get("latest_seq") or 0)
+
+    def _mint_view_seq_fast(self, path: Path) -> int:
+        """已校准：内存 +1 + sidecar 节流。调用方持 ``_seq_lock``。"""
+        nxt = int(self._seq_cache[path]) + 1
+        self._seq_cache[path] = nxt
+        meta = self._line_meta[path]
+        meta["latest_seq"] = nxt
+        meta["dirty"] = True
+        self._persist_line_meta(path)
+        return nxt
+
+    def _mint_view_seq_calibrated(self, path: Path) -> int:
+        """冷/重置/争用：跨进程锁内取 max(sidecar, jsonl 尾, 内存) 后同步落盘。调用方持 ``_seq_lock``。"""
+        with _view_seq_file_lock(resolve_view_seq_lock_path(path)):
+            mem = self._line_meta.get(path)
+            reset_baseline = bool(mem and mem.get("reset_baseline"))
+            disk = self._read_sidecar_dict(path)
+            disk_gen = int(disk.get("gen") or 0)
+            disk_seq = int(disk.get("latest_seq") or 0)
+            mem_gen = int(mem["gen"]) if mem is not None else 0
+            gen = max(disk_gen, mem_gen)
+            jsonl_hi = read_latest_view_seq(path)
+            cached = int(self._seq_cache[path]) if path in self._seq_cache else 0
+            if reset_baseline:
+                # reset 内存 latest_seq=0 是重估基准，不能参与 max（会挡住磁盘高水位）
+                base = max(disk_seq, jsonl_hi, cached)
+            else:
+                mem_seq = int(mem["latest_seq"]) if mem is not None else 0
+                # write_pending 时内存可能比 sidecar 新
+                pending_seq = mem_seq if mem is not None and mem.get("write_pending") else 0
+                base = max(disk_seq, jsonl_hi, mem_seq, cached, pending_seq)
             nxt = base + 1
             self._seq_cache[path] = nxt
-            meta["latest_seq"] = nxt
-            meta["dirty"] = True
-            payload = {"gen": int(meta["gen"]), "latest_seq": nxt, "updated_ts": time.time()}
+            meta = {
+                "gen": gen,
+                "latest_seq": nxt,
+                "dirty": True,
+                "existing": bool(disk) or (mem is not None and bool(mem.get("existing"))),
+                "written_ts": float(mem.get("written_ts") or 0.0) if mem is not None else 0.0,
+                "write_pending": False,
+                "foreign_check_ts": time.time(),
+            }
+            self._line_meta[path] = meta
+            payload = {"gen": gen, "latest_seq": nxt, "updated_ts": time.time()}
             self._write_line_meta_sync(path, meta, payload)
             return nxt
+
+    @staticmethod
+    def _read_sidecar_dict(path: Path) -> dict[str, Any]:
+        """读 sidecar 原始 dict；缺失/损坏返回空。"""
+        try:
+            parsed = json.loads(resolve_view_meta_path(path).read_text(encoding="utf-8"))
+            return parsed if isinstance(parsed, dict) else {}
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return {}
 
     # 线身份（世代）与元数据
 
@@ -286,13 +386,7 @@ class WebViewStore:
         meta = self._line_meta.get(path)
         if meta is not None:
             return meta
-        data: dict[str, Any] = {}
-        try:
-            parsed = json.loads(resolve_view_meta_path(path).read_text(encoding="utf-8"))
-            if isinstance(parsed, dict):
-                data = parsed
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-            data = {}
+        data = self._read_sidecar_dict(path)
         meta = {
             "gen": int(data.get("gen") or 0),
             "latest_seq": int(data.get("latest_seq") or 0),
@@ -301,14 +395,14 @@ class WebViewStore:
             # 就往别的空间的目录里凭空写一个 sidecar。
             "existing": bool(data),
             "written_ts": 0.0,
-            # 兜底——从盘重读，与 jsonl 尾部取 max，序号单调不回退。
             "write_pending": False,
+            "foreign_check_ts": 0.0,
         }
         self._line_meta[path] = meta
         return meta
 
     def _persist_line_meta(self, path: Path, *, force: bool = False) -> None:
-        """投递 sidecar 落盘（节流；失败只记日志——元数据缺一帧不影响落帧）"""
+        """投递 sidecar 落盘（节流；force 同步写——flush/close 收口用）"""
         meta = self._line_meta.get(path)
         if meta is None:
             return
@@ -322,6 +416,9 @@ class WebViewStore:
         if not force and now - float(meta["written_ts"] or 0.0) < _META_WRITE_MIN_INTERVAL_S:
             return
         payload = {"gen": int(meta["gen"]), "latest_seq": int(meta["latest_seq"]), "updated_ts": now}
+        if force:
+            self._write_line_meta_sync(path, meta, payload)
+            return
         meta["dirty"] = False
         meta["existing"] = True
         meta["written_ts"] = now
@@ -352,11 +449,13 @@ class WebViewStore:
 
     def line_generation(self, path: Path) -> int:
         """该线当前世代（0 = 从未重建）。快照的 epoch 由它参与构造。"""
+        path = self._line_key(path)
         with self._seq_lock:
             return int(self._load_line_meta(path)["gen"])
 
     def reset_line(self, path: Path) -> int:
         """重建这条线：世代 +1（epoch 随之变化）、序号基准归零重估"""
+        path = self._line_key(path)
         with self._seq_lock:
             meta = self._load_line_meta(path)
             meta["gen"] = int(meta["gen"]) + 1
@@ -366,13 +465,7 @@ class WebViewStore:
             meta["reset_baseline"] = True
             self._seq_cache.pop(path, None)
             self._wait_writer_turn()
-            disk_hi = 0
-            try:
-                parsed = json.loads(resolve_view_meta_path(path).read_text(encoding="utf-8"))
-                if isinstance(parsed, dict):
-                    disk_hi = int(parsed.get("latest_seq") or 0)
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
-                disk_hi = 0
+            disk_hi = int(self._read_sidecar_dict(path).get("latest_seq") or 0)
             payload = {"gen": int(meta["gen"]), "latest_seq": disk_hi, "updated_ts": time.time()}
             self._write_line_meta_sync(path, meta, payload)
             logger.info(f"web view line reset (gen={meta['gen']}, path={path})")
@@ -381,11 +474,17 @@ class WebViewStore:
     # 生命周期（flush/close 收口：等待已投递的 meta 写落盘）
 
     def _wait_meta_writes(self, timeout: float = 2.0) -> None:
-        """等待已投递的 sidecar 写全部落盘（flush/close 收口用，尽力而为）"""
+        """强制落脏 sidecar，并等待异步写收口（flush/close 用，尽力而为）"""
+        with self._seq_lock:
+            for meta_path in list(self._line_meta):
+                self._persist_line_meta(meta_path, force=True)
         deadline = time.monotonic() + timeout
         settled_once = False
         while time.monotonic() < deadline:
-            settled = all(not bool(m["dirty"]) and not bool(m.get("write_pending")) for m in self._line_meta.values())
+            with self._seq_lock:
+                settled = all(
+                    not bool(m["dirty"]) and not bool(m.get("write_pending")) for m in self._line_meta.values()
+                )
             if settled:
                 settled_once = True
                 break
@@ -408,7 +507,7 @@ class WebViewStore:
 
     @staticmethod
     def iter_frames(path: Path) -> list[dict[str, Any]]:
-        """按落盘顺序读全部可解析帧（坏行跳过）。文件不存在返回空。"""
+        """按落盘顺序读**本线**全部可解析帧（坏行跳过）。测试/诊断用；hydrate 走窗口读。"""
         frames: list[dict[str, Any]] = []
         try:
             with path.open(encoding="utf-8") as handle:
@@ -426,6 +525,88 @@ class WebViewStore:
             return []
         return frames
 
+    @staticmethod
+    def _iter_lines_byte_range(path: Path, start: int, end: int) -> list[str]:
+        """读本线 [start, end) 内完整行（与 trajectory 共用 jsonl_byte_window）。"""
+        return iter_jsonl_lines_byte_range(path, start, end)
+
+    @classmethod
+    def _parse_frames_byte_range(cls, path: Path, start: int, end: int) -> list[dict[str, Any]]:
+        frames: list[dict[str, Any]] = []
+        for line in cls._iter_lines_byte_range(path, start, end):
+            try:
+                frame = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(frame, dict):
+                frames.append(frame)
+        return frames
+
+    @staticmethod
+    def _min_view_seq(frames: list[dict[str, Any]]) -> int:
+        lo = 0
+        saw = False
+        for frame in frames:
+            try:
+                seq = int(frame.get("view_seq") or 0)
+            except (TypeError, ValueError):
+                continue
+            if seq <= 0:
+                continue
+            if not saw or seq < lo:
+                lo = seq
+                saw = True
+        return lo if saw else 0
+
+    @classmethod
+    def iter_frames_windowed(
+        cls,
+        path: Path,
+        *,
+        since_seq: int = 0,
+        before_seq: int = 0,
+        window_bytes: int = _VIEW_READ_WINDOW_BYTES,
+        max_expand: int = _VIEW_READ_MAX_EXPAND,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """按字节窗口读本线帧。返回 (frames_asc, has_older_bytes)。"""
+        try:
+            file_size = path.stat().st_size
+        except OSError:
+            return [], False
+        if file_size <= 0:
+            return [], False
+
+        window_bytes = max(64 * 1024, int(window_bytes))
+        max_expand = max(1, int(max_expand))
+
+        if before_seq > 0:
+            # 扩窗必须一次性重读连续区间（拼接两个相邻窗会在边界各丢半行）。
+            start = end = file_size
+            frames: list[dict[str, Any]] = []
+            for _ in range(max_expand):
+                start = max(0, end - window_bytes)
+                frames = cls._parse_frames_byte_range(path, start, end)
+                min_seq = cls._min_view_seq(frames) if frames else 0
+                if start == 0 or (min_seq > 0 and min_seq < before_seq and len(frames) >= 8):
+                    break
+                window_bytes *= 2
+                end = file_size
+            return frames, start > 0
+
+        # 尾窗：初始 hydrate 或 after_view_seq 增量（同款：扩窗整体重读，不拼接）
+        end = file_size
+        start = max(0, end - window_bytes)
+        frames = cls._parse_frames_byte_range(path, start, end)
+        expands = 0
+        while since_seq > 0 and start > 0 and expands < max_expand - 1:
+            min_seq = cls._min_view_seq(frames)
+            if min_seq > 0 and min_seq <= since_seq:
+                break
+            expands += 1
+            start = max(0, end - window_bytes * (expands + 1))
+            frames = cls._parse_frames_byte_range(path, start, end)
+        return frames, start > 0
+
     @classmethod
     def build_messages(
         cls,
@@ -441,9 +622,39 @@ class WebViewStore:
         subagent_briefs_out: dict[str, str] | None = None,
         subagent_texts_out: dict[str, str] | None = None,
         fold_truncated_out: dict[str, int] | None = None,
+        full_scan: bool = False,
+        has_older_out: list[bool] | None = None,
     ) -> tuple[list[dict[str, Any]], int, int]:
-        """从视图帧聚合聊天行：(messages, total, latest_view_seq)"""
-        frames = cls.iter_frames(path)
+        """从视图帧聚合聊天行：(messages, total, latest_view_seq)。
+
+        默认对本线做字节窗口读；``full_scan=True`` 仅测试/排障。
+        ``has_older_out``（可选）收一个布尔：字节窗未读到文件头为 True——
+        翻页到底的权威判据（行数不足一页可能只是窗口截断，不是历史到头）。
+        """
+        if full_scan:
+            frames = cls.iter_frames(path)
+            has_older_bytes = False
+        else:
+            # 尾窗/增量：iter_frames_windowed 整体重读连续区间（不拼接相邻窗）。
+            # 初始 hydrate（since/before 皆 0）另按帧数扩窗——密帧长会话单窗可能不够一页消息。
+            need_frames = max(int(limit) * 24, 240)
+            window = _VIEW_READ_WINDOW_BYTES
+            frames, has_older_bytes = cls.iter_frames_windowed(
+                path, since_seq=since_seq, before_seq=before_seq, window_bytes=window
+            )
+            expand = 1
+            while (
+                has_older_bytes
+                and since_seq <= 0
+                and before_seq <= 0
+                and len(frames) < need_frames
+                and expand < _VIEW_READ_MAX_EXPAND
+            ):
+                expand += 1
+                window = _VIEW_READ_WINDOW_BYTES * expand
+                frames, has_older_bytes = cls.iter_frames_windowed(
+                    path, since_seq=0, before_seq=0, window_bytes=window
+                )
         latest_seq = 0
         for frame in frames:
             try:
@@ -519,8 +730,11 @@ class WebViewStore:
             if kind == "subagent_chunk":
                 # 子智能体过程正文（已落带）：按父 call_id 顺序拼接归集给折叠区，不投影成
                 # 主会话消息。与实时路径（store 侧累加）同一把尺。
+                # parent 优先；仅有 tool_call_id 的旧落带（出口曾漏传 parent）回退认它。
                 if subagent_texts_out is not None and view_seq > since_seq:
-                    parent_call_id = str(payload.get("parent_tool_call_id") or "")
+                    parent_call_id = str(
+                        payload.get("parent_tool_call_id") or payload.get("tool_call_id") or ""
+                    )
                     text = str(payload.get("text") or "")
                     if parent_call_id and text and not is_preformatted_injection(text):
                         subagent_texts_out[parent_call_id] = subagent_texts_out.get(parent_call_id, "") + text
@@ -716,6 +930,12 @@ class WebViewStore:
             messages = [m for m in messages if int(m.get("seq") or 0) < before_seq]
         if len(messages) > limit:
             messages = messages[-limit:]
+        # 字节窗未读到文件头：告知端上还有更早历史（hasMoreHistory = total > len）
+        if has_older_bytes and total <= len(messages):
+            total = len(messages) + 1
+        if has_older_out is not None:
+            has_older_out.clear()
+            has_older_out.append(has_older_bytes)
         # 会让端侧把被裁掉的帧当成「已送达」永不再补，屏幕历史出现永久静默空洞
         if messages:
             latest_seq = int(messages[-1].get("seq") or 0)

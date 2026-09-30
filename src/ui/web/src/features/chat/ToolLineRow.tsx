@@ -2,6 +2,7 @@
 import { memo, useState, type ReactNode } from "react";
 import type { TreeRow } from "../../lib/subagentTree";
 import type { ToolLineGroup } from "../../lib/toolLineGroups";
+import { TOOL_PAREN_LABEL_RE } from "../../lib/displayRules.generated";
 
 /** 呼吸点判据（按 rows 引用 + callId 缓存，见 toolLineGroups.toolRunning）。 */
 export { toolRunning } from "../../lib/toolLineGroups";
@@ -9,12 +10,12 @@ export { toolRunning } from "../../lib/toolLineGroups";
 const MONO_FONT =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 
-/** `tool(args)` → `tool - args`；非括号形态原样。 */
-const TOOL_PAREN_LABEL_RE = /^([A-Za-z_][\w.]*)\((.*)\)$/s;
-
+/** `tool(args)` → `tool - args`；剥掉历史 ` 报错: …`；非括号形态原样。 */
 export function formatToolLabelForDisplay(label: string): string {
-  const trimmed = label.trim();
+  let trimmed = label.trim();
   if (!trimmed) return trimmed;
+  const errIdx = trimmed.indexOf(" 报错:");
+  if (errIdx >= 0) trimmed = trimmed.slice(0, errIdx).trimEnd();
   const match = TOOL_PAREN_LABEL_RE.exec(trimmed);
   if (!match) return trimmed;
   const name = match[1];

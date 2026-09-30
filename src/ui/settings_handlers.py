@@ -14,6 +14,7 @@ from src.core.logger import logger
 from src.event_sources.types import EventSourceDefinition
 from src.ui.dashboard_tokens import load_or_create_dashboard_token
 from src.ui.handlers.base import DashboardAuthMixin
+from src.workspace.identity import space_home_view
 from src.workspace.registry import WorkspaceRegistryConflictError
 
 
@@ -344,7 +345,7 @@ class SettingsHandlers(DashboardAuthMixin):
                     "kind": entry.kind.value,
                     "status": entry.status.value,
                     "summary": resolve_workspace_summary(entry),
-                    "home_view": entry.home_view or "",
+                    "home_view": space_home_view(entry.resolved_path()),
                     "is_default": entry.id == default_id,
                     "missing": missing,
                 }

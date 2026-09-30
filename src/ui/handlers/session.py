@@ -125,6 +125,7 @@ class SessionHandlers(HandlerMixinBase):
         dict[str, str],
         dict[str, str],
         dict[str, int],
+        bool,
     ]:
         """常态 hydrate：从 web 会话视图存储聚合聊天行（web 聊天区唯一数据源）"""
         from src.ui.web_views import WebViewStore
@@ -134,10 +135,21 @@ class SessionHandlers(HandlerMixinBase):
         subagent_briefs: dict[str, str] = {}
         subagent_texts: dict[str, str] = {}
         subagent_truncated: dict[str, int] = {}
+        has_older: list[bool] = []
         if target is None:
             target = self._resolve_view_target(source)
         if target is None:
-            return [], 0, 0, subagent_results, subagent_diffs, subagent_briefs, subagent_texts, subagent_truncated
+            return (
+                [],
+                0,
+                0,
+                subagent_results,
+                subagent_diffs,
+                subagent_briefs,
+                subagent_texts,
+                subagent_truncated,
+                False,
+            )
         subject, _session_id, _workspace_dir = target
         path = self._view_path_for(target)
         # 异步 JSONL 写完前就读会漏帧：关页再开像「内容没了」。读前先 flush。
@@ -158,6 +170,7 @@ class SessionHandlers(HandlerMixinBase):
             subagent_briefs_out=subagent_briefs,
             subagent_texts_out=subagent_texts,
             fold_truncated_out=subagent_truncated,
+            has_older_out=has_older,
         )
         return (
             messages,
@@ -168,6 +181,7 @@ class SessionHandlers(HandlerMixinBase):
             subagent_briefs,
             subagent_texts,
             subagent_truncated,
+            has_older[0] if has_older else False,
         )
 
     async def _load_view_snapshot(
@@ -190,6 +204,7 @@ class SessionHandlers(HandlerMixinBase):
             subagent_briefs,
             subagent_texts,
             subagent_truncated,
+            has_older,
         ) = await asyncio.to_thread(self._load_view_messages, source, limit, since_seq, before_seq, target)
         # 会在「快照未变不推」时失真，端侧就只能拿缓存猜。
         runtime: dict[str, Any] | None = None
@@ -210,6 +225,7 @@ class SessionHandlers(HandlerMixinBase):
                 "subagent_briefs": {},
                 "subagent_texts": {},
                 "subagent_truncated": {},
+                "has_older": False,
                 "runtime": runtime,
             }
         subject, session_id, target_dir = target
@@ -225,6 +241,7 @@ class SessionHandlers(HandlerMixinBase):
             "subagent_briefs": subagent_briefs,
             "subagent_texts": subagent_texts,
             "subagent_truncated": subagent_truncated,
+            "has_older": has_older,
             "runtime": runtime,
         }
 

@@ -137,6 +137,19 @@ export interface ToolLineGroup {
   entries?: ProcessEntry[];
 }
 
+/** 展开区「任务指令」组头已是标题，剥掉正文里的 ``<任务指令>`` 包裹，避免重复。 */
+export function stripTaskInstructionTags(text: string): string {
+  let t = text.trim();
+  if (!t) return t;
+  if (t.startsWith("<任务指令>")) {
+    t = t.slice("<任务指令>".length).replace(/^\s+/, "");
+  }
+  if (t.endsWith("</任务指令>")) {
+    t = t.slice(0, t.length - "</任务指令>".length).replace(/\s+$/, "");
+  }
+  return t.replace(/<\/?任务指令>/g, "").trim();
+}
+
 export function buildToolLineGroups(input: {
   brief: string;
   work: TreeRow[];
@@ -146,14 +159,14 @@ export function buildToolLineGroups(input: {
 }): ToolLineGroup[] {
   const groups: ToolLineGroup[] = [];
   // trim 判空；展示保留原文（pre-wrap）。组头只给标题与展开符号——规模数字属于噪音。
-  const brief = input.brief.trim();
+  const brief = stripTaskInstructionTags(input.brief);
   if (brief) {
     groups.push({
       id: "brief",
       title: FOLD_GROUP_TITLES.brief,
       hint: "",
       defaultOpen: FOLD_GROUP_DEFAULT_OPEN.brief,
-      text: input.brief,
+      text: brief,
     });
   }
   const body = input.body.trim();

@@ -24,7 +24,7 @@ class WorkspaceHandlers(HandlerMixinBase):
         if manager is None:
             return web.json_response({"workspaces": [], "active_name": None})
         from src.workspace.catalog import resolve_foreground_active_name, resolve_workspace_summary
-        from src.workspace.identity import resolve_home_view
+        from src.workspace.identity import resolve_home_view, space_home_view
         from src.workspace.types import WorkspaceStatus
 
         view_id = self.root.view_workspace_id("web")
@@ -45,11 +45,10 @@ class WorkspaceHandlers(HandlerMixinBase):
             # 与配置页 / ws(list) 同口径：只列 ACTIVE；归档/挂起不进侧边栏
             if entry.status != WorkspaceStatus.ACTIVE:
                 continue
-            # 门面形态：条目显式声明优先，否则走覆盖链（space.yaml → 类型默认 → 仓库）
-            if entry.storefront:
-                storefront = entry.storefront
-            else:
-                storefront = resolve_home_view(entry.resolved_path(), content_type=entry.content_type).value
+            # 门面形态与主页：条目字段已退役（单真源=space.yaml，不做双写），
+            # 一律走覆盖链（space.yaml → 类型默认 → 仓库）
+            storefront = resolve_home_view(entry.resolved_path()).value
+            home_view = space_home_view(entry.resolved_path())
             # 目录被删检测：internal 系统空间的目录是占位（.internal 槽位，永远该在），
             # missing 只标记用户对话空间——侧边栏据此置灰并引导恢复。
             missing = False
@@ -70,7 +69,7 @@ class WorkspaceHandlers(HandlerMixinBase):
                     # 侧边栏据此不出「移出」按钮——先切走才有得谈
                     "foreground": entry.id == manager.active_id,
                     "storefront": storefront,
-                    "home_view": entry.home_view or "",
+                    "home_view": home_view,
                     "missing": missing,
                 }
             )
@@ -79,6 +78,45 @@ class WorkspaceHandlers(HandlerMixinBase):
                 "workspaces": workspaces,
                 "active_name": active_name or None,
             }
+        )
+
+    async def _handle_space_ui_asset(self, request: web.Request) -> web.StreamResponse:
+        """空间 UI 插件静态资源（《空间能力系统》槽位四一期）。
+
+        GET /api/space-ui/{workspace_id}/{relpath}
+        只服务该空间目录下 `.coara/ui/` 内的文件；token 鉴权 + 路径
+        逃逸硬拒。插件 bundle 与壳同源（带 token），脚本能力天然等同
+        主站——这是 B 方案的既定取舍（不隔离，换取完整壳 API 能力）。
+        """
+        self._check_token(request)
+        import mimetypes
+
+        workspace_id = request.match_info.get("workspace_id", "")
+        relpath = request.match_info.get("relpath", "")
+        manager = self.root.workspace_manager
+        if manager is None or not workspace_id or not relpath:
+            return web.json_response({"error": "参数缺失"}, status=400)
+        entry = manager.registry.resolve_name_or_id(workspace_id)
+        if entry is None:
+            return web.json_response({"error": f"空间不存在: {workspace_id}"}, status=404)
+        ui_root = (entry.resolved_path() / ".coara" / "ui").resolve()
+        target = (ui_root / relpath).resolve()
+        # 路径逃逸硬拒：目标必须在 .coara/ui/ 子树内
+        if not target.is_relative_to(ui_root):
+            return web.json_response({"error": "路径越界"}, status=403)
+        if not target.is_file():
+            return web.json_response({"error": f"文件不存在: {relpath}"}, status=404)
+        mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        # ESM 插件 bundle 必须带正确 MIME，浏览器才接受 dynamic import
+        if target.suffix == ".js" or target.suffix == ".mjs":
+            mime = "text/javascript"
+        return web.FileResponse(
+            target,
+            headers={
+                "Content-Type": mime,
+                "Cache-Control": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     def _wire_outbound_file_bridge(self) -> None:

@@ -1,5 +1,7 @@
 /** 子智能体活动树（CLI ActivityLiveTracker 的 TS 移植）。与 traceEvents 环缓冲解耦。 */
-const SILENT_SUBAGENT_TYPES = new Set(["janitor", "daily"]);
+import { CLI_SILENT_SUBAGENT_TYPES } from "./displayRules.generated";
+
+const SILENT_SUBAGENT_TYPES = CLI_SILENT_SUBAGENT_TYPES;
 
 interface TreeNode {
   nodeId: string;

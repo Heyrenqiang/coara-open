@@ -67,12 +67,26 @@ class TurnStream:
         attachments: list[Any] | None = None,
         client_msg_id: str | None = None,
     ) -> None:
-        """User row (turn start and mid-turn follow-up share the same shape)."""
+        """User row (turn start and mid-turn follow-up share the same shape).
+        注入信封不落 user 气泡，但作为 kind=inject 帧落带——录像带是全部活动的
+        唯一事实源；聊天屏读端（web_views._is_injected_user_frame）照旧拦截不上屏。"""
         from src.ui.web_views import is_injected_user_text, user_frame_display_text
 
         display = user_frame_display_text(text)
         if is_injected_user_text(display):
-            # Drop inject envelopes on the write path (not only on hydrate)
+            tag = "系统消息"
+            stripped = display.lstrip()
+            for prefix, name in (
+                ("<后台结果>", "后台结果"),
+                ("<系统提醒>", "系统提醒"),
+                ("<系统消息>", "系统消息"),
+                ("<子智能体消息>", "子智能体消息"),
+                ("<途中消息>", "途中消息"),
+            ):
+                if stripped.startswith(prefix):
+                    tag = name
+                    break
+            self.emit("inject", text=display, tag=tag)
             return
         kwargs: dict[str, Any] = {
             "content": display,
@@ -149,9 +163,18 @@ class TurnStream:
             frame.setdefault("replayed", True)
         if self.route.is_attach:
             self._server.attach_registry.send_to_nowait(self.route.channel_id, frame)
+            # attach（CLI）回合的实时帧同样给只读观察者（录像带拖出窗）
+            registry = getattr(self._server, "registry", None)
+            broadcast = getattr(registry, "broadcast_observers_nowait", None)
+            if callable(broadcast):
+                broadcast(frame)
             return
         if self._server.registry.has_active():
             self._server.registry.send_to_active_nowait(frame)
+        # 只读观察者（录像带拖出窗）收同一份广播帧；替身/精简注册表无此方法时跳过
+        broadcast = getattr(self._server.registry, "broadcast_observers_nowait", None)
+        if callable(broadcast):
+            broadcast(frame)
 
     def _schedule_flush(self) -> None:
         if self._flush_handle is None:

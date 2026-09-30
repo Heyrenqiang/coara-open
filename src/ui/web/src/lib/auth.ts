@@ -22,13 +22,17 @@ let _tokenFromUrlThisLoad = false;
 export function initAuthToken(): void {
   if (typeof window === "undefined") return;
   _tokenFromUrlThisLoad = false;
-  const fromUrl = new URLSearchParams(window.location.search).get("token");
+  const params = new URLSearchParams(window.location.search);
+  const fromUrl = params.get("token");
   if (fromUrl) {
     sessionStorage.setItem(STORAGE_KEY, fromUrl);
     _tokenFromUrlThisLoad = true;
-    // 清掉 URL 中的 token / 打开戳，避免泄露到 referrer / 历史记录
-    const cleanUrl = window.location.pathname + window.location.hash;
-    window.history.replaceState(null, "", cleanUrl);
+    // 只摘 token，保留其余参数（popout / dir 等路由参数）——整串清掉会让
+    // 录像带拖出窗丢失观察身份（被当普通标签参加单标签仲裁挤死主对话标签）
+    // 与目标空间（页面大片空白）。
+    params.delete("token");
+    const qs = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
     return;
   }
   // URL 不带 token：保留 sessionStorage 已有值（若有）

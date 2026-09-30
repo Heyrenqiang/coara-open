@@ -80,6 +80,30 @@ export const tokens = {
   /** 青蓝：进行中（对齐 CLI prompt.thinking） */
   progress: "#0e7490",
 
+  /* ---- 录像带行 chip（行类型封闭角色集 v2，色 = 语义） ---- */
+  tapeAssistant: "#7c5ce0",
+  tapeAssistantBg: "rgba(124, 92, 224, 0.08)",
+  tapeThinking: "#a78bfa",
+  tapeThinkingBg: "rgba(167, 139, 250, 0.08)",
+  tapeToolBg: "rgba(245, 158, 11, 0.08)",
+  tapeSubagent: "#b45309",
+  tapeSubagentBg: "rgba(245, 158, 11, 0.13)",
+  tapeInjectBg: "rgba(34, 197, 94, 0.08)",
+  tapeJanitor: "#64748b",
+  tapeJanitorBg: "rgba(100, 116, 139, 0.10)",
+
+  /* ---- 录像带时间线（canvas 专用：canvas 不吃 CSS 变量，经 JS 令牌取色） ---- */
+  /** 窗口块填充/描边（可见区间高亮，accent 的 10%/55% 洗色） */
+  tapeWindowFill: "rgba(59, 130, 246, 0.10)",
+  tapeWindowStroke: "rgba(59, 130, 246, 0.55)",
+  /** 基线 / divider 竖刻度 / 左端箭头（中性灰三档） */
+  tapeBaseline: "rgba(128, 128, 128, 0.25)",
+  tapeDivider: "rgba(128, 128, 128, 0.45)",
+  tapeArrow: "rgba(128, 128, 128, 0.60)",
+  /** 空态提示文字与刻度兜底色 */
+  tapeEmpty: "rgba(0, 0, 0, 0.25)",
+  tapeFallback: "#999999",
+
   /* ---- 深墨态 ---- */
   /** 墨色按钮的按下态（#coara-text 更深一档） */
   textActive: "#000000",
@@ -236,6 +260,18 @@ export const cssVars: Record<string, string> = {
   "--coara-syntax-number": tokens.syntaxNumber,
   "--coara-syntax-title": tokens.syntaxTitle,
   "--coara-syntax-variable": tokens.syntaxVariable,
+
+  /* 录像带行 chip */
+  "--coara-tape-assistant": tokens.tapeAssistant,
+  "--coara-tape-assistant-bg": tokens.tapeAssistantBg,
+  "--coara-tape-thinking": tokens.tapeThinking,
+  "--coara-tape-thinking-bg": tokens.tapeThinkingBg,
+  "--coara-tape-tool-bg": tokens.tapeToolBg,
+  "--coara-tape-subagent": tokens.tapeSubagent,
+  "--coara-tape-subagent-bg": tokens.tapeSubagentBg,
+  "--coara-tape-inject-bg": tokens.tapeInjectBg,
+  "--coara-tape-janitor": tokens.tapeJanitor,
+  "--coara-tape-janitor-bg": tokens.tapeJanitorBg,
 };
 
 /** 把令牌注入 :root。须在 React 渲染前调用（main.tsx）。 */

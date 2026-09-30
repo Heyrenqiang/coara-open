@@ -13,6 +13,7 @@ from aiohttp.client_exceptions import ClientConnectionResetError
 from src.coara.output_router import EndRoute
 from src.coara.workspace_occupancy import WorkspaceOccupancy
 from src.core.logger import logger
+from src.ui.ws_outbox import WsOutbox
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -35,6 +36,8 @@ class AttachRegistry:
         # 工作空间↔端占用唯一事实源（共享表；缺省私有，web_server 注入共享实例）
         self.occupancy = occupancy if occupancy is not None else WorkspaceOccupancy()
         self._lock = asyncio.Lock()
+        # TurnStream 热路径：每连接有界 outbox，满则丢最旧 + need_topup。
+        self._outbox = WsOutbox()
 
     @staticmethod
     def _route(workspace_id: str, conn_id: str) -> EndRoute:
@@ -56,6 +59,7 @@ class AttachRegistry:
 
     async def unregister(self, conn_id: str) -> None:
         """移除连接并释放其工作空间挂载。"""
+        self._outbox.clear(conn_id)
         async with self._lock:
             conn = self._connections.pop(conn_id, None)
         if conn is None:
@@ -116,6 +120,8 @@ class AttachRegistry:
         if not commit:
             await self.occupancy.release(workspace_id, self._route(workspace_id, resume_id))
             return False
+        # resume 会回放 TurnStream buffer；旧键 outbox 里的帧会过期
+        self._outbox.clear(conn_id)
         await self.occupancy.release(workspace_id, self._route(workspace_id, conn_id))
         logger.debug(f"AttachClient resumed: {conn_id} → {resume_id} (workspace={workspace_id})")
         return True
@@ -161,11 +167,15 @@ class AttachRegistry:
             return False
 
     def send_to_nowait(self, conn_id: str, message: dict[str, Any]) -> None:
-        """fire-and-forget 版 send_to：供同步上下文（TurnStream.emit）调用。"""
+        """有界 outbox：供同步上下文（TurnStream.emit）调用。"""
         conn = self._connections.get(conn_id)
         if conn is None or conn.ws.closed:
             return
-        asyncio.ensure_future(self.send_to(conn_id, message))
+
+        async def _send(msg: dict[str, Any], *, _cid: str = conn_id) -> bool:
+            return await self.send_to(_cid, msg)
+
+        self._outbox.enqueue(conn_id, message, _send)
 
     async def close_all(self) -> None:
         """服务停止时清空所有连接（尽力而为，不抛）。"""

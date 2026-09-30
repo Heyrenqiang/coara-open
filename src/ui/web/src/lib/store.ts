@@ -1,4 +1,4 @@
-﻿// Zustand: chat / runtime / traces.
+// Zustand: chat / runtime / traces.
 
 import { create } from "zustand";
 import { tokenQueryFragment } from "./auth";
@@ -14,215 +14,48 @@ import { reshufflePhrases } from "./loadingPhrases";
 import { SubagentTreeTracker, type TreeRow } from "./subagentTree";
 import type { AccountStatus } from "./account";
 import type {
-  CommandResult,
-  DisplayBlock,
+  CanonicalDiffLines,
   FlowGraphSnapshot,
-  FlowLiveNode,
   ServerMessage,
 } from "./ws";
+import { getWS } from "./ws";
+import {
+  flowGraphKey,
+  type ChatFileAttachment,
+  type ChatMessage,
+  type ChatToolLine,
+  type FlowLiveGraph,
+  type ModuleSessionState,
+  type PendingInteraction,
+  type RuntimeInfo,
+  type TraceEventEntry,
+  type WorkspaceInfo,
+} from "./chatTypes";
+import {
+  HISTORY_PAGE_LIMIT,
+  chatRowKey,
+  computeMsgKey,
+  formatTimelineTimeLabel,
+  fuseDividersWithTime,
+  nextId,
+  nextTraceId,
+  nowISO,
+  timelineDividerLabelFromCommand,
+} from "./chatRowUtils";
+import { createFlowGraphSlice } from "./flowGraphSlice";
+
+// 类型与行处理纯函数已抽至 chatTypes.ts / chatRowUtils.ts；此处 re-export
+// 保持既有 import 路径（"./lib/store"）不变。
+export { chatRowKey, flowGraphKey, HISTORY_PAGE_LIMIT };
+export type {
+  ChatFileAttachment,
+  ChatMessage,
+  ChatToolLine,
+  RuntimeInfo,
+  WorkspaceInfo,
+} from "./chatTypes";
 
 /** Web chat shows source=web turns only; inject-mirror chunks auto-bubble. Trace keeps all. */
-
-/** 工具行：服务端 label，前端不二次拼装。 */
-export interface ChatToolLine {
-  label: string;
-  ok: boolean;
-  tool_name?: string;
-  tool_call_id?: string;
-  duration_ms?: number | null;
-}
-
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  /** diff 配对 tool_call_id；空＝老数据按原序。 */
-  tool_call_id?: string;
-  /** 帧的子智能体归属（编排节点分组用）。 */
-  subagent_id?: string;
-  coara_id?: string;
-  turn_id?: string;
-  streaming?: boolean;
-  /** chunk 早于 turn_start 建泡；turn_* 认领。 */
-  autoCreated?: boolean;
-  /** 斜杠命令卡。 */
-  isCommandResult?: boolean;
-  /** 分隔线标签（非命令卡）。 */
-  dividerLabel?: string;
-  /** 分隔线时间标签。 */
-  dividerTime?: string;
-  /** 分隔帧落盘秒（hydrate）。 */
-  dividerTs?: number;
-  /** 空档时间线。 */
-  dividerTimeOnly?: boolean;
-  /** send_file 出站附件。 */
-  files?: ChatFileAttachment[];
-  /** 用户上传附件。 */
-  attachments?: ChatFileAttachment[];
-  /** 排队占位。 */
-  queued?: boolean;
-  /** 乐观泡：权威 user_message 认领。 */
-  optimistic?: boolean;
-  /** client_msg_id：认领首选。 */
-  clientMsgId?: string;
-  /** 跟话待注入；continuation 清徽标。 */
-  pendingInject?: boolean;
-  /** 独立 diff 块。 */
-  diff?: import("./ws").CanonicalDiffLines;
-  /** 内联工具行。 */
-  tool?: ChatToolLine;
-  /** 磁带 seq：hydrate 对账键。 */
-  seq?: number;
-  /** turn_end 归属；旧 tid 不得清新回合。 */
-  source?: string;
-  /** computeMsgKey：reconcile 原位配对。 */
-  key?: string;
-  /** 发送失败（无认领帧）。 */
-  sendFailed?: boolean;
-  /** retracted：隐藏不删（前缀冻结）。 */
-  retracted?: boolean;
-}
-
-/** 一个模块级独立会话的消息与 turn 状态（按 subject 键控）。 */
-interface ModuleSessionState {
-  messages: ChatMessage[];
-  turnActive: boolean;
-  currentTurnId: string | null;
-}
-
-/** 内存态 agentic 工作流图（FlowCoordinator），工作台画布与 live WDL 同步用。 */
-interface FlowLiveGraph {
-  name: string;
-  hops: number;
-  nodes: Record<string, FlowLiveNode>;
-  edges: { from: string; to: string; on?: string }[];
-  /** True 表示该图的 flow_graph_snapshot 应答已到达（含 null 快照——
-   *  图不在内存中）。 */
-  loaded: boolean;
-  updatedAt: string;
-  /** FlowCoordinator 最新 canonical WDL（编辑器实时同步）。 */
-  wdl?: string;
-}
-
-/** flow 图的 store 键：按 subject 分域（主会话图 vs flow 工作台图）。 */
-export function flowGraphKey(flow: string, subject?: string): string {
-  return subject === "flow" ? `flow:${flow}` : flow;
-}
-
-/** Outbound file pushed from the runtime to the browser chat. */
-export interface ChatFileAttachment {
-  file_id: string;
-  url: string;
-  /** 出站文件的原绝对路径；有它才进 /file，uuid 不能当 uploads 相对名 */
-  path?: string;
-  filename: string;
-  mime: string;
-  size: number;
-  caption?: string;
-  is_image?: boolean;
-  is_video?: boolean;
-  is_audio?: boolean;
-}
-
-interface PendingInteraction {
-  kind: "approval";
-  approval_id: string;
-  question: string;
-  options?: { label: string; description: string }[];
-  allow_free_text?: boolean;
-  free_text_label?: string | null;
-  timeout_s?: number;
-  workspace?: string;
-  created_at_ms?: number;
-}
-
-export interface WorkspaceInfo {
-  name: string;
-  summary: string;
-  path: string;
-  active: boolean;
-  /** 内核前台空间（进程绑定）：不能移出登记，侧边栏不出移出按钮 */
-  foreground?: boolean;
-  /** 门面形态：warehouse=对话主页 / display=展示主页 / storefront=营业主页 */
-  storefront?: string;
-  /** 展示/营业主页的路由（如 /usage）；仓库空间为空 = 对话页 */
-  home_view?: string;
-  /** 空间种类：managed=用户对话空间 / internal=系统空间（配置/消息/记录/用量等） */
-  kind?: string;
-  /** 目录已被删除（仅用户对话空间会标记）：侧边栏置灰，点击走恢复流程 */
-  missing?: boolean;
-}
-
-export interface RuntimeInfo {
-  session_id: string;
-  status: string;
-  provider: string;
-  model: string;
-  running: boolean;
-  /** Active turn launch source on the viewed session (web/cli/matrix/…). */
-  turn_source?: string;
-  /** Active turn start wall-clock (epoch seconds); spinner resumes from this after refresh. */
-  turn_started_at?: number;
-  /** Current foreground workspace name (kept in sync on CLI/LLM /ws switch). */
-  workspace_name?: string;
-  workspace_dir?: string;
-  /** Provider-reported context fill (same as CLI bottom toolbar). */
-  context_used_tokens?: number;
-  context_window_tokens?: number;
-  /** True when used tokens are baseline/compact estimate (UI shows ~). */
-  context_estimated?: boolean;
-  /** Session cumulative cache hit ratio 0..1, or null if unknown. */
-  context_cache_hit_ratio?: number | null;
-  /** Session cumulative cost in CNY (0 until first priced turn). */
-  session_cost?: number;
-  /** Background task count (subagents + bash bg + bg aides); idle spinner shows bg animation when >0. */
-  background_tasks?: number;
-  /** 在跑子智能体的展示行（服务端权威快照）：刷新/重连后据此幂等重建活动树行，
-   *  否则「回合已结束、子智能体还在跑」窗口里 delegate 行首圆点静止。 */
-  active_delegations?: Array<{
-    task_id?: string;
-    subagent_type?: string;
-    description?: string;
-    parent_tool_call_id?: string;
-    child_coara_id?: string;
-    background?: boolean;
-    started_at?: number;
-  }>;
-  /** Session cumulative prompt/output tokens. */
-  session_prompt_tokens?: number;
-  session_output_tokens?: number;
-}
-
-/** Trace event entry for StatusSidebar tool activity (+ turn markers). */
-interface TraceEventEntry {
-  id: string;
-  event_type: string;
-  timestamp: string;
-  turn_id?: string;
-  source?: string;
-  /** ``main_loop`` = Root / workspace foreground; ``subagent_loop`` = delegate. */
-  origin_scope?: string;
-  session_id?: string;
-  /** 模块会话主体标记（如 "config"）；缺省/其他 = 主会话。 */
-  subject?: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-  call_id?: string;
-  summary?: string;
-  ok?: boolean;
-  reason?: string;
-  text?: string;
-  content?: string;
-  display_blocks?: DisplayBlock[];
-  /** coara-computed diff lines from tool_complete (Web detail / sidebar). */
-  diff_lines?: import("./ws").CanonicalDiffLines;
-  /** Full tool output text (capped server-side) from tool_complete. */
-  tool_output?: string;
-  tool_output_truncated?: boolean;
-  tool_output_ref?: string;
-  duration_ms?: number;
-  is_error?: boolean;
-}
 
 interface AppState {
   // Connection
@@ -399,192 +232,6 @@ interface AppState {
   sanitizeResidentMessages: () => void;
 }
 
-/** 时间线标签：今天/昨天/M月d日；当天也带「今天」防跨天歧义。 */
-function formatTimelineTimeLabel(ms: number): string {
-  const d = new Date(ms);
-  const now = new Date();
-  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  const sameDay = (a: Date, b: Date) =>
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate();
-  if (sameDay(now, d)) return `今天 ${hm}`;
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (sameDay(yesterday, d)) return `昨天 ${hm}`;
-  const weekday = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
-  const md = `${d.getMonth() + 1}月${d.getDate()}日`;
-  if (now.getFullYear() === d.getFullYear()) return `${md} 周${weekday} ${hm}`;
-  return `${d.getFullYear()}年${md} 周${weekday} ${hm}`;
-}
-
-/** 手机端同款融合：会话/模型切换分隔线与时间隔断合并到一行（「新会话  09:12」）。
- *  分隔线时间取「下一行的内容时间」——即分隔发生的位置，而非分隔帧写入时间
- *  （系统深夜写分隔帧时后者会失真）。后端已下发 divider_time 时直接用。 */
-function withTimelineTimes(messages: ChatMessage[]): ChatMessage[] {
-  return messages.map((m) => {
-    if (!m.dividerLabel) return m;
-    const explicit = m.dividerTime ?? "";
-    if (explicit) return { ...m, dividerTime: explicit };
-    if (m.dividerTs && m.dividerTs > 0) {
-      return { ...m, dividerTime: formatTimelineTimeLabel(m.dividerTs * 1000) };
-    }
-    return m;
-  });
-}
-
-/** 相邻分隔线融合：一条分隔线紧跟着另一条时，只留信息更全的一条
- *  （连续 /new 不产生两行紧贴的分隔线）。 */
-function mergeAdjacentDividers(messages: ChatMessage[]): ChatMessage[] {
-  const out: ChatMessage[] = [];
-  for (const m of messages) {
-    const prev = out[out.length - 1];
-    if (m.dividerLabel && prev?.dividerLabel) {
-      // 后到的标签信息更新，覆盖前者；时间保留后者（更近）
-      out[out.length - 1] = {
-        ...m,
-        dividerTime: m.dividerTime ?? prev.dividerTime,
-      };
-      continue;
-    }
-    out.push(m);
-  }
-  return out;
-}
-
-/** 向前翻页一页的行数：与服务端快照窗口同一把尺（loadEarlier 每次取一页，
- *  「返回不足一页」＝历史到头的判据；hydrate 满页 ⇒ 头部之前还有更早历史）。 */
-export const HISTORY_PAGE_LIMIT = 200;
-
-/** hydrate 快照融合（手机端 buildChatListItems 同款）：
- *  连续相邻的分隔线合并为一条；分隔线缺时间标签时取下一行的内容时间
- *  （分隔发生的位置），有则沿用后端下发的 divider_time。 */
-function fuseDividersWithTime(messages: ChatMessage[]): ChatMessage[] {
-  return mergeAdjacentDividers(withTimelineTimes(messages));
-}
-
-/** Map model/workspace switch command results to phone-style divider labels.
- *  Other slash outputs stay as the monospace command card. */
-function timelineDividerLabelFromCommand(result: CommandResult): string | null {
-  const data = (result?.data ?? {}) as Record<string, unknown>;
-  const output = String(result?.output ?? "").trim();
-  const provider = typeof data.provider === "string" ? data.provider.trim() : "";
-  const model = typeof data.model === "string" ? data.model.trim() : "";
-  const isModelAck =
-    output.startsWith("已切换 →") ||
-    output.startsWith("已切换 ->") ||
-    output.startsWith("已标记切换 →") ||
-    output.startsWith("已标记切换 ->");
-  if (isModelAck) {
-    const key =
-      provider && model
-        ? `${provider}·${model}`
-        : output
-            .replace(/^已标记切换\s*(?:→|->)\s*/, "")
-            .replace(/^已切换\s*(?:→|->)\s*/, "")
-            .replace(/\s*[（(].*$/, "")
-            .trim()
-            .replace(/\//g, "·");
-    if (!key) return null;
-    return data.deferred ? `将切换模型 ${key}` : `已切换模型 ${key}`;
-  }
-  if (result?.action === "switch_workspace") {
-    const name = typeof data.name === "string" ? data.name.trim() : "";
-    if (name) return `已切换到工作空间 ${name}`;
-  }
-  return null;
-}
-
-/** FNV-1a 32-bit：消息内容身份的轻量哈希（同步、无加密需求，碰撞域内
- *  由 reconcile 的组内下标双射消歧——碰撞只导致错误配对，不导致崩溃）。 */
-function fnv1a(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, "0");
-}
-
-/** diff 行的轻量身份：路径 / 增删计数 / 首 hunk 前 512 字符。
- *  原先这里是 `JSON.stringify(diff)`——大 diff 每次落定都要序列化整份文本，
- *  在「每帧一行」的热路径上是不必要的分配与 GC 压力。 */
-function diffIdentity(diff: import("./ws").CanonicalDiffLines): string {
-  const hunks = Array.isArray(diff.hunks) ? (diff.hunks as unknown[]) : [];
-  // 规范形态是「hunk 的数组的数组」；非规范/未来变体按平铺处理，照样给得出身份
-  const head = hunks.length > 0 && Array.isArray(hunks[0]) ? (hunks[0] as unknown[]) : hunks;
-  let sample = "";
-  for (const entry of head) {
-    if (sample.length >= 512) break;
-    const line = entry as { kind?: unknown; oldNum?: unknown; newNum?: unknown; code?: unknown };
-    if (line && typeof line === "object" && typeof line.code === "string") {
-      sample += `${String(line.kind)}${String(line.oldNum)},${String(line.newNum)}:${line.code}`;
-    } else {
-      // 兜底：只序列化这一条（有界），不序列化整份 diff
-      sample += boundedJson(line).slice(0, 128);
-    }
-  }
-  return `${diff.path}|${diff.added}|${diff.removed}|${hunks.length}|${sample.slice(0, 512)}`;
-}
-
-function boundedJson(value: unknown): string {
-  try {
-    const s = JSON.stringify(value);
-    return typeof s === "string" ? s : "";
-  } catch {
-    return "";
-  }
-}
-
-/** 素材规则（双侧严格同源）： - 分隔线 `d|<label>`：同 label 即同一逻辑实体（融合的多对一塌缩天然吸收） - diff 块 `f|c:<tool_call_id>`（无 id 时退化为轻量结构哈希） - 用户气泡 `u|<trim 文本>|<附件 */
-function computeMsgKey(m: {
-  role: "user" | "assistant";
-  text: string;
-  diff?: import("./ws").CanonicalDiffLines;
-  /** 产出这条 diff 的工具调用 id（身份首选：同一次调用唯一，双侧同源） */
-  tool_call_id?: string;
-  dividerLabel?: string;
-  attachments?: ChatFileAttachment[];
-  tool?: ChatToolLine;
-}): string {
-  let raw: string;
-  if (m.dividerLabel) {
-    raw = `d|${m.dividerLabel}`;
-  } else if (m.diff) {
-    raw = `f|${m.tool_call_id ? `c:${m.tool_call_id}` : diffIdentity(m.diff)}`;
-  } else if (m.tool) {
-    raw = `t|${m.tool.label}|${m.tool.ok ? 1 : 0}`;
-  } else if (m.role === "user") {
-    const refs = (m.attachments ?? []).map((a) => a.file_id || a.filename).join(",");
-    raw = `u|${m.text.trim()}|${refs}`;
-  } else {
-    raw = `a|${m.text.trim()}`;
-  }
-  return `k:${fnv1a(raw)}`;
-}
-
-// Random UUIDs keep ids unique across HMR reloads (module state is reset,
-function nextId(): string {
-  return typeof crypto !== "undefined" && crypto.randomUUID
-    ? `msg-${crypto.randomUUID()}`
-    : `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-/** 内容行 `s<view_seq>`、工具行 `t<tool_call_id>`、diff 行 `d<tool_call_id>`、 已带端上标识的用户行 `c<client_msg_id>`；本地 uuid（`l<id> */
-export function chatRowKey(m: ChatMessage): string {
-  if (m.seq !== undefined) return `s${m.seq}`;
-  const callId = String(m.tool?.tool_call_id || m.tool_call_id || "");
-  if (callId) return `${m.tool ? "t" : "d"}${callId}`;
-  if (m.clientMsgId) return `c${m.clientMsgId}`;
-  return `l${m.id}`;
-}
-
-function nextTraceId(): string {
-  return typeof crypto !== "undefined" && crypto.randomUUID
-    ? `tr-${crypto.randomUUID()}`
-    : `tr-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
 const MAX_TRACE_EVENTS = 200;
 
 /** 内存上限；须 > 快照窗(200)+一回合实时尾，否则 hydrate 会把裁掉行复活到尾部。 */
@@ -596,10 +243,6 @@ const TRACE_TYPES = new Set([
   "tool_start", "tool_call", "tool_result", "tool_complete", "llm_turn_start", "error",
   "session_auto_new",
 ]);
-
-function nowISO(): string {
-  return new Date().toISOString();
-}
 
 /** Trace types that affect the right-hand status sidebar tool list.
  *  Excludes high-frequency chat_chunk so streaming does not re-render the sidebar. */
@@ -620,7 +263,7 @@ export function isWebSource(source: string | undefined): boolean {
 
 /** 空间（视图切走后仍在跑的回合输出）——不属于当前空间边界的帧必须丢弃， 否则旧空间回合输出投到已切走视图的浏览器（跨空间串话）。 */
 function _isFrameInWorkspace(msg: ServerMessage, workspaceDir: string | null): boolean {
-  const frameDir = (msg as { workspace_dir?: unknown }).workspace_dir;
+  const frameDir = msg.workspace_dir;
   // 的那条路。
   if (typeof frameDir !== "string" || !frameDir.trim()) return false;
   if (!workspaceDir) return false;
@@ -630,7 +273,7 @@ function _isFrameInWorkspace(msg: ServerMessage, workspaceDir: string | null): b
 /** 帧的会话归属守卫：帧显式带 session_id 且与本会话不同 → 其它会话的帧，
  *  不触碰本聊天区（跟随话跨会话镜像隔离）。无 session_id 字段放行。 */
 function _isFrameInSession(msg: ServerMessage, sessionId: string | null): boolean {
-  const sid = (msg as { session_id?: unknown }).session_id;
+  const sid = msg.session_id;
   if (typeof sid !== "string" || !sid.trim()) return true;
   if (!sessionId) return false;
   return sid.trim() === sessionId.trim();
@@ -649,16 +292,14 @@ function _frameInBoundary(
 
 /** 那个空间的会话键映射：否则那边 /new 过以后，切过去时端侧还拿旧键去匹配帧， 那一侧的帧全被判成「别的会话」丢掉（界面上就是输出与 spinner 一起消失）。 只记会话键；回合态一律由权威给（端侧既不缓存、也不从缓 */
 function _noteForeignTurnState(msg: ServerMessage): void {
-  const type = String((msg as { type?: unknown }).type ?? "");
-  if (type !== "turn_start" && type !== "turn_end") return;
-  const rawDir = (msg as { workspace_dir?: unknown }).workspace_dir;
-  const dir = typeof rawDir === "string" ? rawDir.trim() : "";
+  if (msg.type !== "turn_start" && msg.type !== "turn_end") return;
+  const dir = typeof msg.workspace_dir === "string" ? msg.workspace_dir.trim() : "";
   if (!dir) return;
   const state = useStore.getState();
   const known = state.sessionIdByWorkspace[dir];
   if (known === undefined) return;
   // 只对「别的空间」生效——同空间时本端正看着它，权威是本端自己的 sessionId。
-  const frameSid = String((msg as { session_id?: unknown }).session_id ?? "");
+  const frameSid = String(msg.session_id ?? "");
   if (!(dir !== (state.workspaceDir ?? "") && frameSid)) return;
   useStore.setState({
     sessionIdByWorkspace: { ...state.sessionIdByWorkspace, [dir]: frameSid },
@@ -731,7 +372,7 @@ function sanitizeTraceText(entry: TraceEventEntry): TraceEventEntry {
 }
 
 function toTraceEntry(msg: ServerMessage): TraceEventEntry {
-  const raw = msg as Record<string, unknown>;
+  const raw = msg as unknown as Record<string, unknown>;
   // Normalize tool_start / tool_call field aliases from the live WS payload.
   const tool =
     (typeof raw.tool === "string" && raw.tool) ||
@@ -757,9 +398,7 @@ function toTraceEntry(msg: ServerMessage): TraceEventEntry {
     ...("source" in msg ? { source: msg.source } : {}),
     ...("origin_scope" in msg ? { origin_scope: msg.origin_scope } : {}),
     ...("session_id" in msg ? { session_id: msg.session_id } : {}),
-    ...("subject" in msg && typeof (msg as { subject?: unknown }).subject === "string"
-      ? { subject: (msg as { subject: string }).subject }
-      : {}),
+    ...(typeof msg.subject === "string" ? { subject: msg.subject } : {}),
     ...(tool ? { tool } : {}),
     ...(args ? { args } : {}),
     ...(callId ? { call_id: callId } : {}),
@@ -970,7 +609,7 @@ interface SnapshotMessageRow {
   role: string;
   text: string;
   files?: ChatFileAttachment[];
-  diff?: import("./ws").CanonicalDiffLines;
+  diff?: CanonicalDiffLines;
   /** diff 行的工具归属（产出它的那次工具调用 id，与同工具 tool 行同值） */
   tool_call_id?: string;
   tool?: ChatToolLine;
@@ -1356,218 +995,6 @@ const CONTENT_ROW_FRAME_TYPES = new Set([
   "command_result",
 ]);
 
-/* ── Flow 工作台图（内存态 agentic workflow graph）────────────────────
- * 图状态只维护在这里（单一事实源），工作台画布按其图名选取。
- * 仅保留经 flow_snapshot 请求过的图；工作台（subject=flow）例外——
- * 首个增量事件即建空图，画布自动跟随 FlowRoot 主体的图变化。
- * ─────────────────────────────────────────────────────────────────── */
-
-function emptyFlowGraph(name: string, loaded = false): FlowLiveGraph {
-  return { name, hops: 0, nodes: {}, edges: [], loaded, updatedAt: nowISO() };
-}
-
-function graphFromSnapshot(snap: FlowGraphSnapshot): FlowLiveGraph {
-  const nodes: Record<string, FlowLiveNode> = {};
-  for (const n of snap.nodes || []) {
-    nodes[n.id] = {
-      id: n.id,
-      status: n.status,
-      task: n.task || "",
-      result: n.result || "",
-      activations: typeof n.activations === "number" ? n.activations : 0,
-      agent_id: n.agent_id || `sa-flow-${n.id}`,
-      ...(n.error ? { error: n.error } : {}),
-    };
-  }
-  return {
-    name: snap.name,
-    hops: snap.hops || 0,
-    nodes,
-    edges: (snap.edges || []).map((e) => ({
-      from: e.from,
-      to: e.to,
-      ...(e.on && e.on !== "success" ? { on: e.on } : {}),
-    })),
-    loaded: true,
-    updatedAt: nowISO(),
-    ...(typeof snap.wdl === "string" && snap.wdl.trim() ? { wdl: snap.wdl } : {}),
-  };
-}
-
-/** 把 flow-<flowName>-<nodeId> 形态的 subagent_id 匹配到在看的图。
- *  最长名优先，图名带 '-' 也能正确解析。 */
-function flowNameFromSubagentId(
-  subagentId: string,
-  watched: string[],
-): string | null {
-  if (!subagentId.startsWith("flow-")) return null;
-  const rest = subagentId.slice("flow-".length);
-  const sorted = [...watched].sort((a, b) => b.length - a.length);
-  for (const name of sorted) {
-    if (rest.startsWith(name + "-")) return name;
-  }
-  return null;
-}
-
-/** 不可变更新一张在看的图；不在看则 no-op。 */
-function updateFlowGraph(
-  graphs: Record<string, FlowLiveGraph>,
-  flow: string,
-  updater: (g: FlowLiveGraph) => FlowLiveGraph,
-): Record<string, FlowLiveGraph> {
-  const g = graphs[flow];
-  if (!g) return graphs;
-  const next = updater(g);
-  return next === g ? graphs : { ...graphs, [flow]: next };
-}
-
-/** flow_graph_changed：spawn → 加节点 + depends_on 边；其余动作只刷新
- *  已存在节点的状态。 */
-function applyGraphChanged(
-  graphs: Record<string, FlowLiveGraph>,
-  msg: Extract<ServerMessage, { type: "flow_graph_changed" }>,
-): Record<string, FlowLiveGraph> {
-  const flow = flowGraphKey(msg.flow || "", msg.subject);
-  const nodeId = msg.node_id;
-  if (!flow || !nodeId) return graphs;
-  if (msg.subject === "flow" && !graphs[flow]) {
-    graphs = { ...graphs, [flow]: emptyFlowGraph(flow) };
-  }
-  const liveWdl =
-    typeof msg.wdl === "string" && msg.wdl.trim() ? msg.wdl : undefined;
-  return updateFlowGraph(graphs, flow, (g) => {
-    const existing = g.nodes[nodeId];
-    if (msg.action === "spawn" || !existing) {
-      const nodes: Record<string, FlowLiveNode> = {
-        ...g.nodes,
-        [nodeId]: {
-          id: nodeId,
-          status: (msg.status as FlowLiveNode["status"]) || "pending",
-          task: "",
-          result: "",
-          activations: 0,
-          agent_id: `sa-flow-${nodeId}`,
-        },
-      };
-      const edges: { from: string; to: string; on?: string }[] = [];
-      const seen = new Set<string>();
-      for (const e of g.edges) {
-        if (e.to !== nodeId) {
-          edges.push(e);
-          seen.add(`${e.from}\u0000${e.to}`);
-        }
-      }
-      for (const dep of msg.depends_on || []) {
-        const key = `${dep}\u0000${nodeId}`;
-        if (!seen.has(key) && nodes[dep]) {
-          edges.push({ from: dep, to: nodeId });
-          seen.add(key);
-        }
-      }
-      return {
-        ...g,
-        nodes,
-        edges,
-        updatedAt: nowISO(),
-        ...(liveWdl ? { wdl: liveWdl } : {}),
-      };
-    }
-    if (msg.status && existing.status !== msg.status) {
-      return {
-        ...g,
-        nodes: {
-          ...g.nodes,
-          [nodeId]: {
-            ...existing,
-            status: msg.status as FlowLiveNode["status"],
-          },
-        },
-        updatedAt: nowISO(),
-        ...(liveWdl ? { wdl: liveWdl } : {}),
-      };
-    }
-    if (liveWdl && liveWdl !== g.wdl) {
-      return { ...g, wdl: liveWdl, updatedAt: nowISO() };
-    }
-    return g;
-  });
-}
-
-/** subagent_start/complete/failed：把 subagent_id flow-<flow>-<node> 映射
- *  为节点状态更新。错过 spawn 增量时顺带补建节点。 */
-function applySubagentStatus(
-  graphs: Record<string, FlowLiveGraph>,
-  msg: Extract<
-    ServerMessage,
-    { type: "subagent_start" | "subagent_complete" | "subagent_failed" }
-  >,
-): Record<string, FlowLiveGraph> {
-  const subagentId = msg.subagent_id || "";
-  const flow = flowNameFromSubagentId(subagentId, Object.keys(graphs));
-  if (!flow) return graphs;
-  const nodeId = subagentId.slice(`flow-${flow}-`.length);
-  const status: FlowLiveNode["status"] =
-    msg.type === "subagent_start"
-      ? msg.status === "pending"
-        ? "pending"
-        : "running"
-      : msg.type === "subagent_failed"
-        ? "failed"
-        : "done";
-  const agentId = `sa-flow-${nodeId}`;
-  return updateFlowGraph(graphs, flow, (g) => {
-    const existing = g.nodes[nodeId];
-    if (!existing) {
-      return {
-        ...g,
-        nodes: {
-          ...g.nodes,
-          [nodeId]: {
-            id: nodeId,
-            status,
-            task: msg.description || "",
-            result: "",
-            activations: 0,
-            agent_id: agentId,
-            ...(msg.type === "subagent_failed" && msg.error
-              ? { error: msg.error }
-              : {}),
-          },
-        },
-        updatedAt: nowISO(),
-      };
-    }
-    const nextError =
-      msg.type === "subagent_failed" && msg.error ? msg.error : existing.error;
-    const nextResult =
-      msg.type === "subagent_failed" && msg.error
-        ? `[失败] ${msg.error}`
-        : existing.result;
-    if (
-      existing.status === status &&
-      existing.error === nextError &&
-      existing.result === nextResult &&
-      existing.agent_id === agentId
-    ) {
-      return g;
-    }
-    return {
-      ...g,
-      nodes: {
-        ...g.nodes,
-        [nodeId]: {
-          ...existing,
-          status,
-          agent_id: existing.agent_id || agentId,
-          result: nextResult,
-          ...(nextError ? { error: nextError } : {}),
-        },
-      },
-      updatedAt: nowISO(),
-    };
-  });
-}
-
 /* ── 模块级独立会话（按 WS subject 键控）─────────────────────────────
  * 镜像主聊天的流式消息处理，但写入该模块独立的 moduleSessions[subject]，
  * 与主会话状态互不可见。每个 agentic 模块（config/...）一份。 */
@@ -1690,7 +1117,7 @@ function handleModuleChatEvent(
 const MODULE_CHAT_TYPES = new Set(["turn_start", "chunk", "turn_end", "error"]);
 
 /** 回放帧是否与 store 已有内容重复（刷新双显的判定）。 分层：**带 view_seq 的回放帧走不到这里** */
-/** - subagent_chunk：子智能体中间产出，只实时投递、不落带 （web_views.to_view_frame 对它直接 return None），因此永远没有 view_seq， 也永远不会出现在快照里。 任 */
+/** - subagent_chunk：子智能体中间产出。服务端一律落带（web_views 读端归集进 subagent_texts[父 call_id]， 不投影成消息）；实时帧不单独带行号、也不上屏。进带 ≠ 上屏。 */
 const UNPERSISTED_FRAME_TYPES = new Set(["subagent_chunk"]);
 
 function _isUnpersistedProcessFrame(msg: ServerMessage): boolean {
@@ -1716,7 +1143,7 @@ function _mergeSubagentResults(
 
 /** 帧的线内序号（view_seq）：只有落带帧才有；0 ＝ 无序号，不参与 seq 裁量。 */
 function _frameViewSeq(msg: ServerMessage): number {
-  const raw = (msg as { view_seq?: unknown }).view_seq;
+  const raw = msg.view_seq ?? msg.seq;
   const n = typeof raw === "number" ? raw : Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
 }
@@ -1739,7 +1166,9 @@ function _subagentFrameMessage(frame: SubagentFramePayload): ChatMessage | null 
       ? Math.trunc(frame.view_seq)
       : undefined;
   if (frame.type === "tool") {
-    const label = String(frame.text ?? "").trim();
+    let label = String(frame.text ?? "").trim();
+    const errIdx = label.indexOf(" 报错:");
+    if (errIdx >= 0) label = label.slice(0, errIdx).trimEnd();
     if (!label) return null;
     const tool: ChatToolLine = {
       label,
@@ -1827,11 +1256,12 @@ function _ingestSubagentFrame(parentCallId: string, msg: ServerMessage): void {
 
 /** - 新契约：帧显式带 ``delegate_brief: true`` - 老数据兜底：正文以 ``<任务指令>`` 开头（服务端过滤之前落下的帧） */
 function _delegateBrief(msg: ServerMessage): { callId: string; text: string } | null {
-  const flagged = (msg as { delegate_brief?: unknown }).delegate_brief === true;
-  const content = String((msg as { content?: unknown }).content ?? "");
+  if (msg.type !== "user_message") return null;
+  const flagged = msg.delegate_brief === true;
+  const content = String(msg.content ?? "");
   if (!flagged && !content.trimStart().startsWith("<任务指令>")) return null;
   return {
-    callId: String((msg as { parent_tool_call_id?: unknown }).parent_tool_call_id || ""),
+    callId: String(msg.parent_tool_call_id || ""),
     text: content,
   };
 }
@@ -1931,11 +1361,22 @@ function _bufferPendingFrame(msg: ServerMessage): void {
   }
 }
 
-/** 边界落定后按到达序回放缓冲；回放帧走同一套守卫与去重，不绕行、不二次入缓冲。
- *  WS 本身有序，按到达序回放即为真实时间线；缓冲只是把同一批帧推迟到边界落定。 */
+/** 边界落定后按 view_seq 排序回放缓冲（契约：有序号升序，无序号保持到达序排最后）；
+ *  回放帧走同一套守卫与去重，不绕行、不二次入缓冲。 */
 function _flushPendingFrames(): void {
   if (_pendingFrames.length === 0) return;
-  const frames = _pendingFrames;
+  const frames = _pendingFrames
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => {
+      const sa = Number(a.f.view_seq ?? a.f.seq ?? 0);
+      const sb = Number(b.f.view_seq ?? b.f.seq ?? 0);
+      const aHas = Number.isFinite(sa) && sa > 0;
+      const bHas = Number.isFinite(sb) && sb > 0;
+      if (aHas && bHas && sa !== sb) return sa - sb;
+      if (aHas !== bHas) return aHas ? -1 : 1;
+      return a.i - b.i;
+    })
+    .map(({ f }) => f);
   _pendingFrames = [];
   _pendingOverflowWarned = false;
   _replayingPendingFrames = true;
@@ -2038,36 +1479,8 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
   workflowDraftRevisions: {},
   providersRevision: 0,
   workspacesRevision: 0,
-  flowGraphs: {},
-  applyFlowSnapshot: (flow, snapshot) => {
-    set((s) => ({
-      flowGraphs: {
-        ...s.flowGraphs,
-        [flow]: snapshot ? graphFromSnapshot(snapshot) : emptyFlowGraph(flow, true),
-      },
-    }));
-  },
-  applyFlowTraceEvent: (msg) => {
-    if (msg.type === "flow_graph_changed") {
-      set((s) => ({ flowGraphs: applyGraphChanged(s.flowGraphs, msg) }));
-      return;
-    }
-    if (
-      msg.type === "subagent_start" ||
-      msg.type === "subagent_complete" ||
-      msg.type === "subagent_failed"
-    ) {
-      set((s) => ({ flowGraphs: applySubagentStatus(s.flowGraphs, msg) }));
-    }
-  },
-  dropFlowGraph: (flow) => {
-    set((s) => {
-      if (!s.flowGraphs[flow]) return {};
-      const flowGraphs = { ...s.flowGraphs };
-      delete flowGraphs[flow];
-      return { flowGraphs };
-    });
-  },
+  // 编排图域：状态与动作来自 slice（flowGraphSlice.ts），此处展开组合
+  ...createFlowGraphSlice(set as (fn: (s: AppState) => Partial<AppState>) => void),
   pendingInteraction: null,
   runtime: null,
   workspaces: [],
@@ -2102,7 +1515,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       return;
     }
 
-    const msgSubject = (msg as { subject?: string }).subject;
+    const msgSubject = msg.subject;
     if (MODULE_CHAT_TYPES.has(msg.type) && msgSubject && msgSubject !== "root") {
       handleModuleChatEvent(msgSubject, msg, set, get);
       return;
@@ -2125,7 +1538,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       return;
     }
 
-    const parentCallId = String((msg as { parent_tool_call_id?: unknown }).parent_tool_call_id || "");
+    const parentCallId = String(msg.parent_tool_call_id || "");
     if (parentCallId && (msg.type === "tool" || msg.type === "diff")) {
       if (_frameInBoundary(msg, get())) _ingestSubagentFrame(parentCallId, msg);
       return;
@@ -2133,7 +1546,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
 
     // trace_batch 防 UI 冻结的设计一致）。
     if (SUBAGENT_TREE_TYPES.has(msg.type)) {
-      const src = (msg as { source?: string }).source;
+      const src = msg.source;
       const gate = (src && !isWebSource(src)) || (!get().turnActive && SUBAGENT_TREE_OPENER_TYPES.has(msg.type));
       if (!gate) {
         _subagentTree.ingest(msg as unknown as import("./subagentTree").TreeEvent);
@@ -2148,7 +1561,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
     if (TRACE_TYPES.has(msg.type)) {
       const entry = toTraceEntry(msg);
       // 关行事件不受影响）。
-      if ((msg as { detached?: boolean }).detached === true) {
+      if (msg.type === "tool_complete" && msg.detached === true) {
         // skip sidebar buffer only
       } else if (entry.event_type.startsWith("tool_") && entry.source && !isWebSource(entry.source)) {
         // fall through to switch below (state updates), but skip the sidebar buffer.
@@ -2198,11 +1611,10 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
         if (!isWebSource(msg.source)) break;
         if (!_frameInBoundary(msg, get())) break;
         const msgs = get().messages;
-        const content = (msg as { content?: string }).content;
+        const content = msg.content;
         // 帧的线内序号：落到行上（顺序的权威键；已上屏的行不因它再被搬动）
         const msgSeq = _frameViewSeq(msg);
-        const rawClientId = (msg as { client_msg_id?: unknown }).client_msg_id;
-        const msgClientId = typeof rawClientId === "string" ? rawClientId.trim() : "";
+        const msgClientId = typeof msg.client_msg_id === "string" ? msg.client_msg_id.trim() : "";
         const frameText = typeof content === "string" ? content.trim() : "";
         //（用户反馈的接续输入重复，正是这条路）。
         const CLAIM_TAIL_WINDOW = 24;
@@ -2354,7 +1766,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
 
       case "continuation_input_injected": {
         // 已剥远端标记，与气泡文本直接可比。
-        const injected = (msg as { user_texts?: unknown }).user_texts;
+        const injected = msg.user_texts;
         if (Array.isArray(injected) && injected.length > 0) {
           const injectedTexts = new Set(injected.map((t) => String(t || "").trim()).filter(Boolean));
           if (injectedTexts.size > 0) {
@@ -2442,17 +1854,17 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
 
       case "subagent_chunk": {
         if (!_frameInBoundary(msg, get())) break;
-        const cid = String((msg as { tool_call_id?: string }).tool_call_id || "");
-        const piece = String((msg as { text?: string }).text || "");
+        const cid = String(msg.tool_call_id || "");
+        const piece = String(msg.text || "");
         if (!cid || !piece) break;
         // 真正的新帧键更大 ⇒ 照收。为什么不用文本判重（不同片段可能同文）也不用
-        const turnId = String((msg as { turn_id?: string }).turn_id || "");
-        const seq = Number((msg as { seq?: number }).seq || 0);
+        const turnId = String(msg.turn_id || "");
+        const seq = Number(msg.seq || msg.view_seq || 0);
         if (seq > 0) {
           const mark = _subagentChunkMarks.get(cid);
           if (mark && mark.turnId === turnId && seq <= mark.seq) break;
           _subagentChunkMarks.set(cid, { turnId, seq });
-        } else if ((msg as { replayed?: boolean }).replayed === true) {
+        } else if (msg.replayed === true) {
           // 老服务端帧上没有序号：退化为「重放丢弃」——新帧不带 replayed，仍放行。
           break;
         }
@@ -2468,8 +1880,8 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
 
       case "subagent_result": {
         if (!_frameInBoundary(msg, get())) break;
-        const cid = String((msg as { tool_call_id?: string }).tool_call_id || "");
-        const body = String((msg as { text?: string }).text || "");
+        const cid = String(msg.tool_call_id || "");
+        const body = String(msg.text || "");
         if (!cid || !body) break;
         const prev = get().subagentOutput[cid] ?? { text: "", result: "" };
         set({ subagentOutput: { ...get().subagentOutput, [cid]: { ...prev, result: body } } });
@@ -2485,17 +1897,19 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
         break;
 
       case "tool": {
-        const toolSource = (msg as { source?: string }).source;
+        const toolSource = msg.source;
         if (toolSource !== undefined && !isWebSource(toolSource)) break;
         if (!_frameInBoundary(msg, get())) break;
-        const label = String((msg as { text?: string }).text || "").trim();
+        let label = String(msg.text || "").trim();
+        const errIdx = label.indexOf(" 报错:");
+        if (errIdx >= 0) label = label.slice(0, errIdx).trimEnd();
         if (!label) break;
         const tool: ChatToolLine = {
           label,
-          ok: (msg as { ok?: boolean }).ok !== false,
-          tool_name: String((msg as { tool_name?: string }).tool_name || ""),
-          tool_call_id: String((msg as { tool_call_id?: string }).tool_call_id || ""),
-          duration_ms: (msg as { duration_ms?: number }).duration_ms ?? null,
+          ok: msg.ok !== false && msg.is_error !== true,
+          tool_name: String(msg.tool_name || ""),
+          tool_call_id: String(msg.tool_call_id || ""),
+          duration_ms: msg.duration_ms ?? null,
         };
         const toolSeq = _frameViewSeq(msg);
         set({
@@ -2513,15 +1927,15 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
 
       case "diff": {
         // 与 chunk/turn_* 同门：只显示 web 回合产出的 diff（他端工具 diff 不进聊天区）。
-        const diffSource = (msg as { source?: string }).source;
+        const diffSource = msg.source;
         if (diffSource !== undefined && !isWebSource(diffSource)) break;
         // 边界守卫（与 chunk 同一把尺）：切空间后旧空间回合的 diff 不得画到眼前。
         if (!_frameInBoundary(msg, get())) break;
-        const diff = (msg as { diff_lines?: import("./ws").CanonicalDiffLines }).diff_lines;
+        const diff = msg.diff_lines;
         if (!diff || !diff.hunks || diff.hunks.length === 0) break;
         const diffSeq = _frameViewSeq(msg);
         // 产出它的工具调用 id：落定后按它挂到那条工具行紧后面（不靠投递相邻）。
-        const diffCallId = String((msg as { tool_call_id?: string }).tool_call_id || "");
+        const diffCallId = String(msg.tool_call_id || "");
         set({
           messages: _withRow(get().messages, {
             id: nextId(),
@@ -2540,7 +1954,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
         // 本连接单播回执：先清 pendingCommand（否则边界丢帧会让 /compact spinner 永挂）。 再按空间/会话边界决定是否上屏
         set({ pendingCommand: null });
         if (!msgSubject || msgSubject === "root") {
-          const frameDir = (msg as { workspace_dir?: unknown }).workspace_dir;
+          const frameDir = msg.workspace_dir;
           if (typeof frameDir === "string" && frameDir.trim()) {
             if (!_frameInBoundary(msg, get())) break;
           }
@@ -2646,7 +2060,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       case "error": {
         // 本连接错误回执：先清 pendingCommand，再按边界决定是否上屏
         set({ pendingCommand: null });
-        const frameDir = (msg as { workspace_dir?: unknown }).workspace_dir;
+        const frameDir = msg.workspace_dir;
         if (typeof frameDir === "string" && frameDir.trim()) {
           if (!_frameInBoundary(msg, get())) break;
         }
@@ -2665,7 +2079,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
         });
         // 错误可携带导航（如无 provider 引导到配置页），复用 pendingNav 通道
         {
-          const nav = (msg as { data?: { navigate?: unknown } }).data?.navigate;
+          const nav = msg.data?.navigate;
           if (typeof nav === "string" && nav) set({ pendingNav: nav });
         }
         break;
@@ -2750,12 +2164,10 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
         } catch {
           /* ignore */
         }
-        void import("./ws").then(({ getWS }) => {
-          const ws = getWS();
-          if (!ws.isConnected() && !ws.isClosed()) {
-            ws.reconnectNow();
-          }
-        });
+        const ws = getWS();
+        if (!ws.isConnected() && !ws.isClosed()) {
+          ws.reconnectNow();
+        }
         break;
       }
 
@@ -2879,6 +2291,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       }
 
       case "pong":
+      case "need_topup":
         break;
     }
   },
@@ -3043,8 +2456,13 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       if (now.hydrateGeneration !== generation) return;
       const rows = Array.isArray(data.messages) ? data.messages : [];
       get().prependHistory(rows, { workspaceDir: dir });
-      // 不足一页＝历史到头，收起「加载更早消息」入口。
-      if (rows.length < HISTORY_PAGE_LIMIT) set({ hasMoreHistory: false });
+      // 到头的权威判据是服务端字节窗是否读到文件头；行数不足一页只是参考
+      // （极端密度下字节窗上限截断会返回不足一页但实际还有更早历史）。
+      if (data.has_older === true) {
+        set({ hasMoreHistory: true });
+      } else if (rows.length < HISTORY_PAGE_LIMIT) {
+        set({ hasMoreHistory: false });
+      }
     } catch (err) {
       console.error("Failed to load earlier messages:", err);
     } finally {
@@ -3182,6 +2600,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
         subagentResults: snapshot.subagent_results,
         subagentDiffs: snapshot.subagent_diffs,
         subagentBriefs: snapshot.subagent_briefs,
+        subagentTexts: snapshot.subagent_texts,
         ...(snapshot.runtime ? { runtime: snapshot.runtime } : {}),
       });
     }

@@ -31,16 +31,19 @@ def _attach_output_frame(frame: dict[str, Any]) -> tuple[str, dict[str, Any]] | 
         # 投进来会当主会话工具行多一行。
         if str(frame.get("parent_tool_call_id") or ""):
             return None
-        label = str(frame.get("text") or "").strip()
+        from src.coara.display import format_tool_line_bullet, strip_tool_error_suffix
+
+        label = strip_tool_error_suffix(str(frame.get("text") or "").strip())
         if not label:
             return None
         ok = not bool(frame.get("is_error"))
-        # 在兼容集里，换前缀不动渲染层。
+        # 成败都用 •；失败靠帧字段 is_error 让 CLI 标红（不用 × / 隐式字符）
         return (
             "tool",
             {
-                "text": f"• {label}\n",
+                "text": f"{format_tool_line_bullet()} {label}\n",
                 "ok": ok,
+                "is_error": not ok,
                 "tool_name": str(frame.get("tool_name") or ""),
                 "tool_call_id": str(frame.get("tool_call_id") or ""),
             },
@@ -477,6 +480,9 @@ class AttachWsHandlers(HandlerMixinBase):
                         if old_sender is not None:
                             end_registry.unregister("cli-attached", old_sender, _sess_id)
                     _follow_tid = _turn_id or uuid.uuid4().hex
+                    _follow_ws = str(
+                        getattr(session.coara, "workspace_dir", "") or getattr(self, "workspace_dir", "") or ""
+                    )
                     _target_stream = TurnStream(
                         _follow_tid,
                         "cli-attached",
@@ -484,9 +490,15 @@ class AttachWsHandlers(HandlerMixinBase):
                         cast(Any, self),
                         channel_id=conn_id,
                         session_id=_sess_id,
+                        workspace_dir=_follow_ws,
                     )
                     self._turns[f"followup-attach-{_follow_tid}"] = _target_stream
                     created = True
+                elif not getattr(_target_stream, "workspace_dir", ""):
+                    # 旧流若漏打空间戳，跟话续用前补上，避免继续静默丢带
+                    _target_stream.workspace_dir = str(
+                        getattr(session.coara, "workspace_dir", "") or getattr(self, "workspace_dir", "") or ""
+                    )
 
                 _target_stream.emit_user_message(text)
 
@@ -787,10 +799,19 @@ class AttachWsHandlers(HandlerMixinBase):
 
         turn_id = uuid.uuid4().hex
         source = "cli-attached"
-        stream = TurnStream(turn_id, source, "root", cast(Any, self), channel_id=conn_id)
+        # 必须打 workspace_dir：缺省落带走 record_view_frame，无空间戳则整帧丢弃
+        tape_ws = str(getattr(turn_coara, "workspace_dir", "") or getattr(self, "workspace_dir", "") or "")
+        stream = TurnStream(
+            turn_id,
+            source,
+            "root",
+            cast(Any, self),
+            channel_id=conn_id,
+            session_id=str(getattr(turn_coara, "session_id", "") or ""),
+            workspace_dir=tape_ws,
+        )
         stream.desk = desk_label
         stream.workspace_id = workspace_id
-        stream.session_id = str(getattr(turn_coara, "session_id", "") or "")
         self._turns[turn_id] = stream
         stream.emit_user_message(str(data.get("text") or text or ""))
         stream.emit("turn_start")

@@ -69,8 +69,8 @@ export function runSessionHydrate(
   return true;
 }
 
-/** 重连尾部补拉：仅 viewReady 且已有内容时按 maxSeq 补后缀。 */
-export function topUpAfterReconnect(): void {
+/** 尾部补拉：重连与广播背压 ``need_topup`` 共用；仅 viewReady 且已有内容时按 maxSeq 补后缀。 */
+export function topUpSessionTail(): void {
   const st = useStore.getState();
   const dir = st.workspaceDir;
   if (!dir) return;

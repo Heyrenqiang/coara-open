@@ -13,9 +13,10 @@ from src.core.coara_home import CoaraHomePaths
 
 # 标签信号有效期：前端可见时 30s 一次心跳，允许丢两拍。
 FRESH_TTL_SECONDS = 90.0
-# 已抬到含 coara 标题的窗口后，等标签重连/回前台的时长。
+# 历史兼容：曾用于「抬到 coara 窗后等重连」的满额等待；托盘开页已统一走短探，
+# 避免标题残留导致空等约 1s。保留常量供旧测试/外部引用。
 RECONNECT_GRACE_SECONDS = 1.0
-# 抬不到窗口时只短探：再空等满额 grace 会让「没开网页点托盘」体感卡顿约数秒。
+# 无活 WS 时的重连短探：有标签通常几百毫秒内到位；探不到立刻开新标签。
 RECONNECT_PROBE_SECONDS = 0.15
 
 # 决策结果（单一真源，WebServer 与测试共用）

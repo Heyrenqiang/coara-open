@@ -23,14 +23,20 @@ function tabIsClaimingLive(): boolean {
 export function SingleTabGuard({ children }: { children: ReactNode }) {
   const [duplicate, setDuplicate] = useState(false);
 
-  useEffect(
-    () =>
-      createSingleTabArbiter(() => setDuplicate(true), {
-        isClaimingLive: tabIsClaimingLive,
-        isFreshOpen: tookTokenFromUrlThisLoad,
-      }),
-    [],
-  );
+  // 录像带拖出窗是只读观察标签：不占单标签坑、不参与仲裁（主标签永不挤它，
+  // 它也永不挤主标签）。判定只看 URL，与 WS 身份（role=tape）同源。
+  const isObserverTab =
+    typeof window !== "undefined" &&
+    window.location.pathname.startsWith("/tape") &&
+    new URLSearchParams(window.location.search).get("popout") === "1";
+
+  useEffect(() => {
+    if (isObserverTab) return undefined;
+    return createSingleTabArbiter(() => setDuplicate(true), {
+      isClaimingLive: tabIsClaimingLive,
+      isFreshOpen: tookTokenFromUrlThisLoad,
+    });
+  }, [isObserverTab]);
 
   useEffect(() => {
     if (!duplicate) return;

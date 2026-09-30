@@ -1,10 +1,9 @@
-/** Thinking 行轮换短语（web 端）——复刻 CLI witty_phrases 的采样/轮换逻辑。
+/** Thinking 行轮换短语（web 端）——对齐 CLI loading_phrases 抽样/轮换。
  *
  * 词库来自 src/records/loading_phrases.json（打包为静态资源，与 CLI 同源同步）。
- * 整池洗牌袋对齐 CLI：常驻（witty+quotes）全量 + daily 定制 + 小技巧一并进袋，
- * 60s 窗口顺序轮换（往一轮穷尽 ≈6 小时）；新会话、切工作空间时 reshuffle 换一袋。
- * daily 定制词（一日抛）经后端 /api/loading-phrases/custom 下发：页面加载与
- * 每回合开始时拉取，日期校验由后端做，过期自动回落常驻词库。
+ * 有当日定制：定制 N ↔ 常驻抽 N（1:1 上屏）；无定制：常驻抽固定袋 + 小技巧。
+ * 60s 窗口顺序轮换；新会话、切工作空间时 reshuffle。
+ * daily 定制词经 /api/loading-phrases/custom 下发（页加载 + 每回合开始，后端一日抛）。
  */
 import library from "./loading_phrases.json";
 import { fetchCustomLoadingPhrases } from "./api";
@@ -21,23 +20,50 @@ const TIPS: string[] = [
   "小技巧：/compact 压缩过长会话",
 ];
 
-// 每批＝整池洗牌袋（对齐 CLI）：全池打乱后顺序播放，穷尽一遍才重复。
 const ROTATE_SECONDS = 60;
+/** 无定制词时的常驻抽样上限（对齐 CLI `_FALLBACK_RESIDENT`）。 */
+const FALLBACK_RESIDENT = 40;
 
-/** 当日 daily 定制词池（后端校验日期后下发；空则批次回落常驻词库）。 */
+/** 当日 daily 定制词池（后端校验日期后下发；空则批次回落常驻抽样）。 */
 let customPool: string[] = [];
 let lastRefreshAt = 0;
 const REFRESH_DEBOUNCE_MS = 30_000;
 
-function sampleBatch(): string[] {
-  // 整池洗牌袋：全池打乱后顺序播放，穷尽一遍才重复（≈6 小时），展现在
-  // 用户面前的就是随机序列，而不是「同一小批反复循环」。
-  const batch = [...WITTY_POOL, ...QUOTE_POOL, ...customPool, ...TIPS];
-  for (let i = batch.length - 1; i > 0; i--) {
+function residentPool(): string[] {
+  return [...WITTY_POOL, ...QUOTE_POOL];
+}
+
+function sampleResident(n: number): string[] {
+  const pool = residentPool();
+  if (n <= 0) return [];
+  if (n >= pool.length) return pool;
+  // Fisher–Yates partial shuffle
+  const copy = [...pool];
+  for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [batch[i], batch[j]] = [batch[j], batch[i]];
+    [copy[i], copy[j]] = [copy[j], copy[i]];
   }
-  return batch.length > 0 ? batch : ["思考中……"];
+  return copy.slice(0, n);
+}
+
+function shuffleInPlace(arr: string[]): string[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function sampleBatch(): string[] {
+  // 有定制：定制 N ↔ 常驻抽 N（真 1:1）；无定制：常驻抽固定袋 + 小技巧
+  let batch: string[];
+  if (customPool.length > 0) {
+    batch = [...customPool, ...sampleResident(customPool.length)];
+  } else {
+    batch = [...sampleResident(FALLBACK_RESIDENT), ...TIPS];
+  }
+  if (batch.length === 0) return ["思考中……"];
+  return shuffleInPlace(batch);
 }
 
 let batch: string[] = sampleBatch();

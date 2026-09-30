@@ -166,9 +166,31 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
         if _registry is not None and hasattr(_registry, "set_tape_sink"):
             from src.ui.view_recorder import record_view_frame
 
-            _registry.set_tape_sink(
-                lambda frame: record_view_frame(frame, coara_home=getattr(self, "coara_home", None))
-            )
+            def _orphan_tape_sink(frame: dict[str, Any]) -> int | None:
+                # 路由未命中时仍落带：缺 workspace_dir 时仅按 session 反查；
+                # 反查失败则跳过——禁止用 self.workspace_dir 兜底（会串空间）。
+                enriched = dict(frame) if isinstance(frame, dict) else {}
+                if not str(enriched.get("workspace_dir") or "").strip():
+                    sid = str(enriched.get("session_id") or "").strip()
+                    sessions = getattr(self.root, "_sessions", None) or {}
+                    for sess in sessions.values():
+                        coara = getattr(sess, "coara", None)
+                        if coara is not None and str(getattr(coara, "session_id", "") or "") == sid:
+                            ws = str(getattr(coara, "workspace_dir", "") or "").strip()
+                            if ws:
+                                enriched["workspace_dir"] = ws
+                            break
+                    if not str(enriched.get("workspace_dir") or "").strip():
+                        logger.warning(
+                            "orphan tape sink skipped: no workspace_dir kind={} session={}",
+                            enriched.get("type") or enriched.get("kind"),
+                            sid or "(empty)",
+                        )
+                        return None
+                enriched.setdefault("subject", "root")
+                return record_view_frame(enriched, coara_home=getattr(self, "coara_home", None))
+
+            _registry.set_tape_sink(_orphan_tape_sink)
 
     def _has_active_web_turn_stream(self, session_id: str) -> bool:
         """True when a web-originated TurnStream for this session is still in flight."""
@@ -394,11 +416,13 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
         self.registry.send_to_active_nowait(msg)
 
     async def _handle_ui_focus(self, request: web.Request) -> web.Response:
-        """GET /api/ui/focus — 兼容入口：只做唤起判定，绝不开新窗。"""
+        """GET /api/ui/focus — 只唤起已有标签，绝不开新窗。
+
+        托盘在本机已抬窗/开页后走此入口做 WS 导航；开新标签由调用方决定。
+        """
         self._check_token(request)
         path = str(request.query.get("path") or "").strip()
-        result = await self.open_or_focus_decision(path)
-        # focused 语义（与旧外进程调用者兼容）：是否找到了已有标签并唤起过它。
+        result = await self.open_or_focus_decision(path, allow_open=False)
         return web.json_response(
             {
                 "focused": result.get("action") != web_tab_presence.ACTION_OPEN,
@@ -407,10 +431,10 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
         )
 
     async def _handle_ui_open(self, request: web.Request) -> web.Response:
-        """GET /api/ui/open — 打开或唤起 Web UI 的唯一入口（托盘/协议/外进程都走它）。"""
+        """GET /api/ui/open — 打开或唤起 Web UI（允许开新标签）。"""
         self._check_token(request)
         path = str(request.query.get("path") or "").strip()
-        return web.json_response(await self.open_or_focus_decision(path))
+        return web.json_response(await self.open_or_focus_decision(path, allow_open=True))
 
     async def _handle_presence_ping(self, request: web.Request) -> web.Response:
         """GET /api/ui/presence/ping — 前端心跳：这个标签还在。"""
@@ -424,20 +448,29 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
         web_tab_presence.mark_tab_left(self.workspace_dir, coara_home=self.coara_home)
         return web.json_response({"ok": True})
 
-    async def open_or_focus_decision(self, path: str = "") -> dict[str, Any]:
-        """打开/唤起 Web UI：有活跃标签则导航唤起；否则有 presence 先等重连；仍没有则开新标签。"""
+    async def open_or_focus_decision(self, path: str = "", *, allow_open: bool = True) -> dict[str, Any]:
+        """打开/唤起 Web UI。
+
+        [allow_open]=False 时只推 focus / 抬窗，绝不 webbrowser.open（托盘已本地处理开页）。
+        """
         if self.registry.has_active():
             web_tab_presence.mark_tab_seen(self.workspace_dir, coara_home=self.coara_home)
             self._request_browser_focus(path)
             raised = await asyncio.to_thread(_try_raise_coara_browser_windows)
             if raised:
                 return {"action": web_tab_presence.ACTION_FOCUS_ACTIVE, "reason": "active", "opened": False}
+            if not allow_open:
+                return {
+                    "action": web_tab_presence.ACTION_FOCUS_ACTIVE,
+                    "reason": "active-focus-only",
+                    "opened": False,
+                }
             # 标签在后台时窗口标题是别的页（不含 coara），OS 抬不到；浏览器又禁止无手势
             # focus() 切 tab → 体感「点托盘没反应」。再开入口 URL：Chrome/Edge 起新标签，
             # SingleTabGuard 让旧标签让路，用户落到前台 coara。
             url = self.build_url(path, bust=True)
-            await asyncio.to_thread(_open_web_ui_window, url)
-            await asyncio.to_thread(_try_raise_coara_browser_windows)
+            self._schedule_open_web_ui_window(url)
+            self._spawn_bg_task(asyncio.to_thread(_try_raise_coara_browser_windows))
             return {
                 "action": web_tab_presence.ACTION_FOCUS_ACTIVE,
                 "reason": "active-background-nudge",
@@ -450,29 +483,47 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             fresh=web_tab_presence.is_tab_fresh(presence),
         )
         if action == web_tab_presence.ACTION_FOCUS_RECENT:
-            # 刚有标签：先唤起 + 等重连；成功则只导航。等不到（浏览器已关 / 标签已死）再开新窗，
-            # 避免「点托盘没反应」。新开带 token 时 SingleTabGuard 会让旧僵死标签让路。
+            # 刚有标签：先唤起 + 短探重连。标题里有 coara 也不可信（僵死标签），
+            # 绝不用满额 grace 空等——那会让托盘「有反应但卡一秒」。
             self._request_browser_focus(path)
             raised = await asyncio.to_thread(_try_raise_coara_browser_windows)
-            # 抬不到窗＝眼前没有 coara 页，别空等满额 grace（托盘会卡约数秒才开页）。
-            grace = web_tab_presence.RECONNECT_GRACE_SECONDS if raised else web_tab_presence.RECONNECT_PROBE_SECONDS
-            if await self._wait_for_tab_reconnect(grace):
+            if await self._wait_for_tab_reconnect(web_tab_presence.RECONNECT_PROBE_SECONDS):
                 self._request_browser_focus(path)
                 if raised or await asyncio.to_thread(_try_raise_coara_browser_windows):
                     return {"action": action, "reason": "recent-reconnected", "opened": False}
+                if not allow_open:
+                    return {"action": action, "reason": "recent-focus-only", "opened": False}
                 url = self.build_url(path, bust=True)
-                await asyncio.to_thread(_open_web_ui_window, url)
-                await asyncio.to_thread(_try_raise_coara_browser_windows)
+                self._schedule_open_web_ui_window(url)
+                self._spawn_bg_task(asyncio.to_thread(_try_raise_coara_browser_windows))
                 return {"action": action, "reason": "recent-background-nudge", "opened": True}
+            if not allow_open:
+                return {
+                    "action": web_tab_presence.ACTION_OPEN,
+                    "reason": "recent-gone-focus-only",
+                    "opened": False,
+                }
+
+        if not allow_open:
+            return {
+                "action": web_tab_presence.ACTION_OPEN,
+                "reason": "no-tab-focus-only",
+                "opened": False,
+            }
 
         url = self.build_url(path, bust=True)
-        await asyncio.to_thread(_open_web_ui_window, url)
-        await asyncio.to_thread(_try_raise_coara_browser_windows)
+        # webbrowser.open 在 Windows 上可阻塞数秒；不 await，避免 /api/ui/open 拖死托盘。
+        self._schedule_open_web_ui_window(url)
+        self._spawn_bg_task(asyncio.to_thread(_try_raise_coara_browser_windows))
         return {
             "action": web_tab_presence.ACTION_OPEN,
             "reason": "no-tab" if action == web_tab_presence.ACTION_OPEN else "recent-gone",
             "opened": True,
         }
+
+    def _schedule_open_web_ui_window(self, url: str) -> None:
+        """后台开浏览器，不阻塞当前请求/决策协程。"""
+        self._spawn_bg_task(asyncio.to_thread(_open_web_ui_window, url))
 
     async def _wait_for_tab_reconnect(self, seconds: float) -> bool:
         """等标签重连：内核重启后标签会自动重连，通常几百毫秒内到位。"""
@@ -674,6 +725,38 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             return web.json_response({"stopping": True})
         return web.json_response({"stopping": False, "reason": "no stop event bound"}, status=409)
 
+    async def _handle_background_task_kill(self, request: web.Request) -> web.Response:
+        """POST /api/v1/background-tasks/{task_id}/kill — web 端强杀本端可见后台任务。"""
+        self._check_token(request)
+        task_id = str(request.match_info.get("task_id") or "").strip()
+        if not task_id:
+            return web.json_response({"ok": False, "error": "missing task_id"}, status=400)
+        fg = self._view_coara()
+        if fg is None:
+            return web.json_response({"ok": False, "error": "no session"}, status=409)
+        from src.cli.background_tasks_display import kill_background_task
+
+        result = await kill_background_task(fg, task_id, origin_end="web")
+        if not result.get("ok"):
+            reason = str(result.get("reason") or "failed")
+            status = 404 if reason == "not_found" else 403 if reason == "forbidden" else 400
+            return web.json_response(result, status=status)
+        return web.json_response(result)
+
+    async def _handle_clipboard_paths(self, request: web.Request) -> web.Response:
+        """GET /api/clipboard/paths — 本机资源管理器「复制」的文件绝对路径（仅 localhost）。
+
+        浏览器粘贴 File 拿不到绝对路径；内核与桌面同机时由这边读 CF_HDROP。
+        """
+        peer = request.remote or ""
+        if peer not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return web.json_response({"error": "localhost only"}, status=403)
+        self._check_token(request)
+        from src.utils.clipboard_paths import clipboard_paths_payload, get_clipboard_file_paths
+
+        paths = await get_clipboard_file_paths()
+        return web.json_response(clipboard_paths_payload(paths))
+
     def _check_token(self, request: web.Request) -> None:
         """Validate the auth token from the request; raises HTTPUnauthorized on mismatch."""
         check_dashboard_token(
@@ -788,6 +871,7 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
 
         # Native web-server endpoints: file system + workspace + session.
         r.add_get("/api/workspace/list", self._handle_workspace_list)
+        r.add_get("/api/space-ui/{workspace_id}/{relpath:.*}", self._handle_space_ui_asset)
         r.add_get("/api/workspace/file", self._handle_workspace_file)
         r.add_get("/api/workspace/file-raw", self._handle_workspace_file_raw)
         r.add_get("/api/outbound-files/{file_id}", self._handle_outbound_file)
@@ -819,6 +903,8 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
         r.add_get("/api/ui/presence/ping", self._handle_presence_ping)
         r.add_post("/api/ui/presence/bye", self._handle_presence_bye)
         r.add_get("/api/v1/kernel/busy", self._handle_kernel_busy)
+        r.add_post("/api/v1/background-tasks/{task_id}/kill", self._handle_background_task_kill)
+        r.add_get("/api/clipboard/paths", self._handle_clipboard_paths)
 
         # 账户与遥测接口属可选能力：装了实现包才注册，开源发行版自然没有这两组
         from src.ext import register_account_web, register_telemetry_web
@@ -866,21 +952,25 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             return
         if kind == "subagent_chunk":
             # 子智能体正文：折叠在它的 delegate 工具行里（帧照常落带，读端按父标识归集、不投影）。
-            tool_call_id = str(frame.get("tool_call_id") or "")
+            # tool_call_id 与 parent_tool_call_id 同为父 delegate call——写端两字段都传，
+            # 读端 build_messages 认 parent；实时 store 认 tool_call_id。只传其一刷新会丢过程正文。
+            tool_call_id = str(frame.get("tool_call_id") or frame.get("parent_tool_call_id") or "")
             if not tool_call_id:
                 logger.warning("web end frame dropped: subagent_chunk without parent call id")
                 return
+            parent_tool_call_id = str(frame.get("parent_tool_call_id") or tool_call_id)
             stream.emit(
                 "subagent_chunk",
                 text=str(frame.get("text") or ""),
                 tool_call_id=tool_call_id,
+                parent_tool_call_id=parent_tool_call_id,
                 coara_id=str(frame.get("coara_id") or ""),
                 subagent_id=str(frame.get("subagent_id") or ""),
             )
             return
         if kind == "subagent_result":
             # 子智能体的最终答复：同样折叠在它的 delegate 工具行里。
-            tool_call_id = str(frame.get("tool_call_id") or "")
+            tool_call_id = str(frame.get("tool_call_id") or frame.get("parent_tool_call_id") or "")
             if not tool_call_id:
                 logger.warning("web end frame dropped: subagent_result without parent call id")
                 return
@@ -888,6 +978,7 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
                 "subagent_result",
                 text=str(frame.get("text") or ""),
                 tool_call_id=tool_call_id,
+                parent_tool_call_id=str(frame.get("parent_tool_call_id") or tool_call_id),
                 coara_id=str(frame.get("coara_id") or ""),
             )
             return
@@ -903,15 +994,22 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             return
         if kind == "tool":
             # 工具行（✓ tool(...)）：进聊天流插在正文段落之间，随 TurnStream persist 落视图文件 → 刷新回放位置不变。
-            stream.emit(
-                "tool",
-                text=str(frame.get("text") or ""),
-                ok=not bool(frame.get("is_error", False)),
-                tool_name=frame.get("tool_name", ""),
-                tool_call_id=frame.get("tool_call_id", ""),
-                duration_ms=frame.get("duration_ms"),
+            # 详情字段（arguments/tool_output/ref）一并落带；聊天投影只读 label/ok。
+            from src.runtime.tape_tool_detail import apply_tape_tool_detail
+
+            tool_kwargs: dict[str, Any] = {
+                "text": str(frame.get("text") or ""),
+                "ok": not bool(frame.get("is_error", False)),
+                "is_error": bool(frame.get("is_error", False)),
+                "tool_name": frame.get("tool_name", ""),
+                "tool_call_id": frame.get("tool_call_id", ""),
+                "duration_ms": frame.get("duration_ms"),
                 **_parent_tool_call_kwargs(frame),
-            )
+            }
+            if bool(frame.get("running")):
+                tool_kwargs["running"] = True
+            apply_tape_tool_detail(tool_kwargs, frame)
+            stream.emit("tool", **tool_kwargs)
             return
         text = str(frame.get("text") or "")
         if not text.strip():
@@ -924,6 +1022,7 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
                 "subagent_chunk",
                 text=text,
                 tool_call_id=parent_tool_call_id,
+                parent_tool_call_id=parent_tool_call_id,
                 coara_id=str(frame.get("coara_id") or ""),
                 subagent_id=str(frame.get("subagent_id") or ""),
             )
@@ -1045,9 +1144,28 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             return ws
 
         conn_id = uuid.uuid4().hex
-        await self.registry.register(ws, conn_id)
+        # role=tape：录像带拖出窗的只读观察连接——不占 active 坑、不顶替主标签、
+        # 不跑 pin/快照/回放/审批重发，也不注册任何端出站通道（_restore_web_end_senders
+        # 与 end_registry 全局兜底槽都是主连接专属，observer 碰了会抢主 web 出站槽）。
+        # 广播帧经 broadcast_observers 送达，与主连接分流。
+        is_observer = (request.query.get("role") or "").strip() == "tape"
+        await self.registry.register(ws, conn_id, observer=is_observer)
         # 标签报到：跨内核重启记住「刚才有标签」，供打开/唤起决策使用
         web_tab_presence.mark_tab_seen(self.workspace_dir, coara_home=self.coara_home)
+
+        if is_observer:
+            try:
+                async for msg in ws:
+                    if msg.type == WSMsgType.ERROR:
+                        logger.error(f"WebSocket error: {ws.exception()}")
+                        break
+            except ClientConnectionResetError:
+                pass
+            finally:
+                self.interaction_channel.mark_connection_disconnected(conn_id)
+                await self.registry.unregister(conn_id)
+            return ws
+
         # 重连即补回在飞回合的端通道：回合与连接解耦但在飞回合的 sender 随旧 连接注销，
         # 不补则回合中途刷新后的正文/diff/工具行全丢。
         self._restore_web_end_senders()
@@ -1304,7 +1422,14 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
         # 端上生成的消息标识：原样带回 user_message 权威帧，端上据此精确认领乐观气泡 （不靠乐观标记/文本比对，
         # 重挂载净化或文本被改写都不会配错）
         client_msg_id = str(data.get("client_msg_id") or "").strip()
-        if not text:
+        image_refs = data.get("image_refs") or []
+        file_refs = data.get("file_refs") or []
+        if not isinstance(image_refs, list):
+            image_refs = []
+        if not isinstance(file_refs, list):
+            file_refs = []
+        # 允许「仅附件」消息（长文本缩略芯片 / 纯图）
+        if not text and not image_refs and not file_refs:
             await self._send_error(ws, "Empty message")
             return
 
@@ -1332,7 +1457,6 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             return
 
         # Image blocks (for vision)
-        image_refs = data.get("image_refs") or []
         from src.matrix_client.remote_vision import MAX_IMAGE_BATCH_COUNT
 
         # 单次图片输入张数上限（三端同 MAX_IMAGE_BATCH_COUNT）：超出部分丢弃并提示
@@ -1348,7 +1472,6 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
                     ensure_ascii=False,
                 )
             )
-        file_refs = data.get("file_refs") or []
         if file_refs:
             text = await self._append_text_file_refs(text, file_refs)
         image_blocks: list[dict[str, Any]] | None = None
@@ -1519,6 +1642,9 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
                         _target_stream.finish()
                         self._web_followup_view_turns.discard(_key)
                         _target_stream = None
+                elif not getattr(_target_stream, "workspace_dir", ""):
+                    # 与 attach 跟话同策：旧流漏戳时补上，避免静默丢带
+                    _target_stream.workspace_dir = _tape_ws
 
                 if _target_stream is not None:
                     # 已有 web 流时也要确保 ("web", session) 指向它——stale sender 或它端回合无通道时段切到 web 会静默丢
@@ -1785,11 +1911,16 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
     ) -> None:
         """后台完成唤醒回合：把输出经 TurnStream 流回发起端浏览器"""
         turn_id = uuid.uuid4().hex
+        # source 沿用任务发起端（09-28 裁决：唤醒回合归属端=发起端），不写死
+        # web——否则 source 恒 web 会让视图带/心跳把「它端发起的唤醒回合」误判
+        # 本端回合（占住 web 的活动时钟与归属判定）；web 发起的任务 origin_source
+        # 本就是 web，web 端视角仍是本端回合（见下行注释）
+        run_source = origin_source or "web"
         # 视图落盘按发起空间解析，不用当前视图 persist——用户已切走空间时
         _ws_dir = workspace_dir or getattr(target_coara, "workspace_dir", None) or self.workspace_dir
         stream = TurnStream(
             turn_id,
-            "web",
+            run_source,
             "root",
             self,
             # 被本回合同 key 通道覆盖属预期（跟随最新注入端）。
@@ -1802,6 +1933,8 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
         stream.emit("turn_start", awakened=True, task_id=task_id, origin_source=origin_source)
 
         # 不再塌成 background（否则 web 心跳把本端发起的唤醒回合误判他端占用）。
+        # 注册键与 run_source 一致——非 web 发起的回合不会注册到 web 键下，
+        # web 心跳据此把它判作他端占用（这正是归属端=发起端的语义）
         end_registry = getattr(self.root, "end_registry", None)
         _sess_id = str(getattr(target_coara, "session_id", "") or "")
         sender: Any = None
@@ -1812,12 +1945,12 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
                 self._emit_end_frame(stream, frame)
 
             sender._end_channel_id = "awakened-web"  # type: ignore[attr-defined]
-            end_registry.register("web", sender, _sess_id)
+            end_registry.register(run_source, sender, _sess_id)
         reason = "complete"
         error_message: str | None = None
         try:
             async with turn(
-                "web",
+                run_source,
                 channel_id="awakened-web",
                 send_text=None,
                 interaction_channel=self.interaction_channel,
@@ -1829,9 +1962,9 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
                     text,
                     trust_level="owner",
                     show_tool_summary=True,
-                    # source 沿用发起端 web：段归属=web，runtime turn_source 正确， 帧路由键与上方 ("web", session)
-                    # 注册通道匹配
-                    source="web",
+                    # source 沿用发起端：段归属=发起端，runtime turn_source 正确，
+                    # 帧路由键与上方 (run_source, session) 注册通道匹配
+                    source=run_source,
                     turn_id=turn_id,
                 )
                 # 纯驱动循环：正文已由 EndRegistry 路由投递（✓/✗ 工具行被 base 路由前的 ✓/✗ 前缀过滤拦截，不进 chunk
@@ -1851,7 +1984,7 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             stream.emit("error", message=error_message)
         finally:
             if end_registry is not None and sender is not None:
-                end_registry.unregister("web", sender, _sess_id)
+                end_registry.unregister(run_source, sender, _sess_id)
             if reason == "error":
                 stream.emit("turn_end", reason=reason, message=error_message or "Error: 回合失败")
             else:
@@ -2205,6 +2338,8 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             return None
         activity: dict[str, Any] | None = None
 
+        from src.runtime.tape_tool_detail import pick_tape_arguments
+
         def _base(payload: dict[str, Any], ts: str, *, done: bool) -> dict[str, Any]:
             tool = str(payload.get("tool_name") or payload.get("tool") or "(tool)")
             entry: dict[str, Any] = {
@@ -2214,8 +2349,8 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
                 "timestamp": ts,
                 "turn_id": str(payload.get("turn_id") or ""),
             }
-            args = payload.get("arguments")
-            if isinstance(args, dict) and args:
+            args = pick_tape_arguments(payload)
+            if args:
                 entry["args"] = args
             return entry
 
@@ -2227,13 +2362,18 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
                 if activity is None:
                     activity = _base(payload, ts, done=False)
                 elif not activity.get("args"):
-                    args = payload.get("arguments")
-                    if isinstance(args, dict) and args:
+                    args = pick_tape_arguments(payload)
+                    if args:
                         activity["args"] = args
                 continue
             if event_type == "tool_complete":
                 if activity is None:
                     activity = _base(payload, ts, done=True)
+                else:
+                    # complete 上的 tape_args 通常比 start 的 usage_args 更全，一律覆盖
+                    args = pick_tape_arguments(payload)
+                    if args:
+                        activity["args"] = args
                 diff_lines = payload.get("diff_lines")
                 if diff_lines:
                     activity["diff_lines"] = diff_lines
@@ -2264,9 +2404,10 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
                     activity = _base(payload, ts, done=True)
                 else:
                     activity["done"] = True
-                    args = payload.get("arguments")
-                    if isinstance(args, dict) and args:
-                        activity["args"] = args
+                    if not activity.get("args"):
+                        args = pick_tape_arguments(payload)
+                        if args:
+                            activity["args"] = args
                 if "tool_output" not in activity and payload.get("tool_output"):
                     activity["tool_output"] = payload.get("tool_output")
                 ref = str(payload.get("output_ref") or "")
@@ -2359,7 +2500,7 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             coara = getattr(session, "coara", None) if session is not None else None
             if coara is None:
                 continue
-            summary = snapshot_running_tasks(coara, origin_end="cli-attached").summary()
+            summary = snapshot_running_tasks(coara, origin_end="cli-attached", require_live=True).summary()
             if last.get(conn_id) == summary:
                 continue
             last[conn_id] = summary
@@ -2435,9 +2576,8 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
             "alive": True,
             "workspace_name": workspace_name,
             "workspace_dir": str(fg.workspace_dir),
-            # 后台任务计数：分段原则——只算本视图空间且发起端为 web 的任务， 他端发起的任务不出现在 web
-            # spinner（与消息/工具帧同一把尺）
-            "background_tasks": self._web_view_background_task_count(fg),
+            # 后台任务：本空间 + web 族；带 labels；require_live 清掉僵尸 RUNNING
+            **self._web_view_background_tasks(fg),
             # 「回合已结束、子智能体还在跑」窗口里工具行首圆点静止。
             "active_delegations": active_delegation_rows(str(fg.workspace_dir)),
         }
@@ -2445,11 +2585,16 @@ class WebServer(*HANDLER_MIXINS):  # type: ignore[misc]  # 基类是运行时 mi
         return runtime
 
     @staticmethod
-    def _web_view_background_task_count(fg: Any) -> int:
-        """web 视图的后台任务计数：本空间 + 发起端为 web 族（出站当下收窄）"""
+    def _web_view_background_tasks(fg: Any) -> dict[str, Any]:
+        """web 视图后台摘要：count + labels（本空间 + web 族 + 进程侧仍在跑）。"""
         from src.cli.background_tasks_display import snapshot_running_tasks
 
-        return snapshot_running_tasks(fg, origin_end="web").count
+        snap = snapshot_running_tasks(fg, origin_end="web", require_live=True)
+        return {
+            "background_tasks": snap.count,
+            "background_task_labels": list(snap.labels()),
+            "background_task_items": list(snap.items()),
+        }
 
     def _foreground_context_usage(self) -> dict[str, Any]:
         """Same accounting as CLI bottom toolbar (estimate flagged with context_estimated)."""
@@ -2512,10 +2657,12 @@ _ACTIVE_WEB_SERVER: WebServer | None = None
 # 内核化后 CLI 是平等 attach 客户端：渲染经 RootShim + 事件通道，无服务端镜像。
 
 
-def _request_server_open(*, host: str, port: int, token: str, path: str = "", timeout_s: float = 6.0) -> bool:
-    """请内核执行打开/唤起决策（``/api/ui/open``）。成功返回 True。"""
+def _request_server_open(
+    *, host: str, port: int, token: str, path: str = "", timeout_s: float = 6.0
+) -> dict[str, Any] | None:
+    """请内核执行打开/唤起决策（``/api/ui/open``）。成功返回响应 JSON，失败返回 None。"""
     if not token:
-        return False
+        return None
     import json
     import urllib.error
     import urllib.parse
@@ -2525,10 +2672,31 @@ def _request_server_open(*, host: str, port: int, token: str, path: str = "", ti
     url = f"http://{host}:{port}/api/ui/open?{q}"
     try:
         with urllib.request.urlopen(url, timeout=timeout_s) as resp:  # noqa: S310
-            json.loads(resp.read().decode("utf-8"))
-        return True
+            data = json.loads(resp.read().decode("utf-8"))
+        return data if isinstance(data, dict) else {"ok": True}
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
-        return False
+        return None
+
+
+def _request_server_focus(
+    *, host: str, port: int, token: str, path: str = "", timeout_s: float = 2.0
+) -> dict[str, Any] | None:
+    """请内核只唤起已有标签（``/api/ui/focus``），绝不开新窗。"""
+    if not token:
+        return None
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    q = urllib.parse.urlencode({"token": token, **({"path": path} if path else {})})
+    url = f"http://{host}:{port}/api/ui/focus?{q}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_s) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode("utf-8"))
+        return data if isinstance(data, dict) else {"ok": True}
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def open_or_focus_web_ui(
@@ -2539,7 +2707,14 @@ def open_or_focus_web_ui(
     port: int = 8080,
     token: str = "",
 ) -> str:
-    """打开或唤起 Web UI，返回入口 URL"""
+    """打开或唤起 Web UI，返回入口 URL。
+
+    托盘在独立进程（有点击前台权）：
+    1. 能抬起标题含 coara 的浏览器窗 → 只抬窗 + 后台 focus，**不开新标签**
+    2. 抬不到（关了 / 标签在后台标题不是 coara）→ 本机开一页；内核仍只 focus，避免再开第二页
+    """
+    import threading
+
     server = _ACTIVE_WEB_SERVER
     if server is not None:
         return server.open_window(path)
@@ -2547,13 +2722,22 @@ def open_or_focus_web_ui(
     # 与 WebServer.build_url 同口径：路由已含 ? 时用 & 续接 token
     sep = "&" if "?" in route else "?"
     entry = f"http://{host}:{port}{route}" + (f"{sep}token={token}" if token else "")
-    if _request_server_open(host=host, port=port, token=token, path=path):
-        _try_raise_coara_browser_windows()
-        return entry
     target = url.strip() or entry
+
+    def _coord_focus() -> None:
+        try:
+            _request_server_focus(host=host, port=port, token=token, path=path, timeout_s=2.0)
+        except Exception:
+            pass
+
+    if token:
+        threading.Thread(target=_coord_focus, name="coara-ui-focus-coord", daemon=True).start()
+
+    # 托盘点击线程里抬窗成功率远高于内核线程（有用户输入前台权）。
+    if _try_raise_coara_browser_windows():
+        return entry
     _open_web_ui_window(target)
-    _try_raise_coara_browser_windows()
-    return target
+    return entry
 
 
 def _open_web_ui_window(url: str) -> None:
@@ -2567,8 +2751,9 @@ def _open_web_ui_window(url: str) -> None:
 def _try_raise_coara_browser_windows() -> bool:
     """Best-effort: 把标题含 coara 的浏览器窗口抬到前台（Windows）。
 
-    返回是否找到并尝试抬起过至少一个窗口。找不到时（常见：coara 在后台标签，
-    窗口标题是别的页）调用方应改走开新标签路径，否则点托盘会没反应。
+    返回是否**确认**已把某个目标窗抬成前台。只「找到窗并调用了 SetForegroundWindow」
+    不够——Windows 常静默拒绝跨进程抢前台，这时若当成功返回，托盘会表现为点了没反应
+    （内核以为已唤起、不再开新标签）。
     """
     if sys.platform != "win32":
         return False
@@ -2589,6 +2774,8 @@ def _try_raise_coara_browser_windows() -> bool:
         user32.ShowWindow.restype = wintypes.BOOL
         user32.SetForegroundWindow.argtypes = [wintypes.HWND]
         user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = wintypes.HWND
         user32.IsIconic.argtypes = [wintypes.HWND]
         user32.IsIconic.restype = wintypes.BOOL
         user32.EnumWindows.argtypes = [
@@ -2626,12 +2813,15 @@ def _try_raise_coara_browser_windows() -> bool:
             return True
 
         user32.EnumWindows(_enum, 0)
+        if not targets:
+            return False
         for hwnd in targets:
             # 否则对最大化窗口调 SW_RESTORE 会把它还原成普通大小（看着像自动缩小）。
             if user32.IsIconic(hwnd):
                 user32.ShowWindow(hwnd, sw_restore)
             user32.SetForegroundWindow(hwnd)
-        return bool(targets)
+        fg = int(user32.GetForegroundWindow() or 0)
+        return fg in targets
     except Exception as exc:
         logger.debug(f"Failed to raise coara browser window: {exc}")
         return False

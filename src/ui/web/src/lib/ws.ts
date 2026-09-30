@@ -47,40 +47,150 @@ export interface FlowGraphSnapshot {
   wdl?: string;
 }
 
+/**
+ * 落带 / 广播帧的公共字段（一切皆工作空间：归属与对账靠这些键）。
+ * 具体 kind 再叠专有字段；热路径禁止再 `(msg as { workspace_dir?: … })`。
+ */
+export interface ServerFrameBase {
+  view_seq?: number;
+  /** 少数旧路径用 seq，与 view_seq 同义时并存 */
+  seq?: number;
+  workspace_dir?: string;
+  session_id?: string;
+  source?: string;
+  subject?: string;
+  turn_id?: string;
+  parent_tool_call_id?: string;
+  replayed?: boolean;
+  ts?: number;
+  desk?: string;
+  client_msg_id?: string;
+}
+
 export type ServerMessage =
-  | { type: "turn_start"; turn_id: string; source?: string; subject?: string; replayed?: boolean; workspace_dir?: string; session_id?: string }
-  | { type: "turn_queued"; turn_id: string; source?: string; subject?: string; replayed?: boolean; workspace_dir?: string; session_id?: string }
-  | { type: "chunk"; text: string; source?: string; subject?: string; replayed?: boolean; workspace_dir?: string; session_id?: string }
-  | { type: "turn_end"; turn_id: string; reason: "complete" | "interrupted" | "error"; error?: string; source?: string; subject?: string; replayed?: boolean; workspace_dir?: string; session_id?: string }
-  | { type: "command_result"; result: CommandResult; subject?: string; workspace_dir?: string; session_id?: string; view_seq?: number }
-  | { type: "approval_request"; approval_id: string; question: string; options: ApprovalOption[]; timeout_s?: number; workspace?: string; created_at_ms?: number }
-  | { type: "approval_resolved"; approval_id: string; outcome?: string }
-  | { type: "tool_start"; tool: string; call_id: string; args?: Record<string, unknown>; origin_scope?: string; session_id?: string; subject?: string }
-  | { type: "tool_call"; tool: string; args: Record<string, unknown>; call_id: string; origin_scope?: string; session_id?: string; subject?: string }
-  | { type: "tool_result"; call_id: string; summary: string; ok: boolean; origin_scope?: string; session_id?: string; subject?: string; tool?: string }
-  | { type: "tool_complete"; call_id: string; display_blocks?: DisplayBlock[]; diff_lines?: CanonicalDiffLines; tool_output?: string; tool_output_truncated?: boolean; tool_output_ref?: string; origin_scope?: string; session_id?: string; subject?: string; source?: string; detached?: boolean }
-  | { type: "diff"; diff_lines?: CanonicalDiffLines; display_blocks?: DisplayBlock[]; tool_name?: string; source?: string; subject?: string; replayed?: boolean }
-  | { type: "tool"; text: string; ok?: boolean; tool_name?: string; tool_call_id?: string; duration_ms?: number | null; source?: string; subject?: string; replayed?: boolean }
-  | { type: "trace_batch"; events: ServerMessage[] }
-  | { type: "subagent_chunk"; text: string; tool_call_id?: string; coara_id?: string; subagent_id?: string; workspace_dir?: string; session_id?: string }
-  | { type: "subagent_result"; text: string; tool_call_id?: string; coara_id?: string; workspace_dir?: string; session_id?: string }
-  | { type: "user_message"; content: string; source?: string; turn_id?: string; replayed?: boolean; workspace_dir?: string; session_id?: string }
-  | { type: "chat_chunk"; text: string; turn_id?: string; source?: string }
-  | { type: "chat_turn_retracted"; turn_id?: string; reason?: string; session_id?: string }
-  | { type: "llm_turn_start"; turn_id?: string; iteration?: number; origin_scope?: string; session_id?: string }
-  | { type: "llm_switched"; provider?: string; model?: string; provider_name?: string; model_name?: string; origin_source?: string; session_id?: string }
-  | { type: "session_auto_new"; message: string; session_id?: string; reason?: string }
-  | { type: "continuation_input_injected"; user_texts?: string[]; user_sources?: string[]; count?: number; source?: string }
-  | { type: "error"; message: string; subject?: string }
-  | { type: "state"; data: unknown }
-  | { type: "info"; text: string }
-  | { type: "focus_window"; path?: string }
-  | { type: "workspaces_changed"; action?: string; workspace_name?: string }
-  | { type: "providers_changed" }
-  | { type: "open_workflow_editor"; draft_id: string; workflow_name?: string }
-  | { type: "workflow_draft_updated"; draft_id: string; workflow_name?: string }
-  | { type: "flow_graph_snapshot"; flow: string; snapshot: FlowGraphSnapshot | null; subject?: string }
-  | {
+  | (ServerFrameBase & { type: "turn_start"; turn_id: string })
+  | (ServerFrameBase & { type: "turn_queued"; turn_id: string })
+  | (ServerFrameBase & { type: "chunk"; text: string; block?: boolean })
+  | (ServerFrameBase & {
+      type: "turn_end";
+      turn_id: string;
+      reason: "complete" | "interrupted" | "error";
+      error?: string;
+    })
+  | (ServerFrameBase & { type: "command_result"; result: CommandResult })
+  | (ServerFrameBase & {
+      type: "approval_request";
+      approval_id: string;
+      question: string;
+      options: ApprovalOption[];
+      timeout_s?: number;
+      workspace?: string;
+      created_at_ms?: number;
+    })
+  | (ServerFrameBase & { type: "approval_resolved"; approval_id: string; outcome?: string })
+  | (ServerFrameBase & {
+      type: "tool_start";
+      tool: string;
+      call_id: string;
+      args?: Record<string, unknown>;
+      origin_scope?: string;
+    })
+  | (ServerFrameBase & {
+      type: "tool_call";
+      tool: string;
+      args: Record<string, unknown>;
+      call_id: string;
+      origin_scope?: string;
+    })
+  | (ServerFrameBase & {
+      type: "tool_result";
+      call_id: string;
+      summary: string;
+      ok: boolean;
+      origin_scope?: string;
+      tool?: string;
+    })
+  | (ServerFrameBase & {
+      type: "tool_complete";
+      call_id: string;
+      display_blocks?: DisplayBlock[];
+      diff_lines?: CanonicalDiffLines;
+      tool_output?: string;
+      tool_output_truncated?: boolean;
+      tool_output_ref?: string;
+      origin_scope?: string;
+      detached?: boolean;
+    })
+  | (ServerFrameBase & {
+      type: "diff";
+      diff_lines?: CanonicalDiffLines;
+      display_blocks?: DisplayBlock[];
+      tool_name?: string;
+      tool_call_id?: string;
+    })
+  | (ServerFrameBase & {
+      type: "tool";
+      text: string;
+      ok?: boolean;
+      is_error?: boolean;
+      tool_name?: string;
+      tool_call_id?: string;
+      duration_ms?: number | null;
+      running?: boolean;
+      arguments?: Record<string, unknown>;
+      tool_output?: string;
+      tool_output_ref?: string;
+      tool_output_truncated?: boolean;
+    })
+  | (ServerFrameBase & { type: "trace_batch"; events: ServerMessage[] })
+  | (ServerFrameBase & {
+      type: "subagent_chunk";
+      text: string;
+      tool_call_id?: string;
+      coara_id?: string;
+      subagent_id?: string;
+    })
+  | (ServerFrameBase & {
+      type: "subagent_result";
+      text: string;
+      tool_call_id?: string;
+      coara_id?: string;
+      subagent_id?: string;
+    })
+  | (ServerFrameBase & {
+      type: "user_message";
+      content: string;
+      delegate_brief?: boolean;
+      attachments?: unknown[];
+    })
+  | (ServerFrameBase & { type: "chat_chunk"; text: string })
+  | (ServerFrameBase & { type: "chat_turn_retracted"; reason?: string })
+  | (ServerFrameBase & { type: "llm_turn_start"; iteration?: number; origin_scope?: string })
+  | (ServerFrameBase & {
+      type: "llm_switched";
+      provider?: string;
+      model?: string;
+      provider_name?: string;
+      model_name?: string;
+      origin_source?: string;
+    })
+  | (ServerFrameBase & { type: "session_auto_new"; message: string; reason?: string })
+  | (ServerFrameBase & {
+      type: "continuation_input_injected";
+      user_texts?: string[];
+      user_sources?: string[];
+      count?: number;
+    })
+  | (ServerFrameBase & { type: "error"; message: string; data?: { navigate?: string } })
+  | (ServerFrameBase & { type: "state"; data: unknown })
+  | (ServerFrameBase & { type: "info"; text: string })
+  | (ServerFrameBase & { type: "focus_window"; path?: string })
+  | (ServerFrameBase & { type: "workspaces_changed"; action?: string; workspace_name?: string })
+  | (ServerFrameBase & { type: "providers_changed" })
+  | (ServerFrameBase & { type: "open_workflow_editor"; draft_id: string; workflow_name?: string })
+  | (ServerFrameBase & { type: "workflow_draft_updated"; draft_id: string; workflow_name?: string })
+  | (ServerFrameBase & { type: "flow_graph_snapshot"; flow: string; snapshot: FlowGraphSnapshot | null })
+  | (ServerFrameBase & {
       type: "flow_graph_changed";
       flow?: string;
       action?: string;
@@ -88,10 +198,9 @@ export type ServerMessage =
       depends_on?: string[];
       routes_to?: string[];
       status?: string;
-      subject?: string;
       wdl?: string;
-    }
-  | {
+    })
+  | (ServerFrameBase & {
       type: "subagent_start";
       subagent_type?: string;
       subagent_id?: string;
@@ -100,22 +209,16 @@ export type ServerMessage =
       status?: string;
       child_coara_id?: string;
       child_session_id?: string;
-      session_id?: string;
-      subject?: string;
-      workspace_dir?: string;
-    }
-  | {
+    })
+  | (ServerFrameBase & {
       type: "subagent_complete";
       subagent_type?: string;
       subagent_id?: string;
       description?: string;
       child_coara_id?: string;
       child_session_id?: string;
-      session_id?: string;
-      subject?: string;
-      workspace_dir?: string;
-    }
-  | {
+    })
+  | (ServerFrameBase & {
       type: "subagent_failed";
       subagent_type?: string;
       subagent_id?: string;
@@ -123,23 +226,16 @@ export type ServerMessage =
       error?: string;
       child_coara_id?: string;
       child_session_id?: string;
-      session_id?: string;
-      subject?: string;
-      workspace_dir?: string;
-    }
-  | {
+    })
+  | (ServerFrameBase & {
       type: "background_agent_start";
       task_id?: string;
       subagent_type?: string;
       description?: string;
       child_coara_id?: string;
-      parent_tool_call_id?: string;
       parent_activity_id?: string;
-      session_id?: string;
-      subject?: string;
-      workspace_dir?: string;
-    }
-  | {
+    })
+  | (ServerFrameBase & {
       type: "background_agent_complete";
       task_id?: string;
       subagent_type?: string;
@@ -150,11 +246,8 @@ export type ServerMessage =
       child_coara_id?: string;
       origin_source?: string;
       origin_channel?: string;
-      session_id?: string;
-      subject?: string;
-      workspace_dir?: string;
-    }
-  | {
+    })
+  | (ServerFrameBase & {
       type: "background_task_complete";
       task_id?: string;
       kind?: string;
@@ -168,11 +261,8 @@ export type ServerMessage =
       result_full?: string;
       log_path?: string;
       origin_source?: string;
-      session_id?: string;
-      subject?: string;
-      workspace_dir?: string;
-    }
-  | {
+    })
+  | (ServerFrameBase & {
       type: "file";
       file_id: string;
       url: string;
@@ -184,8 +274,10 @@ export type ServerMessage =
       is_image?: boolean;
       is_video?: boolean;
       is_audio?: boolean;
-    }
-  | { type: "pong" };
+    })
+  | (ServerFrameBase & { type: "pong" })
+  /** 服务端广播 outbox 背压丢帧后：端上按 maxSeq−50 补拉落带后缀（与重连 topUp 同路径） */
+  | (ServerFrameBase & { type: "need_topup" });
 
 type ClientMessage =
   | { type: "chat"; text: string; image_refs?: string[]; file_refs?: string[]; subject?: string; workspace_dir?: string; client_msg_id?: string }
@@ -308,7 +400,17 @@ class CoaraWS {
   private _buildWsUrl(): string {
     const token = getAuthToken();
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}/ws${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+    const params = new URLSearchParams();
+    if (token) params.set("token", token);
+    // 录像带拖出窗：以只读观察者身份连接（不占 active 坑、不顶替主标签、不收定向帧）
+    if (
+      window.location.pathname.startsWith("/tape") &&
+      new URLSearchParams(window.location.search).get("popout") === "1"
+    ) {
+      params.set("role", "tape");
+    }
+    const qs = params.toString();
+    return `${proto}//${window.location.host}/ws${qs ? `?${qs}` : ""}`;
   }
 
   private _failAuth(message: string): void {

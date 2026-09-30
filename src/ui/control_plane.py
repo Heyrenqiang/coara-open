@@ -1,6 +1,6 @@
 """Dashboard control-plane helpers (config, skills, meta).
 
-Used by the embedded Web UI server (coara -w) for Settings/Config/Skills APIs.
+Used by the embedded Web UI server for Settings/Config/Skills APIs.
 """
 
 from __future__ import annotations
@@ -65,10 +65,15 @@ def config_revision() -> str:
     return f"{path.name}:{int(stat.st_mtime_ns)}:{stat.st_size}"
 
 
-async def discover_skills_payload(workspace_dir: Path, coara_home: Path | None = None) -> list[dict[str, str]]:
+async def discover_skills_payload(workspace_dir: Path, coara_home: Path | None = None) -> list[dict[str, Any]]:
+    deferred: set[str] = set()
     try:
         from src.core.coara_home import resolve_coara_home
+        from src.core.config import config_manager
 
+        if config_manager._config is None:
+            await config_manager.load()
+        deferred = set(config_manager.config.skills.deferred)
         home = coara_home or resolve_coara_home(workspace_dir)
         await _settings_skill_manager.discover(workspace_dir, coara_home=home)
     except Exception as exc:
@@ -78,9 +83,35 @@ async def discover_skills_payload(workspace_dir: Path, coara_home: Path | None =
             "name": s.name,
             "description": s.description,
             "source": infer_skill_source(s.location),
+            "deferred": s.name in deferred,
         }
         for s in sorted(_settings_skill_manager.get_all(), key=lambda s: s.name)
     ]
+
+
+async def set_skill_deferred(name: str, deferred: bool, workspace_dir: Path) -> list[str]:
+    """把技能加入/移出配置 skills.deferred 并持久化；返回最新名单。
+
+    生效时机：挂起名单在 prompt 构建时读取，改动对新会话生效；
+    进行中的会话沿用启动时的清单。
+    """
+    from src.core.config import config_manager
+
+    if config_manager._config is None:
+        await config_manager.load()
+    skill = await _resolve_skill(name, workspace_dir)
+    if skill is None:
+        raise SkillNotFoundError(name)
+    current = list(config_manager.get_raw_config().get("skills", {}).get("deferred") or [])
+    names = set(current)
+    if deferred:
+        names.add(skill.name)
+    else:
+        names.discard(skill.name)
+    ordered = sorted(names)
+    config_manager.save_config_yaml({"skills": {"deferred": ordered}})
+    _settings_skill_manager.apply_deferred(ordered)
+    return ordered
 
 
 class SkillPermissionError(SkillError):
@@ -223,6 +254,7 @@ def build_config_envelope(raw: dict[str, Any] | None = None) -> dict[str, Any]:
         "skills": {
             "default_include": default_include,
             "default_exclude": list(skills_raw.get("default_exclude") or []),
+            "deferred": list(skills_raw.get("deferred") or []),
         },
     }
 

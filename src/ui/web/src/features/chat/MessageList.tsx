@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button } from "antd";
+import { Button, message } from "antd";
 import { LoadingOutlined, MessageOutlined } from "@ant-design/icons";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -45,13 +45,16 @@ const MAX_RENDERED_MESSAGES = 120;
 /** 「加载更早消息」一次上移的固定行数。 */
 const EARLIER_PAGE_ROWS = 100;
 
-/** 行级跳过渲染：屏外行交给浏览器跳绘（视口外上下各留约一屏余量），
- *  contain-intrinsic-size 的 auto 关键字会记住上次实测高度，减少滚动抖动。
- *  只影响屏外行的布局/绘制，行本身仍照常提交，已显示前缀不变式不受影响。 */
+/** 行级跳过渲染：屏外行交给浏览器跳绘。
+ *  contain-intrinsic-size 用固定估值 72px——不带 auto（auto 会记住流式过期行高，回屏叠字）。
+ *  贴底附近的「活区」行禁止跳绘：流式增高 / 工具行替换时若仍用 72px 占位，上冒贴底会整段叠压。 */
 const ROW_CONTAINMENT: React.CSSProperties = {
   contentVisibility: "auto",
-  containIntrinsicSize: "auto 72px",
+  containIntrinsicSize: "72px",
 };
+
+/** 列表尾部不跳绘的行数（贴底跟随区；工具折叠与正文流式都在这里增高）。 */
+const LIVE_ROWS_NO_CONTAIN = 24;
 
 /** 距底部多少像素内视为「在底部」，恢复自动跟随。 */
 const STICK_THRESHOLD = 48;
@@ -584,7 +587,6 @@ const ToolLine = memo(function ToolLine({
     <div
       style={{ marginTop, display: "flex", flexDirection: "column", alignItems: "flex-start" }}
       onDoubleClick={openDetail}
-      title={openDetail ? "双击查看工具详情" : undefined}
     >
       <ToolLineRow
         label={tool.label}
@@ -768,7 +770,17 @@ const MessageBubble = memo(
           </span>
         ) : null}
         {/* 无「中断」徽标：进程被杀的回合由启动恢复注入注记提示，进行中回合不标 */}
-        <div className={isUser ? "chat-bubble-user" : "chat-bubble-agent"}>
+        <div
+          className={isUser ? "chat-bubble-user" : "chat-bubble-agent"}
+          onDoubleClick={() => {
+            const text = String(msg.text || "");
+            if (!text) return;
+            void navigator.clipboard.writeText(text).then(
+              () => message.success("已复制"),
+              () => message.error("复制失败"),
+            );
+          }}
+        >
           {isUser ? (
             <>
               {msg.attachments && msg.attachments.length > 0 ? (
@@ -1206,15 +1218,22 @@ export const MessageList = memo(function MessageList() {
       {visibleMessages
         // 隐藏行（delegate wait / send_file）不画、也不参与间距计算
         .filter((m) => !(m.tool && isHiddenToolLine(m.tool)))
-        .map((msg, i, rows) => (
-          // 外层只作「锚点量尺」
-          <div key={chatRowKey(msg)} data-msg-key={chatRowKey(msg)} style={ROW_CONTAINMENT}>
-            <MessageBubble
-              msg={msg}
-              prevMsg={i > 0 ? rows[i - 1] : undefined}
-            />
-          </div>
-        ))}
+        .map((msg, i, rows) => {
+          // 尾部活区禁止 content-visibility：贴底上冒时行高实时变，跳绘占位会叠字
+          const nearLive = i >= rows.length - LIVE_ROWS_NO_CONTAIN;
+          return (
+            <div
+              key={chatRowKey(msg)}
+              data-msg-key={chatRowKey(msg)}
+              style={nearLive ? undefined : ROW_CONTAINMENT}
+            >
+              <MessageBubble
+                msg={msg}
+                prevMsg={i > 0 ? rows[i - 1] : undefined}
+              />
+            </div>
+          );
+        })}
       {!atLatest && visibleMessages.length > 0 && (
         <div
           style={{

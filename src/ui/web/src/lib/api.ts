@@ -18,6 +18,60 @@ export async function fetchCustomLoadingPhrases(): Promise<{ date: string; phras
   }
 }
 
+/** 本机资源管理器「复制」的绝对路径（内核读 CF_HDROP）；非本机/无文件列表则空。 */
+export async function fetchClipboardPaths(): Promise<{ paths: string[]; text: string }> {
+  const empty = { paths: [] as string[], text: "" };
+  try {
+    const res = await fetch(`${API_BASE}/api/clipboard/paths${tokenQuery()}`);
+    if (!res.ok) return empty;
+    const data = (await res.json()) as { paths?: unknown; text?: unknown };
+    const paths = Array.isArray(data.paths)
+      ? data.paths.map((p) => String(p || "").trim()).filter(Boolean)
+      : [];
+    const text = typeof data.text === "string" ? data.text : paths.join(" ");
+    return { paths, text };
+  } catch {
+    return empty;
+  }
+}
+
+/** 强杀一条本端可见的后台任务（bash / 后台 agent）。 */
+export async function killBackgroundTask(taskId: string): Promise<{
+  ok: boolean;
+  killed?: boolean;
+  reason?: string;
+  task_id?: string;
+  label?: string;
+  error?: string;
+}> {
+  const id = String(taskId || "").trim();
+  if (!id) return { ok: false, error: "missing task_id" };
+  const res = await fetch(`${API_BASE}/api/v1/background-tasks/${encodeURIComponent(id)}/kill${tokenQuery()}`, {
+    method: "POST",
+  });
+  let data: Record<string, unknown> = {};
+  try {
+    data = (await res.json()) as Record<string, unknown>;
+  } catch {
+    /* ignore */
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      reason: typeof data.reason === "string" ? data.reason : undefined,
+      error: typeof data.error === "string" ? data.error : `HTTP ${res.status}`,
+      task_id: typeof data.task_id === "string" ? data.task_id : id,
+    };
+  }
+  return {
+    ok: Boolean(data.ok),
+    killed: Boolean(data.killed),
+    reason: typeof data.reason === "string" ? data.reason : undefined,
+    task_id: typeof data.task_id === "string" ? data.task_id : id,
+    label: typeof data.label === "string" ? data.label : undefined,
+  };
+}
+
 /** LLM provider entry as edited by the config UI. */
 export interface ProviderConfig {
   base_url: string;
@@ -201,7 +255,11 @@ export async function fetchProviders() {
 }
 
 /** 保存 providers（全量替换语义；"***" 掩码值会被后端还原为原 key，空字符串表示清空）。 */
-export async function saveProviders(payload: { providers: Record<string, ProviderConfig> }) {
+export async function saveProviders(payload: {
+  providers: Record<string, ProviderConfig>;
+  /** 刚为该厂商写入真 key 时传厂商名，后端把全局默认对齐过来 */
+  prefer_default?: string;
+}) {
   const res = await fetch(`${API_BASE}/api/v1/providers${tokenQuery()}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -213,7 +271,7 @@ export async function saveProviders(payload: { providers: Record<string, Provide
   }
   // hot_reload=false：已落盘但热重载失败（provider 实例还是旧的），调用方须
   // 提示「重启内核生效」。
-  return res.json() as Promise<{ ok: boolean; hot_reload?: boolean }>;
+  return res.json() as Promise<{ ok: boolean; hot_reload?: boolean; default_provider?: string | null }>;
 }
 
 /** 可用模型组合：所有已配置且有 API key 的 provider 声明的模型；空 = 尚无可用 key。 */
@@ -234,10 +292,24 @@ export async function fetchSkills() {
   const res = await fetch(`${API_BASE}/api/v1/skills${tokenQuery()}`);
   if (!res.ok) throw new Error(`加载技能列表失败（HTTP ${res.status}）`);
   return res.json() as Promise<{
-    skills: Array<{ name: string; description?: string; source?: string }>;
+    skills: Array<{ name: string; description?: string; source?: string; deferred?: boolean }>;
     default_include: string[];
+    deferred: string[];
     pool_count: number;
   }>;
+}
+
+export async function setSkillDeferred(name: string, deferred: boolean): Promise<{ ok: boolean; deferred: string[] }> {
+  const res = await fetch(`${API_BASE}/api/v1/skills/deferred${tokenQuery()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, deferred }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || `保存失败（HTTP ${res.status}）`);
+  }
+  return res.json();
 }
 
 export interface SkillContent {
@@ -685,6 +757,8 @@ interface SessionSnapshotMessage {
 export interface SessionSnapshot {
   messages: SessionSnapshotMessage[];
   total?: number;
+  /** 字节窗未读到文件头（翻页到底的权威判据；行数不足一页可能只是窗口截断） */
+  has_older?: boolean;
   /** 快照覆盖到的最后一帧 view_seq：端侧去重与 gap 检测的基准 */
   latest_seq?: number;
   workspace_dir?: string;

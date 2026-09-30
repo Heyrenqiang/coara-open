@@ -22,8 +22,12 @@ def resolve_web_host_port() -> tuple[str, int]:
     return "127.0.0.1", port
 
 
-def _configured_home_from_yaml(workspace: Path) -> Path | None:
-    """Read ``coara_home`` from user config without bootstrapping config_manager."""
+def iter_local_user_config_yaml(workspace: Path):
+    """用户级 config.yaml 双候选直读（bootstrap home 优先，工作空间 ``.coara`` 回退）。
+
+    不启动 config_manager 的轻量读取；逐文件 yield 解析出的 dict，
+    坏文件跳过。CLI 主题与 web_link 的 coara_home 解析共用此骨架。
+    """
     candidates: list[Path] = []
     bootstrap = resolve_bootstrap_coara_home()
     if bootstrap is not None:
@@ -37,11 +41,17 @@ def _configured_home_from_yaml(workspace: Path) -> Path | None:
         except (OSError, yaml.YAMLError):
             continue
         if isinstance(data, dict):
-            raw = data.get("coara_home")
-            if raw:
-                home = Path(str(raw)).expanduser()
-                if home.is_dir():
-                    return home.resolve()
+            yield data
+
+
+def _configured_home_from_yaml(workspace: Path) -> Path | None:
+    """Read ``coara_home`` from user config without bootstrapping config_manager."""
+    for data in iter_local_user_config_yaml(workspace):
+        raw = data.get("coara_home")
+        if raw:
+            home = Path(str(raw)).expanduser()
+            if home.is_dir():
+                return home.resolve()
     return None
 
 

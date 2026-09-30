@@ -44,7 +44,7 @@ async def maybe_run_home_migration(console: Any, config: Any, *, enable_cli: boo
     if not interactive:
         console.print(
             f"[yellow]检测到系统目录从 {old_home} 切换到 {new_home}，"
-            f"有 {size_text} 数据待迁移。请以交互模式（coara -c）启动一次完成迁移。[/yellow]"
+            f"有 {size_text} 数据待迁移。请以交互模式（裸 coara）启动一次完成迁移。[/yellow]"
         )
         return
 

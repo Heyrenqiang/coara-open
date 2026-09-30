@@ -1,0 +1,12 @@
+const m = window.__COARA_BASELINE__.ReactRouterDOM;
+export default m;
+export const useNavigate = m.useNavigate;
+export const useLocation = m.useLocation;
+export const useParams = m.useParams;
+export const useSearchParams = m.useSearchParams;
+export const useMatch = m.useMatch;
+export const useOutletContext = m.useOutletContext;
+export const Link = m.Link;
+export const NavLink = m.NavLink;
+export const Navigate = m.Navigate;
+export const Outlet = m.Outlet;

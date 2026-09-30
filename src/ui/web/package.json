@@ -7,13 +7,14 @@
     "predev": "node sync-loading-phrases.mjs",
     "dev": "vite",
     "prebuild": "node sync-loading-phrases.mjs && node scripts/check-tokens.mjs --fail",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vite build --config vite.plugins.config.ts",
     "preview": "vite preview",
     "test:paths": "tsx src/lib/pathDetect.selftest.ts",
     "check:tokens": "node scripts/check-tokens.mjs",
     "check:tokens:gate": "node scripts/check-tokens.mjs --fail",
     "test:store": "tsx src/lib/store.selftest.ts",
-    "test:tree": "tsx src/lib/subagentTree.selftest.ts"
+    "test:tree": "tsx src/lib/subagentTree.selftest.ts",
+    "test:tape-detail": "tsx src/features/trajectory/trajectoryToolDetail.selftest.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",

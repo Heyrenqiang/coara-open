@@ -32,11 +32,12 @@ interface SystemView {
 
 const SYSTEM_VIEWS: readonly SystemView[] = [
   { path: "/chat", label: "对话", Icon: MessageOutlined, load: null },
-  { path: "/review", label: "消息", Icon: AuditOutlined, load: () => import("../views/ReviewView") },
-  { path: "/records", label: "记录", Icon: BookOutlined, load: () => import("../views/RecordsView") },
-  { path: "/workflow", label: "工作流", Icon: ApartmentOutlined, load: () => import("../views/WorkflowView") },
-  { path: "/usage", label: "用量", Icon: BarChartOutlined, load: () => import("../views/UsageView") },
-  { path: "/config", label: "配置", Icon: SettingOutlined, load: () => import("../views/ConfigView") },
+  // 五页主构建 lazy 直连 plugins/*；空间 plugin: 另走槽位装载
+  { path: "/review", label: "消息", Icon: AuditOutlined, load: null },
+  { path: "/records", label: "记录", Icon: BookOutlined, load: null },
+  { path: "/workflow", label: "工作流", Icon: ApartmentOutlined, load: null },
+  { path: "/usage", label: "用量", Icon: BarChartOutlined, load: null },
+  { path: "/config", label: "配置", Icon: SettingOutlined, load: null },
 ];
 
 /** 「主页」前缀：系统视图中除对话外都可作空间主页（对话是兜底入口）。 */

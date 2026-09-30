@@ -75,22 +75,27 @@ export function ChatView() {
   const [modelChoices, setModelChoices] = useState<ModelChoice[]>([]);
   const [switchingModel, setSwitchingModel] = useState(false);
   const navigate = useNavigate();
+  const providersRevision = useStore((s) => s.providersRevision);
 
-  // 无可用模型 → 配置页 ?focus=models
+  // 无可用模型 → 配置页 ?focus=models；providers_changed 后重拉（填完 key 顶栏立刻有新厂商）
   const setupRedirected = useRef(false);
   useEffect(() => {
-    if (setupRedirected.current) return;
-    setupRedirected.current = true;
+    let cancelled = false;
     fetchModelChoices()
       .then((data) => {
+        if (cancelled) return;
         const catalog = data.catalog ?? [];
         setModelChoices(catalog);
-        if (catalog.length === 0) {
+        if (!setupRedirected.current && catalog.length === 0) {
+          setupRedirected.current = true;
           navigate("/config?focus=models", { replace: true });
         }
       })
       .catch(() => {});
-  }, [navigate]);
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate, providersRevision]);
 
   // 状态栏拖宽 [MIN, MAX]
   const [statusWidth, setStatusWidth] = useState(340);

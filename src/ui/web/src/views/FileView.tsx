@@ -39,6 +39,7 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { SectionCard } from "../components/layout/SectionCard";
 import { EmptyState, ErrorState, LoadingState } from "../components/states/States";
 import { findToolActivityByCallId, type ToolActivity } from "../lib/toolActivity";
+import { DURATION_MS_SECONDS_AT } from "../lib/displayRules.generated";
 import { useStore } from "../lib/store";
 import {
   CheckCircleOutlined,
@@ -873,9 +874,9 @@ function ToolView({ callId }: { callId: string }) {
           </span>
           {typeof activity.duration_ms === "number" ? (
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {activity.duration_ms >= 1000
-                ? `${(activity.duration_ms / 1000).toFixed(1)}s`
-                : `${Math.round(activity.duration_ms)}ms`}
+{activity.duration_ms >= DURATION_MS_SECONDS_AT
+? `${(activity.duration_ms / DURATION_MS_SECONDS_AT).toFixed(1)}s`
+: `${Math.round(activity.duration_ms)}ms`}
             </Text>
           ) : null}
         </>

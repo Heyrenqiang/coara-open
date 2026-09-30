@@ -768,9 +768,11 @@ export function AppLayout({ children }: AppLayoutProps) {
             const target = workspaces.find((ws) => ws.name === keyStr.slice("home:".length));
             const home = target?.home_view?.trim();
             if (!home) return;
-            prefetchRoute(home);
+            // 插件主页（plugin: 前缀）非系统路由：落 /home 由插件槽位承接
+            const dest = home.startsWith("plugin:") ? "/home" : home;
+            prefetchRoute(dest);
             startTransition(() => {
-              navigate(home);
+              navigate(dest);
             });
             // 系统空间：点击主页同时切换 web 视图到该空间——页面内对话浮窗的
             // 会话主体是该空间的 WorkspaceSession，不是前台空间
@@ -996,6 +998,12 @@ export function AppLayout({ children }: AppLayoutProps) {
       {children}
     </Content>
   );
+
+  // 录像带页（/tape）无侧边栏：空间切换由页内下就地完成，不动全局现场；
+  // 拖出成独立窗口后更是与主对话并行的第二块屏，侧栏只会在主标签上。
+  if (location.pathname.startsWith("/tape")) {
+    return <Layout style={{ height: "100vh" }}>{mainPanel}</Layout>;
+  }
 
   if (isMobile) {
     return (

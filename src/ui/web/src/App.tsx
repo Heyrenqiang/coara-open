@@ -4,7 +4,7 @@ import { ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { getWS } from "./lib/ws";
 import { startTabPresence } from "./lib/tabPresence";
-import { topUpAfterReconnect } from "./lib/chatHydrate";
+import { topUpSessionTail } from "./lib/chatHydrate";
 import { useStore } from "./lib/store";
 import { fetchAccountStatus } from "./lib/account";
 import { coaraAntdTheme } from "./theme/tokens";
@@ -15,31 +15,29 @@ import { InteractionDialog } from "./features/interaction/InteractionDialog";
 import { ChatView } from "./views/ChatView";
 
 // Lazy-load heavy route views so the initial chunk only pays for the chat page.
+// 内置五页：主构建直连 plugins/*/index 的 default（同壳 React 树，PageShell 高度链完整）。
+// 勿改走 /static/dist/plugins/*.js 运行时装载——另根 createRoot + 高度链断裂会整页空白。
+// 空间 home_view=plugin:… 仍走 SpacePluginView（槽位四运行时插件）。
 const FileView = lazy(() =>
   import("./views/FileView").then((m) => ({ default: m.FileView }))
 );
-const RecordsView = lazy(() =>
-  import("./views/RecordsView").then((m) => ({ default: m.RecordsView }))
-);
-const ReviewView = lazy(() =>
-  import("./views/ReviewView").then((m) => ({ default: m.ReviewView }))
-);
+const RecordsView = lazy(() => import("./plugins/records"));
+const ReviewView = lazy(() => import("./plugins/review"));
 const LoginView = lazy(() =>
   import("./views/LoginView").then((m) => ({ default: m.LoginView }))
 );
 const PersonalView = lazy(() =>
   import("./views/PersonalView").then((m) => ({ default: m.PersonalView }))
 );
-const WorkflowView = lazy(() =>
-  import("./views/WorkflowView").then((m) => ({ default: m.WorkflowView }))
+const TapeView = lazy(() =>
+  import("./views/TapeView").then((m) => ({ default: m.TapeView }))
 );
-const WorkflowEditorView = lazy(() => import("./views/WorkflowEditorView"));
-const UsageView = lazy(() =>
-  import("./views/UsageView").then((m) => ({ default: m.UsageView }))
+const WorkflowView = lazy(() => import("./plugins/workflow"));
+const WorkflowEditorView = lazy(() =>
+  import("./plugins/workflow").then((m) => ({ default: m.WorkflowEditorView }))
 );
-const ConfigView = lazy(() =>
-  import("./views/ConfigView").then((m) => ({ default: m.ConfigView }))
-);
+const UsageView = lazy(() => import("./plugins/usage"));
+const ConfigView = lazy(() => import("./plugins/config"));
 const SpaceHomeView = lazy(() =>
   import("./views/SpaceHomeView").then((m) => ({ default: m.SpaceHomeView }))
 );
@@ -94,6 +92,10 @@ export default function App() {
       if (msg.type === "focus_window" && !ws.isConnected()) {
         ws.reconnectNow();
       }
+      if (msg.type === "need_topup") {
+        topUpSessionTail();
+        return;
+      }
       handleServerMessage(msg);
     });
     const unsubConn = ws.onConnection((c, err) => {
@@ -101,8 +103,8 @@ export default function App() {
       setConnError(err ?? null);
       if (c) {
         void hydrateToolActivity();
-        // 断线窗口内的实时帧已丢（休眠冻结心跳 → 服务端判死断开）；重连回放
-        topUpAfterReconnect();
+        // 断线窗口内的实时帧已丢；重连后补拉落带后缀
+        topUpSessionTail();
       }
     });
 
@@ -144,6 +146,7 @@ export default function App() {
                   </div>
                 }
               >
+                <div style={{ flex: 1, height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
                 <Routes>
                   <Route path="/chat" element={<ChatView />} />
                   <Route path="/home" element={<SpaceHomeView />} />
@@ -158,8 +161,10 @@ export default function App() {
                   <Route path="/config" element={<ConfigView />} />
                   <Route path="/login" element={<LoginView />} />
                   <Route path="/me" element={<PersonalView />} />
+                  <Route path="/tape" element={<TapeView />} />
                   <Route path="/" element={<Navigate to="/chat" replace />} />
                 </Routes>
+                </div>
               </Suspense>
             </ErrorBoundary>
           </AppLayout>

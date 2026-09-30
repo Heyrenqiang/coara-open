@@ -5,6 +5,10 @@
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "paths": {
+      "coara:shell": ["./src/lib/shellApi.ts"]
+    },
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "moduleDetection": "force",

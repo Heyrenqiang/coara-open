@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Alert, Avatar, Button, message } from "antd";
-import { UserOutlined } from "@ant-design/icons";
+import { NodeIndexOutlined, UserOutlined } from "@ant-design/icons";
 import { fetchAccountStatus, logoutAccount } from "../lib/account";
 import { useStore } from "../lib/store";
 import { PageShell } from "../components/layout/PageShell";
@@ -9,13 +10,14 @@ import { LoadingState } from "../components/states/States";
 import { AccountLogin } from "../features/account/AccountLogin";
 
 /**
- * 个人主页（/me）：账户信息 + 退出登录。
+ * 个人主页（/me）：账户信息 + 录像带 + 退出登录。
  * 用量 / 配置已是侧边栏独立路由（/usage、/config），不再收编进本页；
- * LLM log 已移入独立开发者工具（coara-devtools），不进发布版。
+ * 录像带（完整对话与工具执行轨迹）在本页入口查看。
  */
 export function PersonalView() {
   const account = useStore((s) => s.account);
   const setAccount = useStore((s) => s.setAccount);
+  const navigate = useNavigate();
   const [loggingOut, setLoggingOut] = useState(false);
 
   if (account === null) {
@@ -110,6 +112,36 @@ export function PersonalView() {
             style={{ marginTop: 16 }}
           />
         )}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => navigate("/tape")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              navigate("/tape");
+            }
+          }}
+          style={{
+            marginTop: 20,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "12px 14px",
+            border: "1px solid var(--coara-border-muted)",
+            borderRadius: 8,
+            cursor: "pointer",
+            color: "var(--coara-text-strong)",
+          }}
+        >
+          <NodeIndexOutlined style={{ color: "var(--coara-text-secondary)" }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>录像带</div>
+            <div style={{ fontSize: 12, color: "var(--coara-text-tertiary)" }}>
+              每个空间一条录像带，页内可切换查看，可拖出独立窗口
+            </div>
+          </div>
+        </div>
         <Button danger onClick={logout} loading={loggingOut} style={{ marginTop: 20 }}>
           退出登录
         </Button>

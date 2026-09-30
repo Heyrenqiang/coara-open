@@ -1,4 +1,4 @@
-"""后台结果唤醒后，LLM 回复回投到「上一条用户输入所在端」。"""
+"""后台结果唤醒后，LLM 回复回投到「任务发起端」（origin_source，不跟随最近输入端）"""
 
 from __future__ import annotations
 
@@ -10,21 +10,28 @@ import pytest
 from src.coara.root import RootCoara
 
 
-def test_resolve_reply_input_source_prefers_last_user_then_origin() -> None:
-    """唤醒回投端 = 最近一次注入端（上一段 source 的回合外载体）优先；
-    任务发起端 origin 只兜底——发起后用户可能已跟话切端。"""
+@pytest.mark.asyncio
+async def test_awaken_background_turn_uses_origin_source_not_last_input() -> None:
+    """唤醒回合归属端 = 任务发起端：用户最近在 web 打过字也不得把 matrix
+    发起任务的应答正文投到 web（跨端串话，09-28 裁决）"""
+    import asyncio
+
     root = RootCoara.__new__(RootCoara)
-    target = SimpleNamespace(_last_user_input_source="matrix", session_origin=None)
-    assert root._resolve_reply_input_source(target, "web") == "matrix"
-    assert root._resolve_reply_input_source(target, "") == "matrix"
-    assert root._resolve_reply_input_source(target, "background") == "matrix"
-    empty = SimpleNamespace(_last_user_input_source="", session_origin={"source": "cli-attached"})
-    assert root._resolve_reply_input_source(empty, "") == "cli-attached"
-    origin_only = SimpleNamespace(_last_user_input_source="", session_origin=None)
-    assert root._resolve_reply_input_source(origin_only, "web") == "web"
-    assert root._resolve_reply_input_source(
-        SimpleNamespace(_last_user_input_source="", session_origin=None), ""
-    ) == ""
+    root._bg_tasks = set()
+    seen: list[str] = []
+
+    async def _consume(target, task_id, content, *, origin_source=""):
+        seen.append(origin_source)
+
+    root._consume_awakened_turn = _consume  # type: ignore[method-assign]
+    target = SimpleNamespace(
+        _last_user_input_source="web",
+        _deferred_new_session_task=None,
+    )
+    await root._awaken_background_turn(target, "bg-x", "后台完成", origin_source="matrix")
+    for task in list(root._bg_tasks):
+        await asyncio.wait_for(task, timeout=5)
+    assert seen == ["matrix"]
 
 
 @pytest.mark.asyncio

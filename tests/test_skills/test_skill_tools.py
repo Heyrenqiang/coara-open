@@ -29,8 +29,9 @@ async def test_search_skills_covers_unlisted_and_marks_activated() -> None:
     coara.skill_manager = SkillManager()
     coara.skill_manager._skills = {
         "workflow": SkillDefinition(name="workflow", description="Workflow", location="/w", body=""),
-        "ppt": SkillDefinition(name="ppt", description="Slides", location="/p", body="", listed=False),
+        "ppt": SkillDefinition(name="ppt", description="Slides", location="/p", body=""),
     }
+    coara.skill_manager.apply_deferred(["ppt"])
 
     tool = SkillTool(parent_coara=coara)
 
@@ -59,8 +60,9 @@ def test_inject_skill_list_renders_listed_and_unlisted_sections() -> None:
     manager = SkillManager()
     manager._skills = {
         "workflow": SkillDefinition(name="workflow", description="Workflow", location="/w", body=""),
-        "ppt": SkillDefinition(name="ppt", description="Slides", location="/p", body="", listed=False),
+        "ppt": SkillDefinition(name="ppt", description="Slides", location="/p", body=""),
     }
+    manager.apply_deferred(["ppt"])
 
     prompt = CoaraBase._inject_skill_list(SimpleNamespace(skill_manager=manager), "头 ${COARA_SKILL_LIST} 尾")
 
@@ -71,13 +73,27 @@ def test_inject_skill_list_renders_listed_and_unlisted_sections() -> None:
     assert "Slides" not in prompt
 
 
-def test_loader_parses_listed_flag() -> None:
+def test_apply_deferred_marks_skills() -> None:
+    from src.skills.manager import SkillManager
+
+    manager = SkillManager()
+    manager._skills = {
+        "a": SkillDefinition(name="a", description="A", location="/a", body=""),
+        "b": SkillDefinition(name="b", description="B", location="/b", body=""),
+    }
+    manager.apply_deferred(["b"])
+    assert manager.get("a").listed is True
+    assert manager.get("b").listed is False
+    # 名单整体替换：再次应用空名单恢复常驻
+    manager.apply_deferred([])
+    assert manager.get("b").listed is True
+
+
+def test_loader_ignores_legacy_listed_flag() -> None:
     from src.skills.loader import SkillLoader
 
+    # listed 字段已退役：SKILL.md 里写了也不生效，挂起只看配置 skills.deferred
     skill = SkillLoader.parse("---\nname: demo\ndescription: d\nlisted: false\n---\nbody", "/x/SKILL.md")
-    assert skill.listed is False
-
-    skill = SkillLoader.parse("---\nname: demo\ndescription: d\n---\nbody", "/x/SKILL.md")
     assert skill.listed is True
 
 

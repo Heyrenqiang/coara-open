@@ -28,32 +28,32 @@ def _patch_owner_ids(monkeypatch: pytest.MonkeyPatch, owner_ids: list[str]) -> N
     )
 
 
-def test_trust_owner_list_membership(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_trust_all_internal_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """全内部口径：本机 homeserver 上的发送者一律 owner，不设对外门槛。"""
     from src.matrix_client.ingress_helpers import resolve_matrix_trust_level
 
     _patch_owner_ids(monkeypatch, ["@alice:coara.local"])
     assert resolve_matrix_trust_level("@alice:coara.local", cli_owner=True) == "owner"
-    # 名单存在时 CLI 模式不再全员 owner
-    assert resolve_matrix_trust_level("@mallory:coara.local", cli_owner=True) == "untrusted"
-    assert resolve_matrix_trust_level("@mallory:coara.local", cli_owner=False) == "untrusted"
+    assert resolve_matrix_trust_level("@mallory:coara.local", cli_owner=False) == "owner"
+    assert resolve_matrix_trust_level("@anyone:coara.local", cli_owner=False) == "owner"
 
 
 def test_trust_phone_prefix_owner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """手机端扫码自动生成的 @phone_* 账号一律按 owner（私人 homeserver，外人进不来）"""
+    """手机端两种账号形态（@phone_xxx 随机注册 / @phone 固定配对）均 owner。"""
     from src.matrix_client.ingress_helpers import resolve_matrix_trust_level
 
     _patch_owner_ids(monkeypatch, ["@owner:localhost"])
     assert resolve_matrix_trust_level("@phone_23ae2127:coara.local", cli_owner=False) == "owner"
-    assert resolve_matrix_trust_level("@mallory:coara.local", cli_owner=False) == "untrusted"
+    assert resolve_matrix_trust_level("@phone:coara.local", cli_owner=False) == "owner"
 
 
-def test_trust_empty_list_cli_fallback_owner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """空名单 + CLI 模式保持旧行为（回退 owner），bot 模式仍 untrusted。"""
+def test_trust_empty_list_also_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """owner_matrix_ids 为空同样一律 owner（名单不再作为门槛）。"""
     from src.matrix_client.ingress_helpers import resolve_matrix_trust_level
 
     _patch_owner_ids(monkeypatch, [])
     assert resolve_matrix_trust_level("@anyone:coara.local", cli_owner=True) == "owner"
-    assert resolve_matrix_trust_level("@anyone:coara.local", cli_owner=False) == "untrusted"
+    assert resolve_matrix_trust_level("@anyone:coara.local", cli_owner=False) == "owner"
 
 
 def test_invite_owner_and_local_domains(monkeypatch: pytest.MonkeyPatch) -> None:

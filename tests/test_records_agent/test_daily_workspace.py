@@ -106,12 +106,12 @@ def test_ensure_daily_workspace_entry_binds_llm_params(tmp_path, monkeypatch):
     assert entry.view == ViewCapability.ALL
     assert entry.provider == "kimi"
     assert entry.model == "k3"
-    # 记录空间与 daily 合并：展示名=记录，persona=daily，身份字段齐备
+    # 记录空间与 daily 合并：展示名=记录，persona=daily；身份在 space.yaml（单真源）
     assert entry.name == "记录"
     assert entry.persona == "daily"
-    assert entry.content_type == "records"
-    assert entry.storefront == "display"
-    assert entry.home_view == "/records"
+    from src.workspace.identity import space_home_view
+
+    assert space_home_view(entry.resolved_path()) == "/records"
     # 工作目录已建
     assert entry.resolved_path().is_dir()
 
@@ -137,7 +137,9 @@ def test_ensure_daily_workspace_entry_renames_legacy_entry(tmp_path, monkeypatch
     assert entry.resolved_path() == legacy.resolved_path()
     assert entry.name == "记录"
     assert entry.persona == "daily"
-    assert entry.home_view == "/records"
+    from src.workspace.identity import space_home_view
+
+    assert space_home_view(entry.resolved_path()) == "/records"
     # 再次调用幂等（不再变化）
     again = dc.ensure_daily_workspace_entry(root)
     assert again.id == entry.id and again.name == "记录"

@@ -67,6 +67,50 @@ def test_matrix_frame_lands_on_its_own_line(writer: _FakeWriter, tmp_path: Path)
     assert "web_views" in str(path)
 
 
+def test_agent_kind_main_lands_on_root_conversation_line(writer: _FakeWriter, tmp_path: Path) -> None:
+    """agent_kind=main 不得拆成 main__*.jsonl——录像带页只读根线 conversation.jsonl。"""
+    seq = view_recorder.record_view_frame(
+        {
+            "kind": "thinking",
+            "workspace_dir": str(tmp_path / "ws"),
+            "session_id": "sess-main",
+            "subject": "main",
+            "source": "cli-attached",
+            "turn_id": "t1",
+            "text": "思考中",
+        },
+        coara_home=tmp_path,
+    )
+    assert seq and seq > 0
+    path, frame = writer.rows[-1]
+    assert path.name == "conversation.jsonl"
+    assert frame["subject"] == "root"
+    assert "main__" not in path.name
+
+
+def test_janitor_desk_forces_root_line_even_when_subject_subagent(writer: _FakeWriter, tmp_path: Path) -> None:
+    """janitor 元帧常带 subject=subagent；desk=janitor 时必须仍落根线，否则录像带页看不见。"""
+    seq = view_recorder.record_view_frame(
+        {
+            "kind": "thinking",
+            "workspace_dir": str(tmp_path / "ws"),
+            "session_id": "janitor-sess",
+            "subject": "subagent",
+            "desk": "janitor",
+            "source": "cli-attached",
+            "turn_id": "t1",
+            "text": "维护思考",
+        },
+        coara_home=tmp_path,
+    )
+    assert seq and seq > 0
+    path, frame = writer.rows[-1]
+    assert path.name == "conversation.jsonl"
+    assert frame["subject"] == "root"
+    assert frame.get("desk") == "janitor"
+    assert "subagent__" not in path.name
+
+
 @pytest.mark.asyncio
 async def test_turn_stream_lands_without_injected_persist(writer: _FakeWriter, tmp_path: Path) -> None:
     """端不再注入落带回调：TurnStream 缺省走内核录制器，帧照样带 view_seq。"""

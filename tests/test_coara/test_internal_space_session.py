@@ -21,9 +21,6 @@ def _register_internal(root, name: str, path: Path, *, persona: str | None = Non
         name=name,
         view=ViewCapability.WEB_ONLY,
         summary="t",
-        content_type="t",
-        storefront="display",
-        home_view="/t",
     )
     if persona is not None:
         entry.persona = persona

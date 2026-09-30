@@ -192,3 +192,76 @@ def test_aggregate_tool_call_fallback_fields() -> None:
 def test_aggregate_empty_returns_none() -> None:
     """未命中：无任何事件时返回 None（接口层据此回 404）。"""
     assert WebServer._aggregate_tool_call_events("missing", []) is None
+
+
+def test_aggregate_tool_complete_usage_args_and_tape_args() -> None:
+    """tool_complete 真源字段是 usage_args / tape_args（不是 arguments）——录像带详情回补靠它。"""
+    rows = [
+        {
+            "event_type": "tool_complete",
+            "timestamp": "2026-09-27T10:00:00+00:00",
+            "payload": {
+                "tool_name": "read",
+                "tool_call_id": "call-read",
+                "usage_args": {"path": "D:/ws/a.py"},
+                "tape_args": {"path": "D:/ws/a.py", "contents": "x"},
+                "tool_output": "file body",
+                "is_error": False,
+            },
+        },
+    ]
+    activity = WebServer._aggregate_tool_call_events("call-read", rows)
+    assert activity is not None
+    # tape_args 优先于 usage_args
+    assert activity["args"] == {"path": "D:/ws/a.py", "contents": "x"}
+    assert activity["tool_output"] == "file body"
+
+
+def test_aggregate_tool_complete_usage_args_when_no_tape_args() -> None:
+    rows = [
+        {
+            "event_type": "tool_complete",
+            "timestamp": "2026-09-27T10:00:00+00:00",
+            "payload": {
+                "tool_name": "grep",
+                "tool_call_id": "call-g",
+                "usage_args": {"path": "D:/ws", "pattern": "foo"},
+                "tool_output": "a.py:1:foo",
+            },
+        },
+    ]
+    activity = WebServer._aggregate_tool_call_events("call-g", rows)
+    assert activity is not None
+    assert activity["args"] == {"path": "D:/ws", "pattern": "foo"}
+    assert activity["tool_output"] == "a.py:1:foo"
+
+
+def test_aggregate_complete_upgrades_args_over_start() -> None:
+    """start 只有 usage_args 时，complete 的 tape_args 必须覆盖（详情页要完整参数）。"""
+    rows = [
+        {
+            "event_type": "tool_start",
+            "timestamp": "2026-09-27T10:00:00+00:00",
+            "payload": {
+                "tool_name": "write",
+                "tool_call_id": "call-w",
+                "usage_args": {"path": "D:/ws/a.py"},
+            },
+        },
+        {
+            "event_type": "tool_complete",
+            "timestamp": "2026-09-27T10:00:01+00:00",
+            "payload": {
+                "tool_name": "write",
+                "tool_call_id": "call-w",
+                "usage_args": {"path": "D:/ws/a.py"},
+                "tape_args": {"path": "D:/ws/a.py", "contents": "print(1)\n"},
+                "tool_output": "wrote a.py",
+                "is_error": False,
+            },
+        },
+    ]
+    activity = WebServer._aggregate_tool_call_events("call-w", rows)
+    assert activity is not None
+    assert activity["args"] == {"path": "D:/ws/a.py", "contents": "print(1)\n"}
+    assert activity["tool_output"] == "wrote a.py"

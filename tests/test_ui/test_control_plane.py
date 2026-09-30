@@ -56,6 +56,55 @@ async def test_api_v1_meta_and_skills(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_skill_deferred_toggle_roundtrip() -> None:
+    """挂起开关：payload 带 deferred 标记，POST 切换后配置与读面同步。"""
+    from src.core.config import config_manager
+
+    repo_root = Path(__file__).resolve().parents[2]
+    await config_manager.load()
+
+    # 初始：未配置名单，全部常驻
+    payload = await discover_skills_payload(repo_root)
+    by_name = {s["name"]: s for s in payload}
+    assert by_name["event-source"]["deferred"] is False
+
+    handlers = DashboardRestHandlers(repo_root)
+    token = handlers.auth_token
+    async with TestClient(TestServer(_make_handlers_app(handlers))) as client:
+        resp = await client.post(
+            f"/api/v1/skills/deferred?token={token}",
+            json={"name": "event-source", "deferred": True},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert "event-source" in data["deferred"]
+
+        listed = await (await client.get(f"/api/v1/skills?token={token}")).json()
+        by_name = {s["name"]: s for s in listed["skills"]}
+        assert by_name["event-source"]["deferred"] is True
+        assert "event-source" in listed["deferred"]
+
+        # 配置已落盘
+        assert "event-source" in (config_manager.get_raw_config().get("skills", {}).get("deferred") or [])
+
+        # 取消挂起
+        resp = await client.post(
+            f"/api/v1/skills/deferred?token={token}",
+            json={"name": "event-source", "deferred": False},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert "event-source" not in data["deferred"]
+
+        # 不存在的技能 404
+        resp = await client.post(
+            f"/api/v1/skills/deferred?token={token}",
+            json={"name": "no-such-skill", "deferred": True},
+        )
+        assert resp.status == 404
+
+
+@pytest.mark.asyncio
 async def test_web_trace_events_includes_session_auto_new(tmp_path: Path) -> None:
     from src.coara.root import RootCoara
     from src.core.config import config_manager

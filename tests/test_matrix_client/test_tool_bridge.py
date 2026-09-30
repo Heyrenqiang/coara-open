@@ -69,3 +69,21 @@ def test_build_tool_message_marks_running_preview() -> None:
 def test_build_tool_message_skips_empty_label() -> None:
     assert build_matrix_tool_message({"text": "   "}) == ""
     assert build_matrix_tool_message({}) == ""
+
+
+def test_build_tool_message_stamps_depth_and_node_ids() -> None:
+    message = build_matrix_tool_message(
+        {
+            "text": "read(a.py)",
+            "tool_name": "read",
+            "tool_call_id": "c1",
+            "parent_tool_call_id": "delegate-1",
+            "depth": 2,
+            "subagent_id": "sa-1",
+            "coara_id": "co-1",
+        }
+    )
+    payload = _payload(message)
+    assert payload["depth"] == 2
+    assert payload["subagent_id"] == "sa-1"
+    assert payload["coara_id"] == "co-1"

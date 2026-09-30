@@ -903,6 +903,64 @@ async def test_pending_report_consumed_and_miss() -> None:
 
 
 @pytest.mark.asyncio
+async def test_attach_chat_stamps_workspace_dir_on_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI attach 回合流必须带 workspace_dir，否则缺省落带整帧丢弃、录像带停更。"""
+    server = _make_server(foreground_id="ws-other", entry=_entry())
+    server.workspace_dir = "D:/fallback"
+    coara = MagicMock()
+    coara.session_id = "sess-1"
+    coara.workspace_dir = "D:/code_ws/v8"
+    coara.has_active_turn = MagicMock(return_value=False)
+
+    async def _agen(*args, **kwargs):
+        if False:
+            yield ""
+        return
+
+    coara.process_message = MagicMock(side_effect=_agen)
+    server.root._sessions["ws-a"] = SimpleNamespace(coara=coara)
+    server.root.end_registry = None
+
+    import src.ui.attach_ws as attach_mod
+
+    captured: dict[str, Any] = {}
+
+    class _FakeStream:
+        def __init__(self, *a, **k):
+            captured.update(k)
+            self.done = False
+            self.route = SimpleNamespace(channel_id=k.get("channel_id", ""))
+
+        def emit(self, *a, **k):
+            pass
+
+        def emit_user_message(self, *a, **k):
+            pass
+
+        def finish(self):
+            self.done = True
+
+    class _NullTurn:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(attach_mod, "TurnStream", _FakeStream)
+    monkeypatch.setattr(attach_mod, "turn", _NullTurn)
+    server._WebServer__turns = {}
+    server._gc_finished_turns = MagicMock()
+
+    await server._handle_attach_chat({"type": "chat", "text": "你好"}, _make_ws(), "c1", "ws-a")
+    assert captured.get("workspace_dir") == "D:/code_ws/v8"
+    assert captured.get("session_id") == "sess-1"
+
+
+@pytest.mark.asyncio
 async def test_chat_passes_image_blocks() -> None:
     """chat 带 image_blocks 时透传 process_message（多模态回合）。"""
     server = _make_server(foreground_id="ws-other", entry=_entry())
@@ -1205,7 +1263,7 @@ async def test_attach_turn_sender_never_flattens_subagent_frames(monkeypatch: py
 
 
 def test_attach_tool_frame_formats_ok_and_error() -> None:
-    """主会话工具行：成功与错误均以 • 开头、换行收尾；错误行按 ` 报错: ` 后缀着色。
+    """主会话工具行：成败都用 •；失败靠 is_error 字段（不显示 × / 报错正文 / 隐式字符）。
 
     子智能体工具行（带 parent）不投。"""
     import src.ui.attach_ws as attach_mod
@@ -1220,15 +1278,18 @@ def test_attach_tool_frame_formats_ok_and_error() -> None:
     kind, payload = attach_mod._attach_output_frame(
         {
             "kind": "tool",
-            "text": "shell - make 报错: `exit 1`",
+            "text": "shell - make",
             "is_error": True,
             "tool_call_id": "c2",
             "tool_name": "shell",
         }
     )
     assert kind == "tool"
-    assert payload["text"] == "• shell - make 报错: `exit 1`\n"
+    assert payload["text"] == "• shell - make\n"
     assert payload["ok"] is False
+    assert payload["is_error"] is True
+    assert "×" not in payload["text"]
+    assert "\u2060" not in payload["text"]
     assert payload["tool_call_id"] == "c2"
 
     assert attach_mod._attach_output_frame(

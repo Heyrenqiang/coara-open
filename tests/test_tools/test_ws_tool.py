@@ -859,6 +859,12 @@ async def test_workspace_kind_query_set_and_validate(tmp_path: Path) -> None:
     result = await inv.execute()
     assert result.is_error
 
+    # internal 不可手动设置
+    inv = WsInvocation({"action": "kind", "name": "demo", "kind": "internal"}, FakeRoot())
+    result = await inv.execute()
+    assert result.is_error
+    assert "系统管理" in str(result.content)
+
     # 未找到
     inv = WsInvocation({"action": "kind", "name": "nope"}, FakeRoot())
     result = await inv.execute()

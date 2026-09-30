@@ -45,7 +45,10 @@ def _make_root(tmp_path: Path, *, messages: list[Message] | None = None) -> Simp
     (tmp_path / "ws").mkdir(exist_ok=True)
     return SimpleNamespace(
         foreground_coara=coara,
-        workspace_manager=SimpleNamespace(coara_home=tmp_path / "home"),
+        workspace_manager=SimpleNamespace(
+            coara_home=tmp_path / "home",
+            reload_if_stale=lambda: None,
+        ),
         foreground_active_name=lambda: "主空间",
         get_status=coara.get_status,
     )

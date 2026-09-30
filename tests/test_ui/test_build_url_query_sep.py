@@ -42,7 +42,7 @@ def test_open_or_focus_entry_query_path(monkeypatch, tmp_path) -> None:
     captured: dict[str, str] = {}
 
     monkeypatch.setattr(web_server, "_ACTIVE_WEB_SERVER", None)
-    monkeypatch.setattr(web_server, "_request_server_open", lambda **_: False)
+    monkeypatch.setattr(web_server, "_request_server_focus", lambda **_: None)
     monkeypatch.setattr(web_server, "_open_web_ui_window", lambda url: captured.setdefault("url", url))
     monkeypatch.setattr(web_server, "_try_raise_coara_browser_windows", lambda: None)
 

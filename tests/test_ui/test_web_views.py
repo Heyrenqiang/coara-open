@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -48,8 +49,9 @@ def test_diff_frame_roundtrip_into_view(coara_home: Path, tmp_path: Path) -> Non
     path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id=sess)
     store = WebViewStore()
     store.append_event(path, kind="turn_start", turn_id="t1", source="web", subject="root", session_id=sess)
-    store.append_event(path, kind="diff", turn_id="t1", source="web", subject="root", session_id=sess,
-                       payload={"diff": _diff_lines()})
+    store.append_event(
+        path, kind="diff", turn_id="t1", source="web", subject="root", session_id=sess, payload={"diff": _diff_lines()}
+    )
     store.flush(timeout=2.0)
     store.close()
 
@@ -102,8 +104,15 @@ def test_build_messages_dedupes_leftover_same_client_msg_id(coara_home: Path, tm
     _ev(store, path, "user_message", sess, content="跟话", client_msg_id=cmid)
     store.append_event(path, kind="turn_end", turn_id="t1", source="web", subject="root", session_id=sess)
     # leftover 重开回合：同 client_msg_id 再落一帧
-    store.append_event(path, kind="user_message", turn_id="t2", source="web", subject="root", session_id=sess,
-                       payload={"content": "跟话", "client_msg_id": cmid})
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="t2",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"content": "跟话", "client_msg_id": cmid},
+    )
     store.append_event(path, kind="turn_start", turn_id="t2", source="web", subject="root", session_id=sess)
     _ev(store, path, "chunk", sess, text="跟话回答")
     store.append_event(path, kind="turn_end", turn_id="t2", source="web", subject="root", session_id=sess)
@@ -173,8 +182,9 @@ def test_build_messages_source_filter_hides_other_end_frames(coara_home: Path, t
     ev("turn_end", "matrix", "t2")
     # 无 source 的历史帧：按本端放行
     store.append_event(path, kind="turn_start", turn_id="t3", source="", subject="root", session_id=sess)
-    store.append_event(path, kind="chunk", turn_id="t3", source="", subject="root", session_id=sess,
-                       payload={"text": "历史答"})
+    store.append_event(
+        path, kind="chunk", turn_id="t3", source="", subject="root", session_id=sess, payload={"text": "历史答"}
+    )
     store.flush(timeout=2.0)
     store.close()
 
@@ -192,6 +202,7 @@ def test_build_messages_source_filter_hides_other_end_frames(coara_home: Path, t
     sub_out: dict[str, str] = {}
     WebViewStore.build_messages(path, limit=50, source_filter="web", subagent_out=sub_out)
     assert sub_out == {}
+
 
 def test_subagent_frames_all_persisted_and_collected(coara_home: Path, tmp_path: Path) -> None:
     """所有内容都进带：过程正文与最终答复都落带，读端只归集、不投影成消息。
@@ -245,6 +256,38 @@ def test_subagent_frames_all_persisted_and_collected(coara_home: Path, tmp_path:
     store.close()
 
 
+def test_subagent_chunk_texts_when_only_tool_call_id(coara_home: Path, tmp_path: Path) -> None:
+    """生产出口曾只传 tool_call_id、漏 parent：落带补 parent，读端回退认 tool_call_id。
+
+    否则刷新后 ``subagent_texts`` 空，delegate 展开区过程正文消失（实时路径仍正常）。
+    """
+    ws = tmp_path / "ws-only-tc"
+    ws.mkdir()
+    store = WebViewStore()
+    persist = store.make_persist(ws, coara_home=coara_home)
+    # 模拟 _emit_end_frame 旧行为：只带 tool_call_id
+    persist(
+        {
+            "type": "subagent_chunk",
+            "text": "只有 tool_call_id 的过程",
+            "tool_call_id": "call-legacy",
+            "session_id": "s1",
+            "subject": "root",
+            "turn_id": "t1",
+        }
+    )
+    store.flush(timeout=2.0)
+    path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id="s1")
+    frames = WebViewStore.iter_frames(path)
+    assert frames[0]["payload"].get("parent_tool_call_id") == "call-legacy"
+
+    subagent_texts: dict[str, str] = {}
+    messages, _t, _l = WebViewStore.build_messages(path, limit=50, subagent_texts_out=subagent_texts)
+    assert messages == []
+    assert subagent_texts == {"call-legacy": "只有 tool_call_id 的过程"}
+    store.close()
+
+
 def test_append_event_returns_assigned_view_seq(coara_home: Path, tmp_path: Path) -> None:
     """落带返回分配到的 view_seq：TurnStream 靠它把序号写进广播帧（端侧对账凭据）。"""
     ws = tmp_path / "ws"
@@ -253,10 +296,12 @@ def test_append_event_returns_assigned_view_seq(coara_home: Path, tmp_path: Path
     path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id=sess)
     store = WebViewStore()
 
-    first = store.append_event(path, kind="chunk", turn_id="t1", source="web", subject="root",
-                               session_id=sess, payload={"text": "一"})
-    second = store.append_event(path, kind="chunk", turn_id="t1", source="web", subject="root",
-                                session_id=sess, payload={"text": "二"})
+    first = store.append_event(
+        path, kind="chunk", turn_id="t1", source="web", subject="root", session_id=sess, payload={"text": "一"}
+    )
+    second = store.append_event(
+        path, kind="chunk", turn_id="t1", source="web", subject="root", session_id=sess, payload={"text": "二"}
+    )
     assert (first, second) == (1, 2)
     store.flush(timeout=2.0)
     store.close()
@@ -315,8 +360,15 @@ def test_view_seq_continues_when_file_removed(coara_home: Path, tmp_path: Path) 
 
     store = WebViewStore()
     seqs = [
-        store.append_event(path, kind="chunk", turn_id="t1", source="web", subject="root",
-                           session_id=sess, payload={"text": f"第{i}段"})
+        store.append_event(
+            path,
+            kind="chunk",
+            turn_id="t1",
+            source="web",
+            subject="root",
+            session_id=sess,
+            payload={"text": f"第{i}段"},
+        )
         for i in range(3)
     ]
     assert seqs == [1, 2, 3]
@@ -325,8 +377,9 @@ def test_view_seq_continues_when_file_removed(coara_home: Path, tmp_path: Path) 
     path.unlink()  # 模拟归档/清空：文件没了，线还在
 
     store2 = WebViewStore()
-    nxt = store2.append_event(path, kind="chunk", turn_id="t2", source="web", subject="root",
-                              session_id=sess, payload={"text": "续写"})
+    nxt = store2.append_event(
+        path, kind="chunk", turn_id="t2", source="web", subject="root", session_id=sess, payload={"text": "续写"}
+    )
     store2.flush(timeout=2.0)
     store2.close()
 
@@ -351,12 +404,224 @@ def test_view_seq_continues_after_external_truncation(coara_home: Path, tmp_path
     path.write_text("", encoding="utf-8")  # 截断
 
     store2 = WebViewStore()
-    nxt = store2.append_event(path, kind="chunk", turn_id="t9", source="web", subject="root",
-                              session_id=sess, payload={"text": "after-truncate"})
+    nxt = store2.append_event(
+        path,
+        kind="chunk",
+        turn_id="t9",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"text": "after-truncate"},
+    )
     store2.flush(timeout=2.0)
     store2.close()
 
     assert nxt == 6
+
+
+def test_view_seq_fast_path_skips_tail_read_and_sync_meta(
+    coara_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """校准后的连续落帧走内存快路径：不再每帧尾读 jsonl / 同步写 sidecar。"""
+    import src.ui.web_views as web_views
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sess = "sess-fast"
+    path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id=sess)
+    store = WebViewStore()
+
+    tail_calls = {"n": 0}
+    sync_calls = {"n": 0}
+    real_tail = web_views.read_latest_view_seq
+    real_sync = store._write_line_meta_sync
+
+    def counting_tail(p: Path) -> int:
+        tail_calls["n"] += 1
+        return real_tail(p)
+
+    def counting_sync(p: Path, meta: dict, payload: dict) -> None:
+        sync_calls["n"] += 1
+        real_sync(p, meta, payload)
+
+    monkeypatch.setattr(web_views, "read_latest_view_seq", counting_tail)
+    monkeypatch.setattr(store, "_write_line_meta_sync", counting_sync)
+
+    seqs = [
+        store.append_event(
+            path,
+            kind="chunk",
+            turn_id="t1",
+            source="web",
+            subject="root",
+            session_id=sess,
+            payload={"text": f"x{i}"},
+        )
+        for i in range(40)
+    ]
+    assert seqs == list(range(1, 41))
+    # 仅首帧校准读尾；其后快路径
+    assert tail_calls["n"] == 1
+    assert sync_calls["n"] == 1
+
+    store.flush(timeout=2.0)
+    store.close()
+    # flush/close force 再同步落一次高水位
+    assert sync_calls["n"] >= 2
+
+
+def test_view_seq_close_persists_throttled_high_water(coara_home: Path, tmp_path: Path) -> None:
+    """快路径节流未写盘时，close 必须把高水位刷进 sidecar（新进程才能续号）。"""
+    from src.ui.web_views import resolve_view_meta_path
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sess = "sess-close-hw"
+    path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id=sess)
+    store = WebViewStore()
+    for i in range(10):
+        _ev(store, path, "chunk", sess, text=str(i))
+    store.close()
+
+    meta = json.loads(resolve_view_meta_path(path).read_text(encoding="utf-8"))
+    assert int(meta["latest_seq"]) == 10
+
+    store2 = WebViewStore()
+    nxt = store2.append_event(
+        path,
+        kind="chunk",
+        turn_id="t2",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"text": "续"},
+    )
+    store2.close()
+    assert nxt == 11
+
+
+def test_build_messages_windowed_read_skips_full_file_scan(
+    coara_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """长带 hydrate 只读本线尾窗：不得打开整文件顺序扫（iter_frames 全量路径）。"""
+    ws = tmp_path / "ws-win"
+    ws.mkdir()
+    sess = "sess-win"
+    path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id=sess)
+    store = WebViewStore()
+    for i in range(80):
+        _ev(store, path, "chunk", sess, text=f"msg-{i}")
+    store.flush(timeout=2.0)
+    store.close()
+
+    full_scans = {"n": 0}
+    real_full = WebViewStore.iter_frames
+
+    def counting_full(p: Path) -> list:
+        full_scans["n"] += 1
+        return real_full(p)
+
+    monkeypatch.setattr(WebViewStore, "iter_frames", staticmethod(counting_full))
+    messages, total, latest = WebViewStore.build_messages(path, limit=20)
+    assert full_scans["n"] == 0
+    assert len(messages) == 20
+    assert messages[-1]["text"] == "msg-79"
+    assert latest == messages[-1]["seq"]
+    assert total >= len(messages)
+
+
+def test_build_messages_initial_hydrate_expands_thin_tip_window(
+    coara_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """初始 hydrate（since_seq=0）：单窗帧数不够一页时按帧数扩窗，仍不整文件扫。"""
+    import src.ui.web_views as web_views_mod
+
+    # 极小尾窗：逼出「有更早字节 + 帧数不足 need_frames」分支
+    monkeypatch.setattr(web_views_mod, "_VIEW_READ_WINDOW_BYTES", 800)
+    monkeypatch.setattr(web_views_mod, "_VIEW_READ_MAX_EXPAND", 4)
+
+    ws = tmp_path / "ws-expand"
+    ws.mkdir()
+    sess = "sess-expand"
+    path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id=sess)
+    store = WebViewStore()
+    # 每条 chunk 约数百字节，累计远超 800B，但扩窗后应能凑满 limit 条消息
+    for i in range(60):
+        _ev(store, path, "chunk", sess, text=f"pad-{i:04d}-" + ("x" * 40))
+    store.flush(timeout=2.0)
+    store.close()
+
+    full_scans = {"n": 0}
+    real_full = WebViewStore.iter_frames
+
+    def counting_full(p: Path) -> list:
+        full_scans["n"] += 1
+        return real_full(p)
+
+    monkeypatch.setattr(WebViewStore, "iter_frames", staticmethod(counting_full))
+    messages, _total, _latest = WebViewStore.build_messages(path, limit=20)
+    assert full_scans["n"] == 0
+    assert len(messages) == 20
+    assert messages[-1]["text"].startswith("pad-0059")
+
+
+def test_build_messages_windowed_stays_on_one_workspace_line(
+    coara_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """窗口读只碰目标空间 path，另一空间文件即使很大也不被打开。"""
+    ws_a = tmp_path / "ws-a2"
+    ws_b = tmp_path / "ws-b2"
+    ws_a.mkdir()
+    ws_b.mkdir()
+    store = WebViewStore()
+    path_a = resolve_web_view_path(ws_a, coara_home=coara_home, subject="root", session_id="sa")
+    path_b = resolve_web_view_path(ws_b, coara_home=coara_home, subject="root", session_id="sb")
+    for i in range(30):
+        _ev(store, path_a, "chunk", "sa", text=f"A{i}")
+        _ev(store, path_b, "chunk", "sb", text=f"B{i}")
+    store.close()
+
+    opened: list[str] = []
+    real_range = WebViewStore._iter_lines_byte_range
+
+    def tracking_range(p: Path, start: int, end: int) -> list[str]:
+        opened.append(str(p.resolve()))
+        return real_range(p, start, end)
+
+    monkeypatch.setattr(WebViewStore, "_iter_lines_byte_range", staticmethod(tracking_range))
+    messages, _total, _latest = WebViewStore.build_messages(path_a, limit=10)
+
+    assert all(Path(p).resolve() == path_a.resolve() for p in opened)
+    assert all(m["text"].startswith("A") for m in messages)
+
+
+def test_view_seq_independent_across_workspaces(coara_home: Path, tmp_path: Path) -> None:
+    """一切皆工作空间：共享 WebViewStore 时，A/B 空间各有独立 view_seq 水位，互不顶替。"""
+    ws_a = tmp_path / "ws-a"
+    ws_b = tmp_path / "ws-b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+    store = WebViewStore()
+    path_a = resolve_web_view_path(ws_a, coara_home=coara_home, subject="root", session_id="sa")
+    path_b = resolve_web_view_path(ws_b, coara_home=coara_home, subject="root", session_id="sb")
+
+    a1 = store.append_event(
+        path_a, kind="chunk", turn_id="t", source="web", subject="root", session_id="sa", payload={"text": "A1"}
+    )
+    b1 = store.append_event(
+        path_b, kind="chunk", turn_id="t", source="web", subject="root", session_id="sb", payload={"text": "B1"}
+    )
+    a2 = store.append_event(
+        path_a, kind="chunk", turn_id="t", source="web", subject="root", session_id="sa", payload={"text": "A2"}
+    )
+    b2 = store.append_event(
+        path_b, kind="chunk", turn_id="t", source="web", subject="root", session_id="sb", payload={"text": "B2"}
+    )
+    store.close()
+
+    assert (a1, a2) == (1, 2)
+    assert (b1, b2) == (1, 2)
+    assert path_a.resolve() != path_b.resolve()
 
 
 def test_reset_line_changes_epoch(coara_home: Path, tmp_path: Path) -> None:
@@ -382,8 +647,12 @@ def test_reset_line_changes_epoch(coara_home: Path, tmp_path: Path) -> None:
     # jsonl 落帧是异步的：旧帧（view_seq 1/2）此刻尚未落盘，但 sidecar 高水位
     # 是同步落盘的（序号分配在跨进程文件锁内直写）——重估读到高水位 2，新帧
     # 从 3 起，与旧线序号不回退的单调契约一致（gen 变了，端上视为新线重取）。
-    assert store.append_event(path, kind="chunk", turn_id="t2", source="web", subject="root",
-                              session_id=sess, payload={"text": "新线一"}) == 3
+    assert (
+        store.append_event(
+            path, kind="chunk", turn_id="t2", source="web", subject="root", session_id=sess, payload={"text": "新线一"}
+        )
+        == 3
+    )
     store.flush(timeout=2.0)
     store.close()
     assert WebViewStore().line_generation(path) == 1
@@ -426,13 +695,40 @@ def test_subagent_tool_and_diff_frames_go_to_fold(coara_home: Path, tmp_path: Pa
 
     persist({**base, "type": "chunk", "text": "主会话正文"})
     # 主会话自己的 diff：照旧进主流，但带产生它的工具调用 id（端上精确挂位）
-    persist({**base, "type": "diff", "diff_lines": _diff_lines(), "display_blocks": [{"kind": "diff"}],
-             "tool_name": "edit", "tool_call_id": "c-main-1"})
+    persist(
+        {
+            **base,
+            "type": "diff",
+            "diff_lines": _diff_lines(),
+            "display_blocks": [{"kind": "diff"}],
+            "tool_name": "edit",
+            "tool_call_id": "c-main-1",
+        }
+    )
     # 子智能体的工具行 + 改动：带父标识 → 折叠
-    persist({**base, "type": "tool", "text": "✓ read(a.py)", "ok": True, "tool_name": "read",
-             "tool_call_id": "c-sub-1", "duration_ms": 8.0, "parent_tool_call_id": "call-9"})
-    persist({**base, "type": "diff", "diff_lines": _diff_lines(), "display_blocks": [{"kind": "diff"}],
-             "tool_name": "edit", "tool_call_id": "c-sub-2", "parent_tool_call_id": "call-9"})
+    persist(
+        {
+            **base,
+            "type": "tool",
+            "text": "✓ read(a.py)",
+            "ok": True,
+            "tool_name": "read",
+            "tool_call_id": "c-sub-1",
+            "duration_ms": 8.0,
+            "parent_tool_call_id": "call-9",
+        }
+    )
+    persist(
+        {
+            **base,
+            "type": "diff",
+            "diff_lines": _diff_lines(),
+            "display_blocks": [{"kind": "diff"}],
+            "tool_name": "edit",
+            "tool_call_id": "c-sub-2",
+            "parent_tool_call_id": "call-9",
+        }
+    )
     store.flush(timeout=2.0)
 
     fold: dict[str, list[dict]] = {}
@@ -532,12 +828,27 @@ def test_injected_subagent_message_frame_not_rendered(coara_home: Path, tmp_path
     path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id=sess)
     store = WebViewStore()
     store.append_event(path, kind="turn_start", turn_id="t1", source="web", subject="root", session_id=sess)
-    store.append_event(path, kind="user_message", turn_id="t1", source="web", subject="root", session_id=sess,
-                       payload={"content": "真实提问"})
-    store.append_event(path, kind="user_message", turn_id="t1", source="web", subject="root", session_id=sess,
-                       payload={"content": subagent_message("里程碑报告", task_id="sa-coaras-1")})
-    store.append_event(path, kind="chunk", turn_id="t1", source="web", subject="root", session_id=sess,
-                       payload={"text": "收到"})
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="t1",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"content": "真实提问"},
+    )
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="t1",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"content": subagent_message("里程碑报告", task_id="sa-coaras-1")},
+    )
+    store.append_event(
+        path, kind="chunk", turn_id="t1", source="web", subject="root", session_id=sess, payload={"text": "收到"}
+    )
     store.flush(timeout=2.0)
     store.close()
 
@@ -548,12 +859,11 @@ def test_injected_subagent_message_frame_not_rendered(coara_home: Path, tmp_path
     assert briefs == {}
 
 
-def test_turn_stream_emit_user_message_skips_injected_envelope() -> None:
-    """写端与读端同一份判据：注入信封不落实时帧、不落带。
+def test_turn_stream_emit_user_message_injected_envelope_lands_as_inject_frame() -> None:
+    """写端与读端同一份判据：注入信封不落 user 气泡，但作为 kind=inject 帧落带。
 
-    此前判据只在读端（build_messages 消隐），写端照落——实时先冒一个信封气泡、
-    刷新后又消失（同一句话两副面孔）。写入路径现实存在：interact 注入无端来源，
-    回合结束后 leftover 按收尾端开回合（continuation_leftover 空 source 分支）。
+    录像带是全部活动的唯一事实源——注入帧进带（带 tag），聊天屏读端
+    （web_views._is_injected_user_frame 只拦 user_message）照旧不上屏。
     """
     from types import SimpleNamespace
 
@@ -585,9 +895,13 @@ def test_turn_stream_emit_user_message_skips_injected_envelope() -> None:
     stream.emit_user_message("真实提问")
     stream._flush_pending()
 
-    assert [f["type"] for f in broadcast] == ["user_message"]
-    assert broadcast[0]["content"] == "真实提问"
-    assert [f["content"] for f in persisted] == ["真实提问"]
+    types = [f["type"] for f in broadcast]
+    assert types.count("user_message") == 1
+    assert types.count("inject") == 4
+    tags = [f.get("tag") for f in broadcast if f["type"] == "inject"]
+    assert tags == ["后台结果", "系统提醒", "子智能体消息", "途中消息"]
+    user_frames = [f for f in persisted if f["type"] == "user_message"]
+    assert [f["content"] for f in user_frames] == ["真实提问"]
 
 
 def test_legacy_brief_frames_still_folded(coara_home: Path, tmp_path: Path) -> None:
@@ -598,17 +912,38 @@ def test_legacy_brief_frames_still_folded(coara_home: Path, tmp_path: Path) -> N
     path = resolve_web_view_path(ws, coara_home=coara_home, subject="root", session_id=sess)
     store = WebViewStore()
     store.append_event(path, kind="turn_start", turn_id="t1", source="web", subject="root", session_id=sess)
-    store.append_event(path, kind="user_message", turn_id="t1", source="web", subject="root",
-                       session_id=sess, payload={"content": "普通提问"})
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="t1",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"content": "普通提问"},
+    )
     # 老格式一：带 delegate_task 标记、无 brief 标记、无父 call_id
-    store.append_event(path, kind="user_message", turn_id="t1", source="web", subject="root",
-                       session_id=sess,
-                       payload={"content": "<任务指令>\n老指令 A\n</任务指令>", "delegate_task": True})
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="t1",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"content": "<任务指令>\n老指令 A\n</任务指令>", "delegate_task": True},
+    )
     # 老格式二：连 delegate_task 都没有，只有正文判据
-    store.append_event(path, kind="user_message", turn_id="t1", source="web", subject="root",
-                       session_id=sess, payload={"content": "<任务指令>\n老指令 B\n</任务指令>"})
-    store.append_event(path, kind="chunk", turn_id="t1", source="web", subject="root",
-                       session_id=sess, payload={"text": "回答"})
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="t1",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"content": "<任务指令>\n老指令 B\n</任务指令>"},
+    )
+    store.append_event(
+        path, kind="chunk", turn_id="t1", source="web", subject="root", session_id=sess, payload={"text": "回答"}
+    )
     store.flush(timeout=2.0)
     store.close()
 
@@ -634,9 +969,15 @@ def test_fold_maps_respect_since_seq_and_caps(coara_home: Path, tmp_path: Path, 
 
     for idx in range(4):
         for call in ("call-a", "call-b", "call-c"):
-            store.append_event(path, kind="tool", turn_id="t1", source="web", subject="root", session_id=sess,
-                               payload={"text": f"✓ read({call}-{idx})", "tool_name": "read",
-                                        "parent_tool_call_id": call})
+            store.append_event(
+                path,
+                kind="tool",
+                turn_id="t1",
+                source="web",
+                subject="root",
+                session_id=sess,
+                payload={"text": f"✓ read({call}-{idx})", "tool_name": "read", "parent_tool_call_id": call},
+            )
     store.flush(timeout=2.0)
     store.close()
 
@@ -740,17 +1081,40 @@ def test_mid_turn_followup_users_interleaved_by_seq(coara_home: Path, tmp_path: 
     store = WebViewStore()
 
     # user_message 可先于 turn_start（新 emit 序）
-    store.append_event(path, kind="user_message", turn_id="t1", source="web", subject="root",
-                       session_id=sess, payload={"content": "先生成图"})
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="t1",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"content": "先生成图"},
+    )
     store.append_event(path, kind="turn_start", turn_id="t1", source="web", subject="root", session_id=sess)
-    store.append_event(path, kind="chunk", turn_id="t1", source="web", subject="root",
-                       session_id=sess, payload={"text": "好的，开始"})
-    store.append_event(path, kind="files", turn_id="t1", source="web", subject="root",
-                       session_id=sess, payload={"files": [{"file_id": "f1"}], "caption": ""})
-    store.append_event(path, kind="user_message", turn_id="t1", source="web", subject="root",
-                       session_id=sess, payload={"content": "再来一张"})
-    store.append_event(path, kind="chunk", turn_id="t1", source="web", subject="root",
-                       session_id=sess, payload={"text": "第二张好了"})
+    store.append_event(
+        path, kind="chunk", turn_id="t1", source="web", subject="root", session_id=sess, payload={"text": "好的，开始"}
+    )
+    store.append_event(
+        path,
+        kind="files",
+        turn_id="t1",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"files": [{"file_id": "f1"}], "caption": ""},
+    )
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="t1",
+        source="web",
+        subject="root",
+        session_id=sess,
+        payload={"content": "再来一张"},
+    )
+    store.append_event(
+        path, kind="chunk", turn_id="t1", source="web", subject="root", session_id=sess, payload={"text": "第二张好了"}
+    )
     store.append_event(path, kind="turn_end", turn_id="t1", source="web", subject="root", session_id=sess)
     store.flush(timeout=2.0)
     store.close()
@@ -837,20 +1201,49 @@ def test_workspace_line_continuous_across_new_session(coara_home: Path, tmp_path
 
     # 会话段 A
     store.append_event(path, kind="turn_start", turn_id="tA", source="web", subject="root", session_id="sess-A")
-    store.append_event(path, kind="user_message", turn_id="tA", source="web", subject="root",
-                       session_id="sess-A", payload={"content": "第一段问题"})
-    store.append_event(path, kind="chunk", turn_id="tA", source="web", subject="root",
-                       session_id="sess-A", payload={"text": "第一段回答"})
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="tA",
+        source="web",
+        subject="root",
+        session_id="sess-A",
+        payload={"content": "第一段问题"},
+    )
+    store.append_event(
+        path,
+        kind="chunk",
+        turn_id="tA",
+        source="web",
+        subject="root",
+        session_id="sess-A",
+        payload={"text": "第一段回答"},
+    )
     store.append_event(path, kind="turn_end", turn_id="tA", source="web", subject="root", session_id="sess-A")
     # /new 分隔标记（无 turn_id）
-    store.append_event(path, kind="divider", turn_id="", source="web", subject="root",
-                       session_id="sess-A", payload={"label": "新会话"})
+    store.append_event(
+        path, kind="divider", turn_id="", source="web", subject="root", session_id="sess-A", payload={"label": "新会话"}
+    )
     # 会话段 B（/new 后）
     store.append_event(path, kind="turn_start", turn_id="tB", source="web", subject="root", session_id="sess-B")
-    store.append_event(path, kind="user_message", turn_id="tB", source="web", subject="root",
-                       session_id="sess-B", payload={"content": "第二段问题"})
-    store.append_event(path, kind="chunk", turn_id="tB", source="web", subject="root",
-                       session_id="sess-B", payload={"text": "第二段回答"})
+    store.append_event(
+        path,
+        kind="user_message",
+        turn_id="tB",
+        source="web",
+        subject="root",
+        session_id="sess-B",
+        payload={"content": "第二段问题"},
+    )
+    store.append_event(
+        path,
+        kind="chunk",
+        turn_id="tB",
+        source="web",
+        subject="root",
+        session_id="sess-B",
+        payload={"text": "第二段回答"},
+    )
     store.append_event(path, kind="turn_end", turn_id="tB", source="web", subject="root", session_id="sess-B")
     store.flush(timeout=2.0)
     store.close()

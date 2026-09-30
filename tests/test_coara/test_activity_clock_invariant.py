@@ -277,9 +277,6 @@ async def test_internal_workspace_background_turn_end_does_not_refresh(tmp_path:
             internal_dir,
             name="记录",
             view=ViewCapability.ALL,
-            content_type="records",
-            storefront="display",
-            home_view="/records",
             persona="daily",
         )
         session = await root.ensure_workspace_session(daily_entry)

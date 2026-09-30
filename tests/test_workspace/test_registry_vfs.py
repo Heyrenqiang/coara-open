@@ -209,3 +209,40 @@ def test_resolve_workspace_path_rejects_write_on_read_only_mount(tmp_path: Path)
     entry.mode = MountMode.READ_WRITE
     ok, ok_err = resolve_workspace_path(str(target), workspace, "Write", vfs_resolver=vfs)
     assert ok_err is None and ok == target.resolve()
+
+
+def test_load_migrates_legacy_kinds(tmp_path: Path, monkeypatch) -> None:
+    """磁盘旧 kind（managed/reference/code）加载时改写为 normal 并落盘。"""
+    # 跳过 ephemeral 裁剪，避免 tmp_path 被当成 pytest 临时空间删掉
+    monkeypatch.setattr(
+        "src.workspace.registry.is_ephemeral_workspace_path",
+        lambda _p: False,
+    )
+    home = tmp_path / "coara-home"
+    registry_dir = home / "registry"
+    registry_dir.mkdir(parents=True)
+    ws = tmp_path / "legacy-ws"
+    ws.mkdir()
+    from src.core.coara_home import workspace_id_for
+
+    wid = workspace_id_for(ws)
+    yaml_text = f"""version: 1
+default_workspace: {wid}
+workspaces:
+  {wid}:
+    name: legacy
+    id: {wid}
+    path: {ws.resolve().as_posix()}
+    kind: managed
+    status: active
+    mode: rw
+"""
+    (registry_dir / "workspaces.yaml").write_text(yaml_text, encoding="utf-8")
+    reg = WorkspaceRegistry(home)
+    doc = reg.load()
+    entry = doc.workspaces[wid]
+    assert entry.kind == WorkspaceKind.NORMAL
+    # 再读磁盘确认已持久化
+    reloaded = WorkspaceRegistry(home)
+    reloaded.load()
+    assert reloaded.document.workspaces[wid].kind == WorkspaceKind.NORMAL

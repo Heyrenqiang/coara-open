@@ -100,6 +100,19 @@ def test_background_task_timeout_seconds_defaults_to_unset(coara_home: Path) -> 
     assert config.background_task_timeout_seconds is None
 
 
+def test_reload_discards_resolved_load_errors(coara_home: Path) -> None:
+    _write_system_config(coara_home, "tools: invalid\n")
+    manager = ConfigManager()
+
+    asyncio.run(manager.load())
+    assert manager.load_errors
+
+    _write_system_config(coara_home, "tools: {}\n")
+    asyncio.run(manager.reload())
+
+    assert manager.load_errors == []
+
+
 def test_repo_root_config_is_ignored(coara_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     system_dir = system_dir_for_home(coara_home)
     system_dir.mkdir(parents=True)

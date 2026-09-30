@@ -32,7 +32,10 @@ def test_system_spaces_register_config_and_review_only(tmp_path: Path) -> None:
     assert "消息" in by_name
     assert "记录" not in by_name
     assert by_name["配置"].kind == WorkspaceKind.INTERNAL
-    assert by_name["消息"].home_view == "/review"
+    # 身份单真源=space.yaml：home_view 经 space.yaml 读取，注册表不持该字段
+    from src.workspace.identity import space_home_view
+
+    assert space_home_view(by_name["消息"].resolved_path()) == "/review"
 
 
 def test_cleanup_legacy_records_workspace_removes_old_entry(tmp_path: Path) -> None:
@@ -45,9 +48,6 @@ def test_cleanup_legacy_records_workspace_removes_old_entry(tmp_path: Path) -> N
         legacy_dir,
         name="记录",
         view=ViewCapability.WEB_ONLY,
-        content_type="records",
-        storefront="display",
-        home_view="/records",
     )
     assert reg.get_by_id(legacy.id) is not None
 
@@ -70,9 +70,6 @@ def test_cleanup_leaves_daily_records_entry_untouched(tmp_path: Path) -> None:
         daily_dir,
         name="记录",
         view=ViewCapability.ALL,
-        content_type="records",
-        storefront="display",
-        home_view="/records",
         persona="daily",
     )
 

@@ -34,6 +34,10 @@ class _FakeRegistry:
     def send_to_active_nowait(self, message: dict) -> None:
         self.sent.append(dict(message))
 
+    def broadcast_observers_nowait(self, message: dict) -> None:
+        """无观察者连接时为空操作（真注册表同样短路返回）。"""
+        return
+
 
 @pytest.fixture()
 def coara_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:

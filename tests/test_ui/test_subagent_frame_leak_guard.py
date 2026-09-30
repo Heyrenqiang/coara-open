@@ -128,6 +128,8 @@ def test_web_end_frame_drops_parentless_subagent_frames() -> None:
 
     WebServer._emit_end_frame(stream, {"kind": "subagent_chunk", "text": "过程旁白", "tool_call_id": "c1"})
     assert [k for k, _ in stream.frames] == ["subagent_chunk"]
+    assert stream.frames[0][1]["tool_call_id"] == "c1"
+    assert stream.frames[0][1]["parent_tool_call_id"] == "c1"
 
 
 def test_web_end_frame_folds_plain_chunk_with_parent() -> None:
@@ -139,6 +141,7 @@ def test_web_end_frame_folds_plain_chunk_with_parent() -> None:
 
     assert [k for k, _ in stream.frames] == ["subagent_chunk"]
     assert stream.frames[0][1]["tool_call_id"] == "c1"
+    assert stream.frames[0][1]["parent_tool_call_id"] == "c1"
 
 
 def test_cli_attach_frame_keeps_subagent_out_of_main_scroll() -> None:

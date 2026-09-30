@@ -1,6 +1,6 @@
 """用量展示单源格式化（src/runtime/usage_display.py）的口径契约。
 
-Web / Android / devtools 只渲染这些函数的输出，任何一端想改样式只能改这里。
+Web / Android 只渲染这些函数的输出，任何一端想改样式只能改这里。
 """
 
 from __future__ import annotations

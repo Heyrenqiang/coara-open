@@ -1,4 +1,4 @@
-"""Session cumulative cost for LLM log detail (devtools)."""
+"""Session cumulative cost for LLM log detail (轨迹视图)."""
 
 from __future__ import annotations
 

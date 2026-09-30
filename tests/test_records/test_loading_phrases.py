@@ -6,6 +6,7 @@ import pytest
 
 from src.records import loading_phrases
 from src.records.loading_phrases import (
+    _FALLBACK_RESIDENT,
     _ROTATE_SECONDS,
     QUOTE_POOL,
     TIPS,
@@ -23,12 +24,14 @@ def test_pools_loaded_from_library() -> None:
     assert all("（" not in p for p in QUOTE_POOL)
 
 
-def test_batch_is_full_pool_shuffled() -> None:
-    """整池洗牌袋：常驻池全量与提示词都在批内，且批内无重复。"""
+def test_batch_without_custom_is_sampled_not_full_pool() -> None:
+    """无定制：常驻抽固定袋 + 小技巧；不是整池灌进一轮。"""
     batch = reshuffle()
-    assert set(WITTY_POOL) <= set(batch)
-    assert set(QUOTE_POOL) <= set(batch)
+    assert len(batch) == _FALLBACK_RESIDENT + len(TIPS)
     assert set(TIPS) <= set(batch)
+    resident = [p for p in batch if p not in TIPS]
+    assert len(resident) == _FALLBACK_RESIDENT
+    assert set(resident) <= set(WITTY_POOL) | set(QUOTE_POOL)
     assert len(set(batch)) == len(batch)
 
 
@@ -52,25 +55,31 @@ def test_current_phrase_rotates_across_windows() -> None:
     assert seen == set(batch)
 
 
-def test_custom_pool_merges_with_builtin(tmp_path, monkeypatch) -> None:
+def test_custom_pool_one_to_one_with_resident(tmp_path, monkeypatch) -> None:
+    """有定制 N 条：袋内定制 N + 常驻抽 N，上屏 1:1（不含小技巧稀释）。"""
     import time as _time
 
     custom = tmp_path / "loading_phrases_custom.json"
     today = _time.strftime("%Y-%m-%d")
+    phrases = ["昨天那个bug修好了吗", "又见面了老熟人", "第三条定制梗"]
     custom.write_text(
-        '{"date": "' + today + '", "phrases": ["昨天那个bug修好了吗", "又见面了老熟人"]}',
+        '{"date": "' + today + '", "phrases": ' + __import__("json").dumps(phrases, ensure_ascii=False) + "}",
         encoding="utf-8",
     )
     monkeypatch.setattr(loading_phrases, "_custom_phrases_path", custom)
     batch = reshuffle()
-    customs = [p for p in batch if p in ("昨天那个bug修好了吗", "又见面了老熟人")]
-    assert len(customs) == 2
-    # 定制词与常驻词库同批（整池洗袋）：不再整池替代，也不再按上限截断
-    assert any(p in WITTY_POOL or p in QUOTE_POOL for p in batch)
+    customs = [p for p in batch if p in phrases]
+    residents = [p for p in batch if p not in phrases]
+    assert len(customs) == len(phrases)
+    assert len(residents) == len(phrases)
+    assert len(batch) == 2 * len(phrases)
+    assert set(residents) <= set(WITTY_POOL) | set(QUOTE_POOL)
+    # 不掺小技巧，避免打破 1:1
+    assert not any(p in TIPS for p in batch)
 
 
 def test_custom_pool_all_included(tmp_path, monkeypatch) -> None:
-    """定制词不再受批次上限约束：当天写的一次性全部进袋（一日抛语义不变）。"""
+    """定制词全部进袋，常驻按同数抽样。"""
     import json as _json
     import time as _time
 
@@ -85,6 +94,7 @@ def test_custom_pool_all_included(tmp_path, monkeypatch) -> None:
     batch = reshuffle()
     customs = [p for p in batch if p.startswith("定制梗")]
     assert len(customs) == len(phrases)
+    assert len(batch) == 2 * len(phrases)
 
 
 def test_custom_pool_stale_date_falls_back(tmp_path, monkeypatch) -> None:

@@ -43,6 +43,22 @@ def test_build_subagent_envelope_carries_kind_text_parent() -> None:
     assert _payload(build_matrix_subagent_envelope("", "x", "d1"))["kind"] == "subagent_chunk"
 
 
+def test_build_subagent_envelope_stamps_depth_and_node_ids() -> None:
+    payload = _payload(
+        build_matrix_subagent_envelope(
+            "subagent_chunk",
+            "旁白",
+            "delegate-1",
+            depth=1,
+            subagent_id="sa-9",
+            coara_id="co-9",
+        )
+    )
+    assert payload["depth"] == 1
+    assert payload["subagent_id"] == "sa-9"
+    assert payload["coara_id"] == "co-9"
+
+
 async def test_dispatch_envelopes_child_frames_whatever_the_kind() -> None:
     sent, send_chunk = await _collect()
     # 子智能体过程正文（kind=chunk 是实例重建后的退化形态）与最终结果都必须封信封

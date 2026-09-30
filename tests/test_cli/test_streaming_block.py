@@ -311,3 +311,16 @@ def test_write_tool_history_html_uses_active_block(monkeypatch):
 
     assert [w[0] for w in rec.writes] == ["", "先说一句。\n", "", "", "再说一句。\n"]
     assert html == ["<b>✓ [coaras] read(x)</b>"]
+
+
+def test_tool_line_is_error_flag_uses_error_style(monkeypatch):
+    """现行：普通 • 行靠 append(is_error=True) 标红，不嵌隐式字符。"""
+    rec = _Recorder()
+    monkeypatch.setattr("src.cli.streaming.CliScrollback.write", rec.write)
+    block = StreamingBlock(text_style="txt", tool_style="tool", error_style="err")
+
+    block.append("• shell - make\n", is_error=True)
+    assert ("• shell - make\n", "err", "") in rec.writes
+
+    block.append("• shell - ok\n", is_error=False)
+    assert ("• shell - ok\n", "tool", "") in rec.writes

@@ -1,4 +1,4 @@
-"""工具完成 payload：失败行须带错误首行，段归属优先于发起端快照。"""
+"""工具完成 payload：失败靠 is_error 标红，工具行不塞错误正文。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,8 @@ def _coara(*, seg_source: str = "web", launch_source: str = "web") -> SimpleName
     )
 
 
-def test_error_tool_label_appends_first_line() -> None:
+def test_error_tool_label_is_summary_only() -> None:
+    """失败行只保留调用摘要；错误正文留给模型通道（ToolResult.content）。"""
     payload = ToolExecutor()._build_tool_complete_payload(
         coara=_coara(),
         tool=SimpleNamespace(name="shell"),
@@ -34,9 +35,16 @@ def test_error_tool_label_appends_first_line() -> None:
         source="cli-attached",
     )
     assert payload["is_error"] is True
-    assert payload["tool_label"].startswith("shell - make")
-    assert "报错: `exit 1`" in payload["tool_label"]
-    assert "stack" not in payload["tool_label"]
+    assert payload["tool_label"] == "shell - make"
+    assert "报错" not in payload["tool_label"]
+    assert "exit 1" not in payload["tool_label"]
+
+
+def test_strip_tool_error_suffix() -> None:
+    from src.coara.display import strip_tool_error_suffix
+
+    assert strip_tool_error_suffix("edit - a.py 报错: `未找到要替换的文本`") == "edit - a.py"
+    assert strip_tool_error_suffix("shell - make") == "shell - make"
 
 
 def test_ok_tool_label_has_no_error_suffix() -> None:

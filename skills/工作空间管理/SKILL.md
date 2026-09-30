@@ -1,5 +1,4 @@
 ---
-listed: false
 name: 工作空间管理
 description: >-
   coara Home 侧配置：事件源 YAML、移出前禁用事件、AGENTS 模板、体检 checklist。

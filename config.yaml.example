@@ -50,10 +50,10 @@ cli:
   stream_assistant: false  # true = 生成时逐字显示；false = 完成后一次性显示。会话内可用 /stream on|off 切换
 
 skills_enabled: true
-# Default skills injected into Root system prompt (empty = none; use skill tool)
 skills:
-  default_include: []   # list 的 [default] 标签 + Dashboard 勾选；不预注入 system prompt
+  default_include: []   # 配置页推荐标记；不预注入 system prompt
   default_exclude: []   # applied after include
+  deferred: []          # 挂起名单：不常驻 Root 提示词，经 skill(search/activate) 按需激活；配置页技能区可切换
 
 # Local records (Markdown under users/default/records/{agent,user}/).
 # records.enabled = agent write switch (janitor/daily); change via config assistant, then restart.

@@ -1,5 +1,4 @@
 ---
-listed: false
 name: skill-creator
 description: 创建、审查和改进 AI 代理的 SKILL.md 文件。用于编写新技能、改进现有技能或审查技能文档。
 references:
@@ -83,7 +82,6 @@ SKILL.md **不是**面向人类的 README 风格文档。它是 AI 代理读取�
 
 ```yaml
 ---
-listed: false
 name: skill-name-with-dashes
 description: 一句话描述。以动词开头。描述技能的作用和使用场景。必须约150字符以内。
 references:
@@ -93,7 +91,7 @@ references:
 ```
 
 **规则**
-- `listed`：自动生成的技能固定写 `false`（不进 Root prompt 的技能名清单，经 `skill(action="search")` 发现）；只有人工策展后确认常用的技能才改为 `true`
+- 挂起与否不写进 SKILL.md——由配置 `skills.deferred` 名单决定（配置页技能区可切换）；新创建的技能默认挂起，由人策展后决定是否常驻
 - `name`：kebab-case，小写，连字符分隔。必须在所有技能中唯一。
 - `description`：这是 LLM 在 `skill(action="search")` 结果里看到的内容。它决定**技能何时被激活**。足够具体以避免误报。
 - `references`：可选的相关文档名称列表（用于技能系统内的交叉引用）。
@@ -211,7 +209,6 @@ references:
 **输出模板** — 代理填充的骨架
 ```markdown
 ---
-listed: false
 name: [kebab-case-name]
 description: [一句话。做什么 + 何时使用。]
 references:

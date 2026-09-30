@@ -1,5 +1,4 @@
 ---
-listed: false
 name: tool-creator
 description: 创建、审查和改进磁盘工具包（dynamic tools）。当需要的能力不在现有工具里时，用它教模型写一个可被 tool(search/activate) 发现并使用的新工具。
 ---

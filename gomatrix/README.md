@@ -105,7 +105,7 @@ default = true
 
 ## coara 集成
 
-1. 启动 coara（`coara` / `coara -cx`）→ gomatrix 由 coara 托管自动拉起（`<coara_home>/matrix/` 数据目录），coara 连接 `http://127.0.0.1:8008`
+1. 启动 coara（`coara` / `coara tray`）→ gomatrix 由 coara 托管自动拉起（`<coara_home>/matrix/` 数据目录），coara 连接 `http://127.0.0.1:8008`
 2. 手机扫 coara WebUI 侧栏「手机」页的配对码
 
 本机 8008 上已有健康实例时 coara 直接接入（adopt）；否则拉起安装目录旁的 `gomatrix.exe`（依次查找 `COARA_ROOT\bin\`、`%LOCALAPPDATA%\coara\bin\`、`~/.local/coara/bin/`、开发仓库 `gomatrix/`）；找不到则跳过 Matrix 并提示。连接配置见 `config.yaml` 的 `matrix:` 节或 `COARA_MATRIX_*` 环境变量。

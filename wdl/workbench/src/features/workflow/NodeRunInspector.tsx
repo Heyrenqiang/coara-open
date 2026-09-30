@@ -1,7 +1,6 @@
 /**
  * NodeRunInspector — 节点运转面板内容：实时状态。
  * 作为编辑器右侧面板的一种视图（与配置/WDL/帮助互斥），不再用抽屉覆盖画布。
- * 「最近 LLM 调用」属开发者调试信息，已移入独立 devtools（coara-devtools），不进发布版。
  */
 import { Empty, Tag, Typography } from "antd";
 import type { FlowLiveNode, FlowLiveNodeStatus } from "../../lib/ws";

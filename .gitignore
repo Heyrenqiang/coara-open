@@ -32,6 +32,8 @@ ENV/
 .coara/config.yaml
 .coara/providers.yaml
 .coara/llm_preferences.yaml
+# 外部技能挂载点（junction 到 easel/hyperframes 技能树，不入库）
+.coara/skills/
 .coara/config.local.yaml
 scripts/tunnels/tunnels.local.env
 

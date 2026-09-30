@@ -1,5 +1,4 @@
 ---
-listed: false
 name: create-rule
 description: >-
   编写或修改工作空间与用户侧常驻文案：ws.md、AGENTS.md、user_rules.md。

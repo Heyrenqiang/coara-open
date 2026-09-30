@@ -167,6 +167,11 @@ async def prepare_messages_for_llm_turn(
             root = getattr(coara, "_root_ref", None)
             if root is not None:
                 push_status_payload(root, force=True, session_event="compacted")
+                # web 端同口径：落带 divider，刷新回放与实时一致（手动 /compact 路径同款）
+                ws = getattr(root, "_web_server", None)
+                persist = getattr(ws, "_persist_timeline_divider", None)
+                if callable(persist):
+                    persist("已压缩")
         except Exception as exc:  # noqa: BLE001 — 画线是显示增强，不该带走回合
             logger.debug("auto-compress status push skipped: {}", exc)
         # History shrank; re-resolve once for the guard (snapshot cleared by callers on overflow).

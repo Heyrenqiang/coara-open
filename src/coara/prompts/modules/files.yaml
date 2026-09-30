@@ -1,0 +1,6 @@
+# 文件模块（空间文件浏览）
+title: 文件
+icon: FileOutlined
+route: /files
+workspace_relation: scoped
+order: 20

@@ -17,19 +17,35 @@ LocalToolSummaryFn = Callable[[str], Awaitable[None] | None]
 SUBAGENT_ENVELOPE_PREFIX = "[COARA_SUBAGENT]"
 
 
-def build_matrix_subagent_envelope(kind: str, text: str, parent_tool_call_id: str) -> str:
+def build_matrix_subagent_envelope(
+    kind: str,
+    text: str,
+    parent_tool_call_id: str,
+    *,
+    depth: int = 0,
+    subagent_id: str = "",
+    coara_id: str = "",
+) -> str:
     """子智能体帧 → ``[COARA_SUBAGENT]`` 信封（端上折进发起它的 delegate 工具行）
 
     任务描述 / 中间过程 / 最终结果三样都走这条，绝不落成主会话气泡——
-    与 web / CLI 出口同一口径
+    与 web / CLI 出口同一口径；可选 depth / 节点身份与 Web 折叠过程条目同形
     """
     import json as _json
 
-    payload = {
+    payload: dict[str, object] = {
         "kind": kind or "subagent_chunk",
         "text": text,
         "parent_tool_call_id": parent_tool_call_id,
     }
+    if isinstance(depth, int) and depth > 0:
+        payload["depth"] = depth
+    sid = str(subagent_id or "").strip()
+    if sid:
+        payload["subagent_id"] = sid
+    cid = str(coara_id or "").strip()
+    if cid:
+        payload["coara_id"] = cid
     return f"{SUBAGENT_ENVELOPE_PREFIX}{_json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
 
 
@@ -86,7 +102,19 @@ async def dispatch_matrix_end_frame(
     parent_id = str(frame.get("parent_tool_call_id") or "")
     if parent_id:
         try:
-            await send_chunk(room_id, build_matrix_subagent_envelope(kind, chunk, parent_id))
+            depth_raw = frame.get("depth")
+            depth = int(depth_raw) if isinstance(depth_raw, (int, float)) else 0
+            await send_chunk(
+                room_id,
+                build_matrix_subagent_envelope(
+                    kind,
+                    chunk,
+                    parent_id,
+                    depth=depth,
+                    subagent_id=str(frame.get("subagent_id") or ""),
+                    coara_id=str(frame.get("coara_id") or ""),
+                ),
+            )
         except Exception:  # noqa: BLE001
             logger.exception("matrix subagent frame send failed")
         return
@@ -232,12 +260,14 @@ async def stream_coara_reply_to_matrix(
     def _tape_frame(frame: dict) -> None:
         """内核帧转视图帧，与 web 端同一套 kind 与 payload 约定。"""
         kind = str(frame.get("kind") or "")
-        if kind not in {"chunk", "tool", "diff", "subagent_result"}:
-            # subagent_chunk 等过程帧不进带，落了带 hydrate 会把它复现成主会话正文
-            return
-        payload: dict[str, Any] = {}
         parent_id = str(frame.get("parent_tool_call_id") or "")
         tool_call_id = str(frame.get("tool_call_id") or "")
+        # subagent_chunk 带父标识落带（与 web make_persist 同形）；无父则丢——防复现成主会话正文
+        if kind == "subagent_chunk" and not (parent_id or tool_call_id):
+            return
+        if kind not in {"chunk", "tool", "diff", "subagent_result", "subagent_chunk"}:
+            return
+        payload: dict[str, Any] = {}
         if kind == "diff":
             diff_lines = frame.get("diff_lines")
             if isinstance(diff_lines, dict):

@@ -45,6 +45,33 @@ def _registry_disk_token(path: Path) -> str:
     return hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
 
 
+# 旧 kind → 现行枚举（load 时就地改写，避免 ValidationError 整表挂死）
+_LEGACY_KIND_MAP: dict[str, str] = {
+    "managed": WorkspaceKind.NORMAL.value,
+    "reference": WorkspaceKind.NORMAL.value,
+    "code": WorkspaceKind.NORMAL.value,
+}
+
+
+def migrate_legacy_workspace_kinds(raw: dict) -> bool:
+    """把磁盘上的旧 kind 值改写为 normal/internal/external。返回是否有改动。"""
+    workspaces = raw.get("workspaces")
+    if not isinstance(workspaces, dict):
+        return False
+    changed = False
+    for entry in workspaces.values():
+        if not isinstance(entry, dict):
+            continue
+        kind = entry.get("kind")
+        if not isinstance(kind, str):
+            continue
+        mapped = _LEGACY_KIND_MAP.get(kind)
+        if mapped is not None:
+            entry["kind"] = mapped
+            changed = True
+    return changed
+
+
 class WorkspaceRegistry:
     """Load/save the workspace catalog"""
 
@@ -81,9 +108,12 @@ class WorkspaceRegistry:
         raw_text = canonical.read_text(encoding="utf-8")
         self._disk_token = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
         raw = yaml.safe_load(raw_text) or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        kinds_migrated = migrate_legacy_workspace_kinds(raw)
         self.document = WorkspaceRegistryDocument.model_validate(raw)
         self.prune_ephemeral_workspaces()
-        if self._normalize_keys():
+        if kinds_migrated or self._normalize_keys():
             self.save()
         return self.document
 
@@ -194,12 +224,13 @@ class WorkspaceRegistry:
         provider: str | None = None,
         model: str | None = None,
         summary: str | None = None,
-        content_type: str | None = None,
-        storefront: str | None = None,
-        home_view: str | None = None,
         persona: str | None = None,
     ) -> WorkspaceEntry:
-        """登记 kind=internal 的系统空间（daily 等）；幂等，重复调用原地修正元数据"""
+        """登记 kind=internal 的系统空间（daily 等）；幂等，重复调用原地修正元数据。
+
+        空间身份（type/storefront/home_view）与能力声明的单真源是 space.yaml，
+        登记方经 write_space_identity 落盘，不经本函数写注册表字段。
+        """
         from src.workspace.types import ViewCapability
 
         resolved = path.expanduser().resolve()
@@ -228,15 +259,9 @@ class WorkspaceRegistry:
             if existing.view != desired_view:
                 existing.view = desired_view
                 changed = True
-            for field, value in (
-                ("content_type", content_type),
-                ("storefront", storefront),
-                ("home_view", home_view),
-                ("persona", persona),
-            ):
-                if value is not None and getattr(existing, field) != value:
-                    setattr(existing, field, value)
-                    changed = True
+            if persona is not None and existing.persona != persona:
+                existing.persona = persona
+                changed = True
             if summary is not None and summary.strip() and not existing.summary.strip():
                 existing.summary = summary.strip()
                 changed = True
@@ -261,9 +286,6 @@ class WorkspaceRegistry:
             summary=(summary or "").strip(),
             provider=provider,
             model=model,
-            content_type=content_type,
-            storefront=storefront,
-            home_view=home_view,
             persona=persona,
         )
         self.document.workspaces[workspace_id] = entry

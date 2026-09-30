@@ -188,6 +188,11 @@ async def _force_compress_after_context_overflow(coara, *, signal: Any) -> bool:
         root = getattr(coara, "_root_ref", None)
         if root is not None:
             push_status_payload(root, force=True, session_event="compacted")
+            # web 端同口径：落带 divider，刷新回放与实时一致
+            ws = getattr(root, "_web_server", None)
+            persist = getattr(ws, "_persist_timeline_divider", None)
+            if callable(persist):
+                persist("已压缩")
     except Exception as exc:  # noqa: BLE001 — 画线是显示增强，不该带走回合
         logger.debug("overflow-compress status push skipped: {}", exc)
     return True
@@ -301,7 +306,6 @@ async def run_turn_loop(
     show_tool_summary = ctx.show_tool_summary
 
     coara._raise_if_interrupted(turn_runtime)
-    coara._llm_debug_user_input = content
     session_log = getattr(coara, "_session_log", None)
     if session_log is not None:
         # source 原样落盘（web-flow / web-<subject> 等模块来源不能归一化塌缩）
@@ -556,13 +560,6 @@ async def run_turn_loop(
             while True:
                 try:
                     timing.begin_llm()
-                    coara._llm_debug_turn_meta = {
-                        "turn_iteration": iteration,
-                        "messages_in_llm_window": len(turn_messages),
-                        "user_input": getattr(coara, "_llm_debug_user_input", ""),
-                        "turn_id": turn_runtime.turn_id,
-                        "session_id": coara.session_id,
-                    }
                     try:
                         response = await complete_turn_with_content_policy_recovery(
                             coara,
@@ -576,7 +573,6 @@ async def run_turn_loop(
                         if not await _force_compress_after_context_overflow(coara, signal=turn_runtime.signal):
                             raise
                         turn_messages = list(coara.message_history)
-                        coara._llm_debug_turn_meta["messages_in_llm_window"] = len(turn_messages)
                         response = await complete_turn_with_content_policy_recovery(
                             coara,
                             system_prompt,
@@ -713,6 +709,25 @@ async def run_turn_loop(
                 reasoning_content=reasoning_content,
             )
             coara.message_history.append(assistant_message)
+
+            # 录像带：思考块落带（每轮 LLM 完成一帧；record_view_frame 失败静默）
+            if reasoning_content:
+                from src.core.config import config_manager
+                from src.ui.view_recorder import record_view_frame
+
+                record_view_frame(
+                    {
+                        "type": "thinking",
+                        "workspace_dir": str(getattr(coara, "workspace_dir", "") or ""),
+                        "turn_id": turn_runtime.turn_id,
+                        "session_id": coara.session_id,
+                        "source": str(getattr(coara, "_active_turn_source", "") or ""),
+                        "subject": str(getattr(coara, "_session_agent_kind", "") or "") or "root",
+                        "text": reasoning_content,
+                        "iteration": iteration,
+                    },
+                    coara_home=config_manager.config.coara_home if config_manager._config else None,
+                )
 
             truncation_settings = coara._get_output_truncation_settings()
             truncation_recovery = try_output_truncation_recovery(

@@ -13,8 +13,8 @@ from src.core.logger import logger
 from src.matrix_client.ingress_helpers import (
     bind_matrix_active_room,
     deliver_remote_text_to_coara,
-    guest_room_allowed,
     resolve_matrix_trust_level,
+    untrusted_ingress_allowed,
 )
 from src.matrix_client.response_stream import LocalToolSummaryFn
 from src.matrix_client.turn_signal import matrix_turn_scope, turn_send_stats
@@ -24,22 +24,30 @@ SendTextFn = Callable[[str, str], Awaitable[None]]
 InboundPreviewFn = Callable[[Any, Any], Awaitable[None]]
 ReportErrorFn = Callable[[str, Exception | None], Awaitable[None]]
 
-# 访客被拒通知去重：同一 (房间, 发送者) 每进程只提醒一次，避免刷屏
-_guest_reject_notified: set[tuple[str, str]] = set()
+# 访客被拒通知去重：同一 (房间, 发送者, 原因) 每进程只提醒一次，避免刷屏
+_guest_reject_notified: set[tuple[str, str, str]] = set()
 
 
-async def _notify_guest_rejected(host: MatrixInboundHost, room_id: str, sender: str) -> None:
-    """访客在非白名单房间发言：回一句说明并忽略（每房间每发送者只提醒一次）。"""
-    key = (room_id, sender)
+async def _notify_guest_rejected(
+    host: MatrixInboundHost,
+    room_id: str,
+    sender: str,
+    *,
+    reason: str = "guest_room",
+) -> None:
+    """访客被拒：回一句说明并忽略（每房间每发送者每原因只提醒一次）。"""
+    key = (room_id, sender, reason)
     if key in _guest_reject_notified:
         return
     _guest_reject_notified.add(key)
-    logger.info(f"[Security] Guest {sender} rejected in room {room_id}（不在 matrix.guest_rooms 白名单）")
+    if reason == "workspace_kind":
+        logger.info(f"[Security] Guest {sender} rejected in room {room_id}（当前空间未对外开放）")
+        msg = f"{sender} 是外部访客，当前空间未设为对外开放（kind=external），消息已忽略。"
+    else:
+        logger.info(f"[Security] Guest {sender} rejected in room {room_id}（不在 matrix.guest_rooms 白名单）")
+        msg = f"{sender} 是外部访客，本房间未开放访客互动（不在 matrix.guest_rooms 白名单内），消息已忽略。"
     with contextlib.suppress(Exception):
-        await host.send_room_text(
-            room_id,
-            f"{sender} 是外部访客，本房间未开放访客互动（不在 matrix.guest_rooms 白名单内），消息已忽略。",
-        )
+        await host.send_room_text(room_id, msg)
 
 
 # items are requeued — the next inbound message picks them up.
@@ -203,8 +211,11 @@ async def process_matrix_text_message(
         ):
             trust_level = resolve_matrix_trust_level(event.sender, cli_owner=host.cli_owner)
             if trust_level == "untrusted":
-                if not guest_room_allowed(room.room_id):
-                    await _notify_guest_rejected(host, room.room_id, event.sender)
+                allowed, reject_reason = untrusted_ingress_allowed(
+                    host.root, room.room_id, workspace_id=turn_ws_id
+                )
+                if not allowed:
+                    await _notify_guest_rejected(host, room.room_id, event.sender, reason=reject_reason)
                     return
                 if host.on_untrusted_sender is not None:
                     host.on_untrusted_sender(event.sender)
@@ -267,9 +278,13 @@ async def process_matrix_media_message(
         target_coara = bind_coara if bind_coara is not None else host.root.foreground_coara
         turn_ws_id = bind_ws_id if bind_ws_id is not None else getattr(host.root, "_foreground_session_id", None)
         trust_level = resolve_matrix_trust_level(event.sender, cli_owner=host.cli_owner)
-        if trust_level == "untrusted" and not guest_room_allowed(room.room_id):
-            await _notify_guest_rejected(host, room.room_id, event.sender)
-            return
+        if trust_level == "untrusted":
+            allowed, reject_reason = untrusted_ingress_allowed(
+                host.root, room.room_id, workspace_id=turn_ws_id
+            )
+            if not allowed:
+                await _notify_guest_rejected(host, room.room_id, event.sender, reason=reject_reason)
+                return
         # 图片消息在回调入口已下载聚合（不占调度锁、免 BUSY_DROP），此处只跑文件
         from src.matrix_client.media_inbound import matrix_media_meta
         from src.matrix_client.remote_vision import is_image_upload

@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.core.display_rules import CLI_SILENT_SUBAGENT_TYPES as _GENERATED_SILENT_TYPES
 from src.core.logger import logger
 from src.prompt.yaml_loader import AgentPromptConfig, YamlPromptLoader
 
@@ -111,7 +112,8 @@ SYSTEM_ONLY_SUBAGENT_TYPES: frozenset[str] = frozenset({"janitor", "daily"})
 
 # CLI 静默子智能体：工具摘要/改动 diff 不进 scrollback（活动树行也静默）。
 # janitor/daily 是系统派发管家——它们的工具输出不面向用户；aide 与 coaras 同机制，正常显示。
-CLI_SILENT_SUBAGENT_TYPES: frozenset[str] = frozenset({"janitor", "daily"})
+# 名单真源在 docs/protocol/coara-envelopes.json（display_rules.silent_subagent_types），此处从生成产物读。
+CLI_SILENT_SUBAGENT_TYPES: frozenset[str] = frozenset(_GENERATED_SILENT_TYPES)
 
 
 def removed_subagent_type_message(name: str) -> str | None:

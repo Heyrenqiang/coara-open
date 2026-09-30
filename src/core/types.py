@@ -167,8 +167,8 @@ class SkillDefinition(BaseModel):
     body: str
     disabled: bool = False
     references: list[str] = Field(default_factory=list)
-    # False = 不进 Root prompt 的技能名清单（自动生成的未策展技能），
-    # 经 skill(action="search") 发现、activate 激活
+    # 挂起与否由配置 skills.deferred 决定，运行时经 SkillManager.apply_deferred 打戳；
+    # False = 不进 Root prompt 的技能名清单，经 skill(action="search") 发现、activate 激活
     listed: bool = True
 
 
@@ -256,13 +256,15 @@ class MatrixConfig(BaseModel):
 
 
 class SkillsConfig(BaseModel):
-    """Default skills injected into Root system prompt (when agent YAML include is empty)."""
+    """技能配置：default_include 是配置页推荐标记（不注入 prompt）；deferred 是挂起名单。"""
 
     default_include: list[str] = Field(
         default_factory=list,
         description='Skill names to preload; use ["*"] for all discovered skills',
     )
     default_exclude: list[str] = Field(default_factory=list)
+    # 挂起名单：不进 Root prompt 常驻技能清单，经 skill(action="search") 发现
+    deferred: list[str] = Field(default_factory=list)
 
 
 class OutputTruncationConfig(BaseModel):

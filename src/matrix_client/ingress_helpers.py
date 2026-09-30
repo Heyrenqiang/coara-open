@@ -264,19 +264,10 @@ def try_defer_media_to_continuation_input(
 
 
 def resolve_matrix_trust_level(sender: str, *, cli_owner: bool = False) -> str:
-    """Trust = configured ``owner_matrix_ids`` membership；本机自用 homeserver 的
-    @phone_* 账号（手机端扫码登录自动生成）一律按 owner——该 homeserver 是私人的，
-    外人进不来。CLI 模式不再全员 owner"""
-    from src.core.config import config_manager
-
-    owner_ids = config_manager.get_security_config().get("owner_matrix_ids", [])
-    if sender in owner_ids:
-        return "owner"
-    if sender.startswith("@phone_"):
-        return "owner"
-    if cli_owner and not owner_ids:
-        return "owner"
-    return "untrusted"
+    """本机自用 homeserver 上的发送者一律按 owner——gomatrix 是私人的，外人进不来；
+    用户口径「现在就全部是内部」。owner_matrix_ids 保留仅为未来多主预留，
+    当前不作为门槛。"""
+    return "owner"
 
 
 def guest_room_allowed(room_id: str) -> bool:
@@ -296,6 +287,38 @@ def guest_room_allowed(room_id: str) -> bool:
     if "*" in rooms:
         return True
     return room_id in rooms
+
+
+def workspace_allows_untrusted(root: Any, workspace_id: str | None = None) -> bool:
+    """目标空间是否对外开放：仅 ``kind=external`` 接受访客（untrusted）。"""
+    from src.workspace.types import WorkspaceKind
+
+    registry = getattr(getattr(root, "workspace_manager", None), "registry", None)
+    if registry is None:
+        return False
+    wid = str(workspace_id or "").strip()
+    if not wid:
+        wid = matrix_view_session_key(root) or str(getattr(root, "_foreground_session_id", "") or "")
+    if not wid:
+        return False
+    entry = registry.get_by_id(wid)
+    if entry is None:
+        return False
+    return getattr(entry, "kind", None) == WorkspaceKind.EXTERNAL
+
+
+def untrusted_ingress_allowed(
+    root: Any,
+    room_id: str,
+    *,
+    workspace_id: str | None = None,
+) -> tuple[bool, str]:
+    """访客双门：房间白名单 + 空间 kind=external。返回 (允许, 拒绝原因码)。"""
+    if not guest_room_allowed(room_id):
+        return False, "guest_room"
+    if not workspace_allows_untrusted(root, workspace_id):
+        return False, "workspace_kind"
+    return True, ""
 
 
 def bind_matrix_active_room(

@@ -72,18 +72,8 @@ class SkillLoader:
             name = post.get("name", "")
             description = post.get("description", "")
             references = post.get("references", [])
-            listed_raw = post.get("listed", True)
-            listed = (
-                listed_raw
-                if isinstance(listed_raw, bool)
-                else str(listed_raw).strip().lower()
-                not in {
-                    "false",
-                    "no",
-                    "0",
-                    "off",
-                }
-            )
+            # listed 字段已退役：挂起名单只由配置 skills.deferred 决定，
+            # 技能文件不能自己声明是否挂起（避免既当裁判又当运动员）
 
             if not name:
                 raise SkillError(f"Missing 'name' in frontmatter: {location}")
@@ -100,7 +90,6 @@ class SkillLoader:
                 location=location,
                 body=post.content.strip(),
                 references=references if isinstance(references, list) else [],
-                listed=listed,
             )
 
         except SkillError:

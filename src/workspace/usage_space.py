@@ -32,14 +32,15 @@ def ensure_usage_workspace_entry(root: Any) -> Any | None:
     if path is None:
         return None
     path.mkdir(parents=True, exist_ok=True)
+    # 空间身份单真源=space.yaml（09-29 裁决不做双写）
+    from src.workspace.identity import write_space_identity
+
+    write_space_identity(path, space_type="usage", storefront="display", home_view="/usage")
     entry = wm.registry.ensure_internal_workspace(
         path,
         name=USAGE_WORKSPACE_NAME,
         view=ViewCapability.WEB_ONLY,
         summary="用量看板（系统展示空间，全局账本聚合）",
-        content_type="usage",
-        storefront="display",
-        home_view="/usage",
     )
     logger.info(f"Registered usage workspace ({entry.id}) -> {path}")
     return entry

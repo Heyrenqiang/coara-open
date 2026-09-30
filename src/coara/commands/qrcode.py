@@ -162,7 +162,7 @@ async def handle_qrcode(root: RootCoara, args: CommandArgs) -> CommandResult:
     if status is None:
         return CommandResult.error(
             f"gomatrix 不可达（端口 {port}），手机接入未就绪。\n"
-            "请用 coara / coara -x / coara -cwx 启动（含 Matrix 接入），稍候再试 /qrcode。"
+            "请确认内核在跑（coara / coara tray），Matrix 托管已启用，稍候再试 /qrcode。"
         )
     if not (status.get("tunnel_ready") and status.get("tunnel_url")):
         if status.get("tunnel_enabled"):

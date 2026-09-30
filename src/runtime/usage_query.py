@@ -153,7 +153,7 @@ def _cache_read_from_usage(usage: dict[str, Any]) -> int:
 def _prompt_tokens_from_usage(usage: dict[str, Any]) -> int:
     """Effective total prompt size（input + cache_read + creation）。
 
-    llmlog 镜像用 ``prompt_tokens``，events 用 ``input_tokens``；此处统一。
+    usage 字段口径：``prompt_tokens``/``completion_tokens`` 与 ``input_tokens``/``output_tokens`` 混用；此处统一。
     """
     from src.llm.usage import total_prompt_tokens
 
@@ -379,7 +379,7 @@ def enrich_usage_with_cost(
     model_s = str(model or "").strip()
     model_key = f"{provider_s}/{model_s}" if provider_s and model_s else (model_s or provider_s)
     pricing = pricing_map.get(model_key) if pricing_map else None
-    # compute_turn_cost 认 input_tokens/output_tokens；llmlog 镜像用 prompt/completion
+    # compute_turn_cost 认 input_tokens/output_tokens；另一套历史命名是 prompt/completion
     normalized = {
         "input_tokens": int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0),
         "output_tokens": int(usage.get("output_tokens") or usage.get("completion_tokens") or 0),
@@ -406,7 +406,7 @@ def enrich_usage_with_cost(
 
 
 def _usage_dict_from_event(usage: dict[str, Any] | None) -> dict[str, Any] | None:
-    """events.jsonl 的 usage → llmlog 风格 prompt/completion 字典。"""
+    """events.jsonl 的 usage → prompt/completion 字典。"""
     if not isinstance(usage, dict) or not usage:
         return None
     prompt = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
@@ -432,7 +432,7 @@ def _collect_session_llm_usages(
     coara_home: Path | None,
     workspace_dir: Path | str | None,
 ) -> list[dict[str, Any]]:
-    """按时间序收集本会话全部 llm_turn usage（llmlog 字段风格）。"""
+    """按时间序收集本会话全部 llm_turn usage（prompt/completion 字段风格）。"""
     sid = str(session_id or "").strip()
     if not sid:
         return []
@@ -802,7 +802,7 @@ def _token_dict(bucket: _TokenBucket) -> dict[str, Any]:
     input_tokens = bucket.input_tokens
     cache_read = bucket.cache_read_tokens
     # 展示字段（*_display / cost_state / cache_hit_level 等）由 usage_display 单源注入，
-    # Web / Android / devtools 只渲染，不再各自格式化
+    # Web / Android 只渲染，不再各自格式化
     return decorate_token_totals(
         {
             "llm_turns": bucket.llm_turns,
@@ -1259,7 +1259,7 @@ def summarize_usage_detail(
         session_rows.append(session)
     session_rows.sort(key=lambda s: float(s["cost_total"]), reverse=True)
 
-    # 明细自带合计（仅覆盖本次返回的 limit 条），让 devtools 头部行也只渲染不算数
+    # 明细自带合计（仅覆盖本次返回的 limit 条），让展示端头部行也只渲染不算数
     total_input = sum(int(s["input_tokens"]) for s in session_rows)
     total_cache = sum(int(s["cache_read_tokens"]) for s in session_rows)
     detail_totals = decorate_token_totals(

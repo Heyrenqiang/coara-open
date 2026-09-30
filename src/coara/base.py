@@ -32,13 +32,6 @@ from src.coara.base_mixins import (
     ToolsRegistryMixin,
     TraceMixin,
 )
-from src.coara.llmlog import (
-    DAILY_WORKSPACE_KEY,
-    FLOW_WORKSPACE_KEY,
-    Meta,
-    build_agent_overview,
-    log_llm_call,
-)
 from src.coara.tool_manager import ToolManager
 from src.coara.trace_emitter import TraceEmitter
 from src.coara.turn_completion import CoaraRunCancelledError
@@ -263,6 +256,10 @@ def _route_subagent_tool_frame(coara: Any, payload: dict[str, Any], frame: dict[
     # 靠它把帧分到各自节点下（三级折叠）；没有它只能整片平铺。
     frame.setdefault("subagent_id", str(getattr(coara, "_delegate_subagent_id", "") or ""))
     frame.setdefault("coara_id", str(getattr(getattr(coara, "identity", None), "coara_id", "") or ""))
+    # 相对折叠根的过程深度（与 Web TreeRow.depth 同尺：直接子=1）；matrix/录像带端缩进用
+    depth = int(getattr(coara, "delegate_depth", 0) or 0)
+    if depth > 0:
+        frame.setdefault("depth", depth)
     # Use dispatch-snapshot channel_id (subagent segment channel often empty)
     origin = getattr(coara, "_subagent_origin", None)
     channel_id = str(origin[1] or "") if isinstance(origin, tuple) and len(origin) > 1 else ""
@@ -366,10 +363,6 @@ class CoaraBase(
         # 反向引用：RootCoara 建会话时回填（压缩成功后据此派 janitor 沉淀， 覆盖「用户连续工作不 /new 导致 janitor
         # 不触发」的盲区）
         self._root_ref: Any | None = None
-        # 本会话累计 LLM API 调用次数（跨 turn；/new 清会话时归零）
-        self._session_llm_call_count = 0
-        # 本会话累计工具调用次数（一轮 LLM 可带多个 tool_calls；/new 归零）
-        self._session_tool_call_count = 0
         # 当前回合运行时与发起端标识：回合内赋值、回合结束清空（None/空串是合法态）
         self._active_turn: Any | None = None
         self._active_turn_source: str = ""
@@ -377,9 +370,6 @@ class CoaraBase(
         self._streamed_assistant_chars: int = 0
         # 正文流式钩子：回合消费方登记，回合结束归 None
         self._assistant_stream_hook: Any | None = None
-        # LLM 调试快照：回合元信息与用户输入（磁盘镜像用，回合结束清空）
-        self._llm_debug_turn_meta: dict[str, Any] | None = None
-        self._llm_debug_user_input: str = ""
         # 会话事件记录器：_rebuild_session_log 建/清；None 是合法态（构建失败静默降级）
         self._session_log: Any | None = None
         # delegate 派发回填的归属字段（非委派实例保持默认）
@@ -843,8 +833,6 @@ class CoaraBase(
                     self._segments.clear()
                 # Clear per-turn debug/stream scratch so it never leaks into the next turn or session (mirrors
                 # _reset_transient_state).
-                self._llm_debug_turn_meta = None
-                self._llm_debug_user_input = ""
                 self._streamed_assistant_chars = 0
                 # 回合结束：应用延迟的 LLM 切换（/model 在回合中执行时标记的）
                 pending_switch = self._pending_llm_switch
@@ -898,6 +886,8 @@ class CoaraBase(
             "parent_tool_call_id": parent_tool_call_id,
             "coara_id": str(getattr(getattr(self, "identity", None), "coara_id", "") or ""),
             "subagent_id": str(getattr(self, "_delegate_subagent_id", "") or ""),
+            # 相对折叠根的过程深度（与 Web TreeRow.depth 同尺：直接子=1）
+            **({"depth": int(self.delegate_depth)} if int(getattr(self, "delegate_depth", 0) or 0) > 0 else {}),
             "session_id": parent_session,
             "workspace_dir": str(getattr(self, "_delegate_parent_workspace_dir", "") or ""),
         }
@@ -1087,7 +1077,9 @@ class CoaraBase(
 
     def _route_tool_line(self, payload: dict[str, Any]) -> None:
         """把工具行按当前注入段 source 路由到端通道"""
-        label = str(payload.get("tool_label") or "").strip()
+        from src.coara.display import strip_tool_error_suffix
+
+        label = strip_tool_error_suffix(str(payload.get("tool_label") or "").strip())
         if not label:
             return
         # 有意 getattr 防御：本方法被测试绑到 SimpleNamespace 替身调用（替身不带该字段）
@@ -1105,6 +1097,10 @@ class CoaraBase(
             "is_error": bool(payload.get("is_error", False)),
             "duration_ms": payload.get("duration_ms"),
         }
+        # 录像带详情：参数/结果预览/spill 引用随帧（聊天行不读；预览有硬上限）
+        from src.runtime.tape_tool_detail import apply_tape_tool_detail
+
+        apply_tape_tool_detail(frame, payload)
         # 慢工具预览（手机）：仍在跑时带 running，端上转圈；完成帧不带，覆盖同 id 行
         if bool(payload.get("running")):
             frame["running"] = True
@@ -1186,8 +1182,48 @@ class CoaraBase(
     ) -> LLMResponse:
         from src.llm.active_context import resolve_active_llm
 
+        # 录像带：系统提示词快照帧（会话首帧 + hash 变更帧；正文全量随帧——
+        # 录像带的原则是「能看到的所有尽可能多的信息」，详情面板直接可读，失败静默）
+        try:
+            import hashlib
+
+            prompt_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:12]
+            if getattr(self, "_prompt_frame_hash", None) != prompt_hash:
+                first = getattr(self, "_prompt_frame_hash", None) is None
+                self._prompt_frame_hash = prompt_hash
+                from src.core.config import config_manager
+                from src.ui.view_recorder import record_view_frame
+
+                record_view_frame(
+                    {
+                        "type": "prompt",
+                        "workspace_dir": str(self.workspace_dir),
+                        "turn_id": "",
+                        "session_id": self.session_id,
+                        "source": str(getattr(self, "_active_turn_source", "") or ""),
+                        "subject": str(getattr(self, "_session_agent_kind", "") or "") or "root",
+                        "hash": prompt_hash,
+                        "bytes": len(system_prompt.encode("utf-8")),
+                        "changed": not first,
+                        "text": system_prompt,
+                        "summary": (
+                            f"系统提示词快照 hash={prompt_hash}，{len(system_prompt.encode('utf-8'))} 字节"
+                            + ("" if first else "（变更）")
+                        ),
+                        # janitor/daily 维护实例：带 desk 让录像带聚成外挂组（不落主带裸行）
+                        **(
+                            {"desk": self.identity.name}
+                            if not self.identity.user_facing and self.identity.name in ("janitor", "daily")
+                            else {}
+                        ),
+                    },
+                    coara_home=config_manager.config.coara_home if config_manager._config else None,
+                )
+        except Exception:
+            pass
+
         tool_definitions = self._get_tool_definitions_for_llm()
-        resolved = llm_service.resolve(
+        llm_service.resolve(
             self.llm_profile,
             provider_name=self.provider_name,
             model=self.model_name,
@@ -1219,56 +1255,6 @@ class CoaraBase(
             self._turn_phase.set("processing")
         except BaseException as exc:
             call_err = exc
-
-        turn_meta = self._llm_debug_turn_meta
-        if self.identity.user_facing:
-            # llmlog 按 _session_agent_kind 区分，不混为两个「主会话」
-            agent_kind = "构建对话" if self._session_agent_kind == "flow" else "主会话"
-        else:
-            agent_kind = getattr(self.identity.persona, "name", "") or self.identity.name
-        overview = build_agent_overview(
-            user_facing=bool(self.identity.user_facing),
-            persona_name=agent_kind if not self.identity.user_facing else "",
-            background=bool(self._delegate_background),
-            bound_tool_names=self._tool_manager.get_bound_tool_names(),
-        )
-        if self._session_agent_kind == "flow":
-            overview = "构建对话"
-        self._session_llm_call_count = int(self._session_llm_call_count or 0) + 1
-        batch_tool_calls = len(response.tool_calls) if response is not None and response.tool_calls else 0
-        self._session_tool_call_count = int(self._session_tool_call_count or 0) + batch_tool_calls
-        meta = Meta(
-            session_id=(turn_meta or {}).get("session_id") or self.session_id,
-            turn_id=(turn_meta or {}).get("turn_id") or "",
-            user_input=(turn_meta or {}).get("user_input") or self._llm_debug_user_input or "",
-            llm_call=self._session_llm_call_count,
-            tool_call_count=self._session_tool_call_count,
-            provider_name=llm_ctx.provider_name,
-            agent_id=self.identity.name,
-            agent_kind=agent_kind,
-            overview=overview,
-        )
-
-        # 磁盘镜像写入放线程池：序列化完整对话 + 写盘在 event loop 里同步做
-        if self._session_agent_kind == "flow":
-            log_workspace = FLOW_WORKSPACE_KEY
-        elif str(getattr(self.identity.persona, "name", "") or "").strip().lower() == "daily":
-            log_workspace = DAILY_WORKSPACE_KEY
-        else:
-            log_workspace = str(self.workspace_dir)
-        await asyncio.to_thread(
-            log_llm_call,
-            log_workspace,
-            meta,
-            system_prompt=system_prompt,
-            messages=messages,
-            model=self.model_name,
-            max_tokens=resolved.max_tokens,
-            temperature=resolved.temperature,
-            tools=tool_definitions,
-            response=response,
-            call_err=call_err,
-        )
 
         if call_err is not None:
             raise call_err
@@ -1682,7 +1668,7 @@ class CoaraBase(
     async def _finalize_new_session(self, interrupt_source: str) -> None:
         """Post-clear new-session setup (skills reload, seed)."""
 
-        # Pick up dashboard edits to skills.default_include without a full restart.
+        # Pick up dashboard edits to skills config (default_include / deferred) without a full restart.
         from src.core.config import get_config
 
         await get_config(force_reload=True)
@@ -1694,6 +1680,36 @@ class CoaraBase(
         seed = await asyncio.to_thread(build_environment_seed_messages, self.workspace_dir)
         self.message_history.extend(seed)
         await asyncio.to_thread(self.persist_session_to_disk)
+
+        # 录像带：上下文模块清单落带（会话首帧；record_view_frame 失败静默）
+        try:
+            from src.coara.injections.context_modules import order_as_dicts
+            from src.core.config import config_manager
+            from src.ui.view_recorder import record_view_frame
+
+            modules = [m for m in order_as_dicts() if m.get("enabled") and not m.get("sentinel")]
+            module_names = "、".join(str(m.get("label") or m.get("id")) for m in modules)
+            record_view_frame(
+                {
+                    "type": "context_module",
+                    "workspace_dir": str(self.workspace_dir),
+                    "turn_id": "",
+                    "session_id": self.session_id,
+                    "source": "",
+                    "subject": str(getattr(self, "_session_agent_kind", "") or "") or "root",
+                    "modules": modules,
+                    "text": f"上下文模块 {len(modules)} 项：{module_names}",
+                    # janitor/daily 维护实例：带 desk 让录像带聚成外挂组（不落主带裸行）
+                    **(
+                        {"desk": self.identity.name}
+                        if not self.identity.user_facing and self.identity.name in ("janitor", "daily")
+                        else {}
+                    ),
+                },
+                coara_home=config_manager.config.coara_home if config_manager._config else None,
+            )
+        except Exception:
+            pass
         self._emit_trace(
             "session_started",
             "New session started",
@@ -1746,18 +1762,14 @@ class CoaraBase(
         # Clear buffered continuation inputs so done-callbacks from cancelled delegates above don't inject stale
         # messages into the next turn.
         self._continuation_inputs.clear()
-        # Turn-scoped flags/debug scratch must not leak across sessions.
+        # Turn-scoped flags must not leak across sessions.
         self._inside_turn = False
         self._active_turn_source = ""
-        self._llm_debug_turn_meta = None
-        self._llm_debug_user_input = ""
         self._streamed_assistant_chars = 0
         self._final_deliver_message = None
         self._todo_park_message = None
         self._plan_turn_close_called = False
         self._pending_llm_switch = None
-        self._session_llm_call_count = 0
-        self._session_tool_call_count = 0
         self._invalidate_prompt_cache()
 
     def is_flow_subject(self) -> bool:

@@ -1,0 +1,12 @@
+# 用量模块（用量看板 + 用量助手）
+title: 用量
+icon: BarChartOutlined
+route: /usage
+workspace_relation: filterable
+order: 60
+agentic:
+  enabled: true
+  persona_agent: usage-assistant
+  role: 用量助手
+  expertise_areas: [usage analytics, cost, model distribution]
+  subject: usage

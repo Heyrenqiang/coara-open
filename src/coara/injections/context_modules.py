@@ -454,7 +454,7 @@ def preview_context_stack(
     system_dir: Path | None = None,
     include_git: bool = False,
 ) -> list[dict[str, Any]]:
-    """Devtools preview: ordered segments with presence / wrap tag."""
+    """轨迹视图 preview: ordered segments with presence / wrap tag."""
     # 传 system_dir：不传会回落到环境变量/默认位置推导的目录，预览读到的开关与
     # 顺序可能不是你保存的那一份（与实际注入不一致）。
     slots = order if order is not None else load_module_order(system_dir=system_dir)

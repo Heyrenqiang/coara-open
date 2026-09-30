@@ -110,12 +110,6 @@ def decorate_token_totals(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def _default_coara_home() -> str | None:
-    cfg = getattr(config_manager, "_config", None)
-    home = getattr(cfg, "coara_home", None) if cfg else None
-    return str(home) if home else None
-
-
 def _names_from_available(provider_name: str, available: list[Any], into: dict[str, str]) -> None:
     for entry in available:
         if not isinstance(entry, dict):
@@ -127,26 +121,19 @@ def _names_from_available(provider_name: str, available: list[Any], into: dict[s
 
 
 def _names_from_providers_yaml(path: Path, into: dict[str, str]) -> None:
-    try:
-        import yaml
+    from src.runtime.usage_pricing import _available_model_entries, _load_providers_yaml
 
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return
-    providers = data.get("providers")
-    if not isinstance(providers, dict):
-        return
-    for provider_name, cfg in providers.items():
-        if not isinstance(cfg, dict):
-            continue
-        available = ((cfg.get("models") or {}) if isinstance(cfg.get("models"), dict) else {}).get("available")
-        if isinstance(available, list):
+    for provider_name, cfg in _load_providers_yaml(path).items():
+        available = _available_model_entries(cfg)
+        if available is not None:
             _names_from_available(str(provider_name), available, into)
 
 
 def load_model_display_map(coara_home: Path | str | None = None) -> dict[str, str]:
     """读目录正式名：``provider/model`` → ``available[].name``。只供页面贴标签。"""
     result: dict[str, str] = {}
+    from src.runtime.usage_pricing import _available_model_entries, _default_coara_home
+
     if getattr(config_manager, "_config", None) is not None:
         try:
             provider_names = config_manager.list_providers()
@@ -157,8 +144,8 @@ def load_model_display_map(coara_home: Path | str | None = None) -> dict[str, st
                 cfg = config_manager.get_provider(provider_name)
             except Exception:
                 continue
-            available = (cfg.models or {}).get("available")
-            if isinstance(available, list):
+            available = _available_model_entries(cfg)
+            if available is not None:
                 _names_from_available(str(provider_name), available, result)
         if result:
             return result

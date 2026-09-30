@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.coara.background_agent import BackgroundAgentManager
-from src.coara.base import CoaraBase
+from src.coara.base import CoaraBase, _track_fire_and_forget
 from src.coara.builtin_agents import (
     BUILTIN_SUBAGENTS,
     CLI_SILENT_SUBAGENT_TYPES,
@@ -1821,7 +1821,7 @@ class DelegateToolInvocation(ToolInvocation):
         try:
             outcome = registry.deliver("matrix", sess_id, frame, channel_id="")
             if asyncio.iscoroutine(outcome.value) or asyncio.isfuture(outcome.value):
-                asyncio.ensure_future(outcome.value)
+                _track_fire_and_forget(root or parent, outcome.value, what="deliver matrix delegate brief")
         except Exception:  # noqa: BLE001 — 指令投递失败不影响派发
             logger.debug("push matrix delegate brief failed", exc_info=True)
 
@@ -1905,6 +1905,9 @@ class DelegateToolInvocation(ToolInvocation):
             "tool_call_id": str(getattr(self, "tool_call_id", "") or ""),
             "parent_tool_call_id": str(getattr(self, "tool_call_id", "") or ""),
             "coara_id": str(getattr(getattr(subagent, "identity", None), "coara_id", "") or ""),
+            "subagent_id": str(getattr(subagent, "_delegate_subagent_id", "") or ""),
+            # 相对折叠根的过程深度（与工具帧同尺：直接子=1）
+            **({"depth": int(subagent.delegate_depth)} if int(getattr(subagent, "delegate_depth", 0) or 0) > 0 else {}),
             "session_id": session_id,
             "workspace_dir": str(getattr(parent, "workspace_dir", "") or ""),
         }
@@ -1913,7 +1916,7 @@ class DelegateToolInvocation(ToolInvocation):
         try:
             outcome = registry.deliver(source, session_id, frame, channel_id=channel_id)
             if asyncio.iscoroutine(outcome.value) or asyncio.isfuture(outcome.value):
-                asyncio.ensure_future(outcome.value)
+                _track_fire_and_forget(root or parent, outcome.value, what="deliver subagent result")
             if not outcome.hit:
                 self._persist_subagent_result_view(subagent, body)
         except Exception:  # noqa: BLE001 — 展示层失败不影响子智能体结果交付
@@ -1937,7 +1940,9 @@ class DelegateToolInvocation(ToolInvocation):
                 "parent_tool_call_id": str(getattr(self, "tool_call_id", "") or ""),
             }
             envelope = f"[COARA_SUBAGENT]{_json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
-            asyncio.ensure_future(push_matrix_text(room_id=room_id, body=envelope))
+            parent = self._parent
+            root = getattr(parent, "_root_ref", None) if parent is not None else None
+            _track_fire_and_forget(root or parent, push_matrix_text(room_id=room_id, body=envelope), what="push matrix subagent result")
         except Exception:  # noqa: BLE001 — 兜底失败只记日志，不阻断结果交付
             logger.warning("matrix subagent result fallback push failed", exc_info=True)
 

@@ -28,6 +28,13 @@ _INJECT_FULL_MAX = 100_000
 DEFAULT_BACKGROUND_TIMEOUT_SECONDS = 2 * 3600
 TASK_ARTIFACT_RETENTION_DAYS = 14
 
+# 兜底巡检：监控协程（_wrapped）卡死后，磁盘记录永远 running、完成通知
+# 永不发出（bash-ede88b97 事故形态——内核重启清空内存任务、子进程跑完，
+# finally 随协程销毁不再执行）。巡检对「子进程 returncode 已落定但监控
+# 协程仍未 done」的任务强制 cancel，逼其走 finally 收官落终态 + 发完成事件
+GHOST_TASK_GRACE_SECONDS = 120.0
+_GHOST_PATROL_INTERVAL_SECONDS = 30.0
+
 
 def resolve_background_task_timeout() -> float | None:
     """Default timeout (seconds) for background bash tasks; 0 or negative disables the fallback."""
@@ -62,6 +69,8 @@ class BashBackgroundRunner:
     _cancel_requested: set[str]
     # Cap total records to prevent unbounded growth in long-running sessions.
     _MAX_RECORDS = 500
+    # 幽灵任务巡检协程（按事件循环惰性拉起，实例属性在 __new__ 中不初始化）
+    _ghost_patrol: asyncio.Task | None = None
 
     def __new__(cls) -> BashBackgroundRunner:
         if cls._instance is None:
@@ -102,7 +111,14 @@ class BashBackgroundRunner:
     def _prune_terminal_task_artifacts(store: TaskStore, workspace_dir: Path) -> int:
         """Remove old output directories only for persisted terminal bash tasks."""
         cutoff = datetime.now().astimezone() - timedelta(days=TASK_ARTIFACT_RETENTION_DAYS)
+        # 全局 home 下多空间共用一个 TaskStore：task_root 是「当前空间」的产物根，
+        # 只清本空间的记录（record.workspace_dir 打戳于创建时刻）；跨空间误删曾把
+        # 空间 B 的产物在 A 启动任务时清掉（09-28 审计 P1）。
         task_root = (workspace_dir / ".coara" / "tasks").resolve()
+        try:
+            current_ws = os.path.normcase(str(workspace_dir.resolve()))
+        except OSError:
+            current_ws = os.path.normcase(str(workspace_dir))
         removed = 0
         terminal = {
             TaskStatus.COMPLETED.value,
@@ -119,13 +135,27 @@ class BashBackgroundRunner:
             ):
                 continue
             try:
+                rec_ws = str(record.workspace_dir or "").strip()
+                if rec_ws:
+                    try:
+                        rec_ws_cmp = os.path.normcase(str(Path(rec_ws).resolve()))
+                    except OSError:
+                        rec_ws_cmp = os.path.normcase(rec_ws)
+                    if rec_ws_cmp != current_ws:
+                        continue
                 completed = datetime.fromisoformat(record.completed_at)
                 if completed.tzinfo is None:
                     completed = completed.astimezone()
                 task_dir = Path(record.output_path).resolve().parent
                 if completed > cutoff or task_dir.parent != task_root or not task_dir.name.startswith("bash-"):
                     continue
+                if (task_dir / "watch_meta.json").exists():
+                    # watch 任务的 output.log / watch_meta.json 是命中审计的唯一
+                    # 证据，不受 14 天产物清理约束（09-28 审计 P1）
+                    continue
                 shutil.rmtree(task_dir)
+                # 产物已删：清掉记录上的 output_path，消除指向已删路径的悬空
+                store.update(record.task_id, output_path=None)
                 removed += 1
             except FileNotFoundError:
                 # 目录已被其它清理路径移除（幂等竞态）：目标已达成，静默跳过
@@ -211,6 +241,10 @@ class BashBackgroundRunner:
 
         self._tasks[task_id] = None
 
+        # 幽灵巡检的进程引用盒：spawn 完成后 _wrapped 回填，巡检据此判断
+        # 「子进程已退但监控协程未收官」的卡死形态（box 可随协程一起取消）
+        process_ref: list[asyncio.subprocess.Process | None] = [_process]
+
         exec_cwd = cwd or str(workspace_dir)
         direct_argv = tuple(str(a) for a in argv) if argv else ()
 
@@ -246,6 +280,7 @@ class BashBackgroundRunner:
                         args = (shell_path, "-c", command)
 
                     process = await asyncio.create_subprocess_exec(*args, **spawn_kwargs)
+                process_ref[0] = process
                 store.update(task_id, pid=process.pid)
 
                 # （任务滞留「状态待对账」）。宽限 10s 后强制关闭本地管道端收官。
@@ -374,6 +409,8 @@ class BashBackgroundRunner:
 
         task = asyncio.create_task(_wrapped(), name=task_id)
         self._tasks[task_id] = task
+        task._coara_process_ref = process_ref  # type: ignore[attr-defined]
+        self._ensure_ghost_patrol()
         if task_id in self._cancel_requested:
             self._cancel_requested.discard(task_id)
             task.cancel()
@@ -529,6 +566,60 @@ class BashBackgroundRunner:
         if record.exit_code is not None and record.exit_code != 0:
             return "failed"
         return "completed"
+
+    def _ensure_ghost_patrol(self) -> None:
+        """按需拉起幽灵任务巡检协程（当前循环单例，跑空自止）。"""
+        patrol = self.__dict__.get("_ghost_patrol")
+        if patrol is not None and not patrol.done():
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._ghost_patrol = asyncio.create_task(self._ghost_patrol_loop(), name="bash-ghost-patrol")
+
+    async def _ghost_patrol_loop(self) -> None:
+        # 至少跑一轮再按需续跑——_create_task 的协程可能尚未拿循环就被巡检
+        try:
+            while True:
+                await asyncio.sleep(_GHOST_PATROL_INTERVAL_SECONDS)
+                pending = 0
+                now = asyncio.get_running_loop().time()
+                for task_id, task in list(self._tasks.items()):
+                    if task is None or task.done():
+                        continue
+                    pending += 1
+                    box = getattr(task, "_coara_process_ref", None)
+                    process = box[0] if box else None
+                    if process is None or process.returncode is None:
+                        continue
+                    settled_at = getattr(task, "_coara_rc_settled_at", None)
+                    if settled_at is None:
+                        task._coara_rc_settled_at = now  # type: ignore[attr-defined]
+                        continue
+                    if now - settled_at < GHOST_TASK_GRACE_SECONDS:
+                        continue
+                    if getattr(task, "_coara_ghost_cancelled", False):
+                        # 已取消过一次：二次 cancel 会打断正在跑的 finally 收尾
+                        # （落终态/发完成事件被截断，幽灵反而坐实），等它自己收官
+                        continue
+                    # 子进程已退出超过宽限期，监控协程仍未收官——典型挂点是
+                    # Windows 孙进程握管导致 process.wait() 被管道 EOF 吊死；
+                    # _reap_orphaned_pipes 的 transport.close() 在 Proactor 上
+                    # 不可靠地唤醒 wait()。硬取消逼其走 finally 落终态发事件，
+                    # 否则磁盘记录永 running、完成通知永不发出、web 徽标永转
+                    logger.warning(
+                        f"Ghost background task [{task_id}]: subprocess exited "
+                        f"(rc={process.returncode}) but monitor stuck for {now - settled_at:.0f}s; force-cancelling"
+                    )
+                    task._coara_ghost_cancelled = True  # type: ignore[attr-defined]
+                    task.cancel()
+                if not pending:
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — 巡检失败绝不能炸事件循环
+            logger.warning(f"Ghost task patrol failed: {exc}")
 
     @staticmethod
     def _has_error(record: TaskRecord) -> bool:

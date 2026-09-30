@@ -7,7 +7,6 @@ import contextlib
 from pathlib import Path
 from typing import Any
 
-import yaml
 from rich.console import Console
 
 from src.cli.display_controller import CliDisplayController
@@ -43,22 +42,10 @@ def _drain_ctrl_messages(queue: asyncio.Queue[Any]) -> None:
 
 def _read_local_cli_theme_config(workspace: Path) -> dict[str, Any]:
     """CLI 主题读取本地配置（``cli.theme`` 是客户端渲染设置，不是内核逻辑）"""
-    candidates: list[Path] = []
-    with contextlib.suppress(Exception):
-        from src.core.coara_home import resolve_bootstrap_coara_home, user_dir_for_home
+    from src.ui.web_link import iter_local_user_config_yaml
 
-        bootstrap = resolve_bootstrap_coara_home()
-        if bootstrap is not None:
-            candidates.append(user_dir_for_home(bootstrap) / "config.yaml")
-    candidates.append(workspace / ".coara" / "users" / "default" / "config.yaml")
-    for path in candidates:
-        try:
-            if not path.is_file():
-                continue
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError):
-            continue
-        if isinstance(data, dict) and isinstance(data.get("cli"), dict):
+    for data in iter_local_user_config_yaml(workspace):
+        if isinstance(data.get("cli"), dict):
             return {"cli": data["cli"]}
     return {}
 
@@ -180,8 +167,9 @@ async def run_attached_chat_session(root: Any, *, workspace: Path, console: Cons
                     text = f"{text}\n"
                 visible = _visible_chunk(text)
                 if visible.strip():
+                    is_error = bool(frame.get("is_error")) or frame.get("ok") is False
                     background_spinner.ensure_streaming()
-                    background_spinner.append_streaming_chunk(visible)
+                    background_spinner.append_streaming_chunk(visible, is_error=is_error)
         elif frame_type == "diff":
             display.queue_diff_frame(frame)
         elif frame_type in ("turn_end", "chat_end"):
@@ -246,12 +234,6 @@ async def run_attached_chat_session(root: Any, *, workspace: Path, console: Cons
     _subscriptions.extend(display.wire(root.event_bus))
     # 召回后 CLI 是平等 attach 客户端，各端完全独立零同步——web/手机端的对话
 
-    # 就绪行：fg._tool_manager/_skills 是内核内部结构，客户端读 attached 快照
-    # 镜像的计数（RootShim identity.tools_count/skills_count）。
-    console.print(
-        f"[green]就绪[/green] [bold]{root.identity.name}[/bold] · "
-        f"Tools {root.identity.tools_count} · Skills {root.identity.skills_count}"
-    )
     console.print("[dim]输入 /help 看命令，或直接问我任何事。[/dim]")
 
     input_queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -476,6 +458,8 @@ async def run_attached_chat_session(root: Any, *, workspace: Path, console: Cons
                                 continue
 
                             chunks: list[str] = []
+                            from src.cli.streaming import coerce_stream_piece
+
                             async for chunk in _collect_chat_turn_streaming(
                                 root,
                                 turn_text,
@@ -484,13 +468,16 @@ async def run_attached_chat_session(root: Any, *, workspace: Path, console: Cons
                                 on_detached_chunk=_on_detached_chunk,
                                 on_detached_drain_complete=_close_detached_stream,
                             ):
-                                visible = _visible_chunk(chunk)
+                                text, is_error = coerce_stream_piece(chunk)
+                                visible = _visible_chunk(text)
                                 if not visible:
                                     # delegate 自己的 ✓ 行：摘要行取代它，不上屏
                                     # （内容已进折叠块）。
                                     continue
                                 chunks.append(visible)
-                                background_spinner.append_streaming_chunk(visible)
+                                background_spinner.append_streaming_chunk(
+                                    visible, is_error=is_error if is_error else None
+                                )
                                 if visible.lstrip().startswith(("•", "∙", "·")):
                                     display.flush_pending_fg_diffs()
 

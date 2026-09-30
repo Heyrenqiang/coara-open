@@ -37,6 +37,29 @@ def summarize_web_search_arguments(arguments: dict[str, Any], *, max_len: int | 
     return _truncate(query, max_len) if query else None
 
 
+def strip_tool_error_suffix(label: str) -> str:
+    """人眼工具行不展示错误正文；剥掉历史残留的 `` 报错: …`` 后缀。
+
+    失败态靠 ``is_error`` 标红；模型通道仍读 ToolResult.content。
+    """
+    text = str(label or "")
+    marker = " 报错:"
+    idx = text.find(marker)
+    if idx < 0:
+        return text
+    return text[:idx].rstrip()
+
+
+# 历史兼容：旧 attach 曾在 • 后嵌此字符标失败；现行靠帧字段 is_error。写出前仍剥掉。
+TOOL_ERROR_INVISIBLE = "\u2060"
+
+
+def format_tool_line_bullet(*, is_error: bool = False) -> str:
+    """工具行行首一律 •。失败着色由端上 ``is_error`` 决定（不用 × / 隐式字符）。"""
+    _ = is_error
+    return "•"
+
+
 def format_tool_call_label(tool_name: str, arguments: Any, *, max_len: int | None = 30) -> str:
     """Single-line tool label for CLI scrollback / spinner / Matrix progress text.
 

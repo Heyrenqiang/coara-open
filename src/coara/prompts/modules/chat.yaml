@@ -1,0 +1,7 @@
+# 内置模块声明（《空间能力系统》槽位三）：从 module_registry.py 代码字面量搬出。
+# 字段与 ModuleSpec/AgenticSpec 一一对应；id 取文件名。
+title: 对话
+icon: MessageOutlined
+route: /chat
+workspace_relation: scoped
+order: 0

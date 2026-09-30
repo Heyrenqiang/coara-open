@@ -75,7 +75,14 @@ def cleanup_legacy_records_workspace(root: Any) -> None:
 
 
 def ensure_system_workspace_entries(root: Any) -> None:
-    """登记配置/消息两个 internal 系统空间（幂等）。"""
+    """登记配置/消息两个 internal 系统空间（幂等）。
+
+    空间身份单真源=space.yaml（09-29 裁决不做双写）：出厂把身份落进
+    占位目录的 space.yaml，注册表只留 kind/view/summary/persona 等
+    登记态字段，身份字段（content_type/storefront/home_view）不再写。
+    """
+    from src.workspace.identity import write_space_identity
+
     wm = getattr(root, "workspace_manager", None)
     if wm is None:
         return
@@ -84,14 +91,17 @@ def ensure_system_workspace_entries(root: Any) -> None:
         if path is None:
             return
         path.mkdir(parents=True, exist_ok=True)
+        write_space_identity(
+            path,
+            space_type=content_type,
+            storefront=storefront,
+            home_view=home_view,
+        )
         entry = wm.registry.ensure_internal_workspace(
             path,
             name=name,
             view=ViewCapability.WEB_ONLY,
             summary=summary,
-            content_type=content_type,
-            storefront=storefront,
-            home_view=home_view,
             persona=persona,
         )
         logger.info(f"Registered system workspace {name} ({entry.id}) -> {path}")
@@ -129,7 +139,12 @@ def _migrate_legacy_internal_flow(root: Any) -> None:
 
 
 def ensure_creator_workflow_entry(root: Any) -> None:
-    """登记工作流创作者空间（幂等）：用户空间区的 NORMAL 条目 + 创作者元数据"""
+    """登记工作流创作者空间（幂等）：用户空间区的 NORMAL 条目 + 创作者元数据
+
+    空间身份单真源=space.yaml：创作者身份落目录的 space.yaml，注册表
+    条目不再持 content_type/storefront/home_view 字段。
+    """
+    from src.workspace.identity import write_space_identity
     from src.workspace.types import WorkspaceKind
 
     wm = getattr(root, "workspace_manager", None)
@@ -141,6 +156,12 @@ def ensure_creator_workflow_entry(root: Any) -> None:
     if path is None:
         return
     path.mkdir(parents=True, exist_ok=True)
+    write_space_identity(
+        path,
+        space_type=content_type,
+        storefront=storefront,
+        home_view=home_view,
+    )
     resolved = path.expanduser().resolve()
 
     # 复用同路径条目则原地对齐创作者字段；否则新建 NORMAL 条目
@@ -158,9 +179,6 @@ def ensure_creator_workflow_entry(root: Any) -> None:
             existing.kind = WorkspaceKind.NORMAL
             changed = True
         for field, value in (
-            ("content_type", content_type),
-            ("storefront", storefront),
-            ("home_view", home_view),
             ("persona", persona),
             ("view", ViewCapability.WEB_ONLY),
         ):
@@ -176,13 +194,7 @@ def ensure_creator_workflow_entry(root: Any) -> None:
         return
 
     entry = wm.registry.ensure_workspace(path, name=name, summary=summary)
-    for field, value in (
-        ("content_type", content_type),
-        ("storefront", storefront),
-        ("home_view", home_view),
-        ("persona", persona),
-        ("view", ViewCapability.WEB_ONLY),
-    ):
-        setattr(entry, field, value)
+    entry.persona = persona
+    entry.view = ViewCapability.WEB_ONLY
     wm.registry.save()
     logger.info(f"Registered creator workflow workspace {entry.name} ({entry.id}) -> {resolved}")

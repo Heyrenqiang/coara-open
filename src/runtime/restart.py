@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from src.core.json_store import write_json_atomic
 from src.core.logger import logger
 
 # 进程内重启意图标志与停止事件：/restart 处理器与 _run_frontends 同进程。
@@ -94,8 +95,7 @@ def _write_restart_record(home: Path | None, *, reason: str, requested_by: str, 
             "session_id": session_id,
         }
         path = home / "restart_last.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json_atomic(path, record)
     except Exception:
         logger.debug("restart record write skipped", exc_info=True)
 
@@ -115,10 +115,19 @@ def consume_restart_divider(home: Path | None) -> dict[str, str] | None:
         return None
     if not isinstance(raw, dict) or raw.get("divider_done"):
         return None
+    # 时效闸：/restart 后新内核本该数秒内就绪；超窗才消费说明那次重启实际失败
+    # （respawn 崩退/被叫停），本次是冷启动，不该画「已重启」线。
+    try:
+        requested_at = float(raw.get("requested_at") or 0)
+    except (TypeError, ValueError):
+        requested_at = 0.0
+    expired = requested_at <= 0 or (time.time() - requested_at) > 300
     try:
         raw["divider_done"] = True
-        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json_atomic(path, raw)
     except Exception:
+        return None
+    if expired:
         return None
     return {
         "workspace_dir": str(raw.get("workspace_dir") or ""),

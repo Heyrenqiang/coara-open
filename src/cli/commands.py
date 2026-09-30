@@ -65,12 +65,11 @@ def _render_result(result: CommandResult) -> None:
         except Exception as exc:
             logger.debug(f"打开浏览器 WebUI 失败：{exc}")
     # 静默命令（只携带 open_url/navigate 等跳转意图、无正文）：打开页面后不再打印空行
-    if not result.output.strip():
-        return
-
-    # 压缩成功：画居中「已压缩」分割线（09-26 口径：替代原一行回执）
+    # 压缩成功例外：空正文 + data.compressed → 画「已压缩」分割线（须在空正文早退之前）
     if data.get("compressed"):
         console.rule("已压缩", style="dim")
+        return
+    if not result.output.strip():
         return
 
     action = result.action

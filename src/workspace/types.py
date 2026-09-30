@@ -54,10 +54,8 @@ class WorkspaceEntry(BaseModel):
     # 视图能力：端能否接入此空间。缺省 all（普通空间三端可接）；工作流/配置等
     # 系统空间声明 web_only，仅 web 渲染其专属展示物。daily 这类会话型系统空间取 all。
     view: ViewCapability = ViewCapability.ALL
-    # 三者全空 = 对话主页（v8 不写 space.yaml 也成立）。
-    content_type: str | None = None
-    storefront: str | None = None
-    home_view: str | None = None
+    # 空间身份（type/storefront/home_view）与能力声明（tools/skills）的单真源是
+    # 目录里的 space.yaml（09-29 裁决，不做双写），注册表不持这些字段。
     # 可绑专属 agent（如记录空间的 persona=daily——条目名是展示名「记录」，对话主体
     persona: str | None = None
     tags: list[str] = Field(default_factory=list)

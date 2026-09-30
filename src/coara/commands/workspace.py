@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from src.coara.commands.registry import CommandArgs, register
 from src.coara.commands.types import CommandResult
+from src.workspace.identity import space_home_view
 
 if TYPE_CHECKING:
     from src.coara.root import RootCoara
@@ -141,10 +142,9 @@ def _build_workspace_list_result(root: RootCoara) -> CommandResult:
                 "path": str(entry.path),
                 "mode": entry.mode.value,
                 "active": is_active,
-                # 空间身份随列表下发：手机端抽屉按 kind/home_view 把空间分到
-                # 「用户空间 / 系统空间」两组（与 web navRegistry 同一判据）。
+                # 单真源=space.yaml，注册表不持 home_view 字段。
                 "kind": entry.kind.value,
-                "home_view": entry.home_view or "",
+                "home_view": space_home_view(entry.resolved_path()),
                 # 视图能力随列表下发：web_only 的空间（工作流画布等）matrix 端
                 # 渲染不了，下发侧据此过滤（end_allowed 同一把尺，listing 对齐切换）。
                 "view": entry.view.value,

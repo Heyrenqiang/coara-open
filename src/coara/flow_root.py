@@ -5,9 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.core.events import TraceEvent
 from src.core.logger import logger
-from src.core.types import CoaraPersona
 
 if TYPE_CHECKING:
     from src.coara.root import RootCoara
@@ -17,22 +15,6 @@ _FLOW_ORCHESTRATOR_PREFIX = (
     "工作流页面实时编排工具：每次 spawn / update / edge 立即在右侧画布渲染节点与连线，"
     "建图过程实时可见，图成形后随时可 run 点火运行。\n\n"
 )
-
-_FALLBACK_PROMPT = (
-    "你是 WebUI 工作流页面专属的构建助手（FlowRoot），唯一目标是把 agentic 工作流建出来、调通、固化。中文交流。"
-)
-
-
-def _load_flow_root_prompt() -> tuple[str, str, Any | None]:
-    """从 AgentRegistry 加载 flow-root 提示词（与 root 同目录配对 yaml+md）。"""
-    from src.prompt.agent_registry import AgentRegistry
-
-    registry = AgentRegistry()
-    defn = registry.get_agent("flow-root")
-    if defn is None:
-        logger.warning("flow-root agent prompt missing; using fallback")
-        return "flow-root", _FALLBACK_PROMPT, None
-    return defn.name, defn.system_prompt_template, defn.yaml_config
 
 
 def bind_flow_workspace(coara: Any, workspace_dir: Path | str) -> None:
@@ -131,35 +113,20 @@ def switch_flow_draft_session(coara: Any, draft_id: str, *, coara_home: Path | N
 
 
 async def create_flow_root(root_coara: RootCoara) -> Any:
-    """为 WebUI 工作流页面创建全局 FlowRoot 会话主体（CoaraBase）"""
-    from src.coara.base import CoaraBase
-    from src.coara.runtime_tools import register_runtime_tools
+    """为 WebUI 工作流页面创建全局 FlowRoot 会话主体（CoaraBase）。
 
-    fg = root_coara.foreground_coara
-    workspace_dir = Path(fg.workspace_dir).expanduser().resolve()
-    coara_home = None
-    wm = getattr(root_coara, "workspace_manager", None)
-    if wm is not None and getattr(wm, "coara_home", None) is not None:
-        coara_home = wm.coara_home
+    公共装配段复用 module_root.build_module_subject；flow 专属段：
+    orchestrator 常驻、录像带按最终 home 重解、会话冷恢复。
+    """
+    from src.coara.module_root import build_module_subject
 
-    agent_name, prompt, yaml_config = _load_flow_root_prompt()
-    persona = CoaraPersona(
-        name=agent_name,
+    coara = await build_module_subject(
+        root_coara,
+        name="flow-root",
+        agent_name="flow-root",
         role="工作流构建教练",
         expertise_areas=["workflow orchestration", "debugging", "automation"],
-        system_prompt_template=prompt,
-        yaml_config=yaml_config,
-    )
-    coara = CoaraBase(
-        name="flow-root",
-        persona=persona,
-        workspace_dir=workspace_dir,
-        provider=fg.provider,
-        provider_name=fg.provider_name,
-        model=fg.model_name,
-        user_facing=True,
-        is_owner_context=True,
-        max_tool_iterations=600,
+        subject="flow",
         session_agent_kind="flow",
     )
     # 主体标记：flow 图事件（flow_graph_changed）据此路由到 WebUI 工作台画布
@@ -167,21 +134,9 @@ async def create_flow_root(root_coara: RootCoara) -> Any:
     # Root 回链：草案概况注入经 root._web_server.active_workflow_draft_id
     # 拿当前打开的草案（用户盯着的那块画布）
     coara._root_coara = root_coara  # type: ignore[attr-defined]
-    # 共享 workspace_manager（VFS resolver）
-    coara.workspace_manager = root_coara.workspace_manager
     # workspace_manager 在建构之后才挂上：录像带按最终 home 重解一次
     # （工作流系统带与工作空间无关，生产上同一 home 是原地重绑）
     coara._rebuild_session_log()
-
-    # 进程级无状态工具（web_fetch / task / …）
-    from src.tools import register_builtin_tools
-    from src.tools.registry import tool_registry
-
-    register_builtin_tools()
-    coara.register_tools(tool_registry.list_all())
-
-    # runtime 工具（文件 / shell / todo / delegate 等）
-    register_runtime_tools(coara)
 
     # orchestrator 常驻：同一 OrchestratorTool，实例级覆盖挂起标记与描述前缀
     from src.tools.builtin.orchestrator.orchestrator import _ORCHESTRATOR_DESCRIPTION, OrchestratorTool
@@ -191,33 +146,12 @@ async def create_flow_root(root_coara: RootCoara) -> Any:
     tool.description = _FLOW_ORCHESTRATOR_PREFIX + _ORCHESTRATOR_DESCRIPTION
     coara.register_tool(tool, replace=True)
 
-    try:
-        from src.tools.builtin.integration.tool import ToolGatewayTool
-
-        coara.register_tool(ToolGatewayTool(parent_coara=coara), replace=True)
-    except Exception as exc:
-        logger.warning(f"Tool gateway registration failed for flow-root: {exc}")
-
-    root_bus = root_coara.event_bus
-
-    def _flow_trace_sink(event: TraceEvent) -> None:
-        tagged = dict(event.payload or {})
-        tagged["subject"] = "flow"
-        root_bus.publish(
-            TraceEvent(
-                coara_id=event.coara_id,
-                coara_name=event.coara_name,
-                event_type=event.event_type,
-                message=event.message,
-                level=event.level,
-                timestamp=event.timestamp,
-                payload=tagged,
-            )
-        )
-
-    coara.set_trace_sink(_flow_trace_sink)
-
     # 冷启动恢复：同工作空间录像带中 agent_kind=flow 的会话
+    coara_home = None
+    wm = getattr(root_coara, "workspace_manager", None)
+    if wm is not None and getattr(wm, "coara_home", None) is not None:
+        coara_home = wm.coara_home
+    workspace_dir = Path(coara.workspace_dir).expanduser().resolve()
     try:
         _restore_flow_session(coara, workspace_dir, coara_home=coara_home)
     except Exception:

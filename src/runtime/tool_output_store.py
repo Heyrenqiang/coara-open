@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -20,6 +21,9 @@ from src.runtime.spill_policy import SpillKeep, build_spill_preview, resolve_spi
 
 _PRUNE_EVERY_N_WRITES = 10
 _write_counter = 0
+
+# ref 只认 hex 短串（写入端 uuid4().hex[:12]；旧带 8 位兼容）——与 dashboard 侧同一口径
+_REF_PATTERN = re.compile(r"^[a-f0-9]{8,12}$")
 
 
 def _content_byte_len(content: str) -> int:
@@ -352,6 +356,10 @@ class ToolOutputStore:
         )
 
     def load(self, ref: str) -> ToolOutputRecord:
+        # 与 dashboard 同一口径：ref 只认 hex 短串，挡住 ../ 之类的路径穿越
+        #（LLM 传入的 ref 原样透传到这里，模型侧此前无门）。
+        if not _REF_PATTERN.match(ref.strip()):
+            raise FileNotFoundError(f"Tool output ref not found: {ref}")
         path = self._session_dir / f"{ref.strip()}.json"
         if not path.is_file():
             raise FileNotFoundError(f"Tool output ref not found: {ref}")

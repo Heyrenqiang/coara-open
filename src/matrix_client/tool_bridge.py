@@ -10,7 +10,9 @@ TOOL_ENVELOPE_PREFIX = "[COARA_TOOL]"
 
 def build_matrix_tool_message(frame: dict[str, Any]) -> str:
     """把内核的工具帧装配成 ``[COARA_TOOL]{...}`` 消息体；帧无有效工具行时返回空串"""
-    label = str(frame.get("text") or "").strip()
+    from src.coara.display import strip_tool_error_suffix
+
+    label = strip_tool_error_suffix(str(frame.get("text") or "").strip())
     if not label:
         return ""
     payload: dict[str, Any] = {
@@ -28,4 +30,12 @@ def build_matrix_tool_message(frame: dict[str, Any]) -> str:
     duration = frame.get("duration_ms")
     if isinstance(duration, (int, float)) and not payload.get("running"):
         payload["duration_ms"] = int(duration)
+    # 与 Web 折叠过程条目同形：depth / 节点身份（有则带，端上缩进与编排分组）
+    depth = frame.get("depth")
+    if isinstance(depth, int) and depth > 0:
+        payload["depth"] = depth
+    for key in ("subagent_id", "coara_id"):
+        value = str(frame.get(key) or "").strip()
+        if value:
+            payload[key] = value
     return f"{TOOL_ENVELOPE_PREFIX}{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"

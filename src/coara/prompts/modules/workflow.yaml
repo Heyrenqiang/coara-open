@@ -1,0 +1,12 @@
+# 工作流模块（画布 + FlowRoot 构建教练）
+title: 工作流
+icon: ApartmentOutlined
+route: /workflow
+workspace_relation: bindable
+order: 40
+agentic:
+  enabled: true
+  persona_agent: flow-root
+  role: 工作流构建教练
+  expertise_areas: [workflow orchestration, debugging, automation]
+  subject: flow

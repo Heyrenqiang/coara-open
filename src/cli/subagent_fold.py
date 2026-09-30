@@ -7,6 +7,12 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.core.display_rules import (
+    DURATION_MINUTE_SECONDS,
+    DURATION_MS_SECONDS_AT,
+    DURATION_MS_WHOLE_SECONDS_AT,
+)
+
 # 本地保留的折叠块上限（有界环形缓冲）。再多的历史靠录像带回读（二期）。
 DETAIL_CAPACITY = 24
 # 单块条目上限（工具行 + diff 合计）：delegate 可能跑上千次工具，明细必须有界。
@@ -56,13 +62,13 @@ def format_char_count(chars: int) -> str:
 
 
 def format_elapsed_short(seconds: float) -> str:
-    """耗时短读法：``6.2s`` / ``45s`` / ``1m02s``。"""
-    total = max(0.0, float(seconds))
-    if total < 10:
+    """耗时短读法：``6.2s`` / ``45s`` / ``1m02s``（与工具行 ms 读法同档阈值，CLI 无空格紧凑写）。"""
+    total = max(0.0, float(seconds)) * (DURATION_MS_SECONDS_AT / 1000.0)
+    if total < DURATION_MS_WHOLE_SECONDS_AT / DURATION_MS_SECONDS_AT:
         return f"{total:.1f}s"
-    if total < 60:
+    if total < DURATION_MINUTE_SECONDS:
         return f"{int(total)}s"
-    minutes, secs = divmod(int(total), 60)
+    minutes, secs = divmod(int(total), DURATION_MINUTE_SECONDS)
     return f"{minutes}m{secs:02d}s"
 
 

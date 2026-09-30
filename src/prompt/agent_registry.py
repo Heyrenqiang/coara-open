@@ -52,12 +52,25 @@ class AgentRegistry:
         """Scan directories for agent definitions (*.md and *.yaml files).
 
         YAML files take precedence over Markdown files with the same stem.
+        默认三层：工作空间级 .coara/agents/ → 用户级 users/default/agents/ →
+        内置（同名 stem 先扫描者占名，即高优先级覆盖低优先级，与技能三层同语义）。
         """
         if directories is None:
             root = Path(__file__).parent.parent.parent
             directories = [
                 root / "src" / "coara" / "prompts" / "agents",
             ]
+            try:
+                from src.core.coara_home import resolve_coara_home
+
+                home = resolve_coara_home(Path.cwd())
+                directories = [
+                    Path.cwd() / ".coara" / "agents",
+                    home / "users" / "default" / "agents",
+                    *directories,
+                ]
+            except Exception:
+                pass
 
         self._agents.clear()
         count_md = 0

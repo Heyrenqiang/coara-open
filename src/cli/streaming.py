@@ -2,10 +2,28 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from src.cli.scrollback import CliScrollback
+from src.coara.display import TOOL_ERROR_INVISIBLE
 
 # 使其块尾空行能充当后续文本块的块首空行，避免叠加成两个空行。
 _active_block: StreamingBlock | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StreamChunk:
+    """回合流片段；``is_error`` 供工具行标红（attach 帧字段，不靠隐式字符）。"""
+
+    text: str
+    is_error: bool = False
+
+
+def coerce_stream_piece(chunk: str | StreamChunk) -> tuple[str, bool]:
+    """统一 ``process_message`` 产出：正文 str 或带失败位的 StreamChunk。"""
+    if isinstance(chunk, StreamChunk):
+        return chunk.text, bool(chunk.is_error)
+    return str(chunk), False
 
 
 def notify_block_rendered_after_tool_line() -> None:
@@ -44,7 +62,7 @@ class StreamingBlock:
         self._started = False
         # 上一个提交的块类型（工具行组），用于文本↔工具交替时的分隔空行
         self._last_was_tool = False
-        # 当前累积段是否错误行（✗ 开头；决定 _flush_lines 用哪个样式）
+        # 当前累积段是否错误行（决定 _flush_lines 用哪个样式）
         self._tail_is_error = False
         # 当前累积段是否工具行（决定 _flush_lines 用哪个样式）
         self._tail_is_tool = False
@@ -55,21 +73,28 @@ class StreamingBlock:
     def text_style(self) -> str:
         return self._text_style
 
-    # 工具行行首标记：• 为现行；∙/·/✓/✗ 为旧前缀兼容（重放/历史）
+    # 工具行行首标记：• 为现行；∙/·/✓/✗/× 为旧前缀兼容（重放/历史）
     _TOOL_LINE_MARKS = ("•", "∙", "·", "×", "✓", "✗")
 
     @staticmethod
     def _is_tool_line(content: str) -> bool:
-        stripped = content.lstrip()
+        stripped = content.lstrip().lstrip(TOOL_ERROR_INVISIBLE)
         return stripped.startswith(StreamingBlock._TOOL_LINE_MARKS)
 
     @staticmethod
     def _is_error_line(content: str) -> bool:
-        """错误行判据＝executor 统一拼的 ` 报错: ` 后缀（is_error 时才加，单一事实源）"""
+        """历史失败判据：•+隐式标记 / ×/✗ / ` 报错: `。现行优先用 append(is_error=)。"""
         stripped = content.lstrip()
+        if stripped.startswith(f"•{TOOL_ERROR_INVISIBLE}"):
+            return True
         if stripped.startswith(("×", "✗")):
             return True
         return " 报错: " in stripped
+
+    @staticmethod
+    def _display_text(content: str) -> str:
+        """写出前剥掉历史失败隐式标记，屏幕上仍是普通 •。"""
+        return content.replace(TOOL_ERROR_INVISIBLE, "")
 
     def _tail_style(self) -> str:
         if self._tail_is_error:
@@ -78,18 +103,18 @@ class StreamingBlock:
             return self._tool_style
         return self._text_style
 
-    def append(self, content: str) -> None:
+    def append(self, content: str, *, is_error: bool | None = None) -> None:
         if not content:
             return
         # 一块里若正文行与 ✓/✗ 行混在一起，按行切开走交界空行（否则整块被当成
         # 正文，工具行贴在上一句后面、中间没空行）。
         if self._needs_line_split(content):
             head, _, rest = content.partition("\n")
-            self._append_piece(head + "\n")
+            self._append_piece(head + "\n", is_error=is_error)
             if rest:
-                self.append(rest)
+                self.append(rest, is_error=is_error)
             return
-        self._append_piece(content)
+        self._append_piece(content, is_error=is_error)
 
     @classmethod
     def _needs_line_split(cls, content: str) -> bool:
@@ -104,7 +129,7 @@ class StreamingBlock:
         complete, _sep, _tail = content.rpartition("\n")
         return any(line.strip() and cls._is_tool_line(line) for line in complete.split("\n"))
 
-    def _append_piece(self, content: str) -> None:
+    def _append_piece(self, content: str, *, is_error: bool | None = None) -> None:
         if not content:
             return
         if self._is_tool_line(content):
@@ -117,7 +142,7 @@ class StreamingBlock:
                 self._started = True
             self._last_was_tool = True
             self._tail_is_tool = True
-            self._tail_is_error = self._is_error_line(content)
+            self._tail_is_error = bool(is_error) if is_error is not None else self._is_error_line(content)
             # 回显尾行空行已充当本工具行上方空行 标记消费（防残留到后续文本）
             self._text_break_consumed = False
             # 无换行的工具行会一直扣在 _tail，下一条再来就拼成一段——强制成行
@@ -157,12 +182,12 @@ class StreamingBlock:
                 self._tail = hold + self._tail
             to_commit = ready
         if to_commit:
-            CliScrollback.write(to_commit, style=self._tail_style(), end="")
+            CliScrollback.write(self._display_text(to_commit), style=self._tail_style(), end="")
 
     def _commit_tail(self) -> None:
         """提交残余文本（不写块尾空行）。回合结束：含暂扣的完整表，不再 hold。"""
         if self._tail:
-            CliScrollback.write(self._tail, style=self._tail_style())
+            CliScrollback.write(self._display_text(self._tail), style=self._tail_style())
             self._tail = ""
 
     def write_styled_lines(self, lines: list[str]) -> None:

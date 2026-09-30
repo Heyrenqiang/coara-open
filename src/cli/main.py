@@ -412,6 +412,23 @@ async def _run_frontends(ctx: click.Context) -> None:
     if seeded:
         console.print("[dim]已补全缺失配置：" + "、".join(p.name for p in seeded) + "[/dim]")
 
+    # 出厂目录 rebase / 退役清理（幂等）。密钥与工作空间数据不碰。
+    try:
+        from src.core.home_upgrade import upgrade_home_system
+
+        upgrade_report = upgrade_home_system(coara_home)
+        if upgrade_report.providers_written or upgrade_report.retired_providers or upgrade_report.preferences_scrubbed:
+            bits: list[str] = []
+            if upgrade_report.retired_providers:
+                bits.append("已清理退役厂商 " + "、".join(upgrade_report.retired_providers))
+            if upgrade_report.providers_written:
+                bits.append("已按本版出厂目录刷新模型清单")
+            if upgrade_report.preferences_scrubbed:
+                bits.append("已清除指向退役厂商的默认模型绑定")
+            console.print("[dim]" + "；".join(bits) + "[/dim]")
+    except Exception as exc:
+        console.print(f"[yellow]配置目录升级跳过：{exc}[/yellow]")
+
     await config_manager.load()
     ctx.obj["config"] = config_manager.config
     _reconcile_instance_lock_with_config()

@@ -1,0 +1,12 @@
+# 记录模块（记录时间线 + 记录助手）
+title: 记录
+icon: BookOutlined
+route: /records
+workspace_relation: filterable
+order: 50
+agentic:
+  enabled: true
+  persona_agent: records-assistant
+  role: 记录助手
+  expertise_areas: [records search, digest, summary]
+  subject: records

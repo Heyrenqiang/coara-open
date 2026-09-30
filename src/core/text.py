@@ -9,6 +9,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from src.core.display_rules import (
+    DURATION_HOUR_SECONDS,
+    DURATION_MINUTE_SECONDS,
+    DURATION_PART_SEPARATOR,
+)
+
 
 def slice_text_by_lines(content: str, offset: int | None, limit: int | None) -> str:
     """Return a slice of text by 1-based line offset (negative counts from end)."""
@@ -99,11 +105,12 @@ def render_table_as_markdown(table) -> str:
 def format_elapsed(seconds: float) -> str:
     """Format a duration in seconds as a compact human-readable string."""
     total = max(0, int(seconds))
-    if total < 60:
+    sep = DURATION_PART_SEPARATOR
+    if total < DURATION_MINUTE_SECONDS:
         return f"{total}s"
-    if total < 3600:
-        minutes, secs = divmod(total, 60)
-        return f"{minutes}m {secs:02d}s"
-    hours, rem = divmod(total, 3600)
-    minutes, secs = divmod(rem, 60)
-    return f"{hours}h {minutes:02}m {secs:02d}s"
+    if total < DURATION_HOUR_SECONDS:
+        minutes, secs = divmod(total, DURATION_MINUTE_SECONDS)
+        return f"{minutes}m{sep}{secs:02d}s"
+    hours, rem = divmod(total, DURATION_HOUR_SECONDS)
+    minutes, secs = divmod(rem, DURATION_MINUTE_SECONDS)
+    return f"{hours}h{sep}{minutes:02}m{sep}{secs:02d}s"

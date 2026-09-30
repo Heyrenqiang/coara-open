@@ -25,6 +25,7 @@ from src.cli.terminal_width import (
     wrap_to_width,
 )
 from src.cli.workspace_activity import WorkspaceActivityRegistry, workspace_color
+from src.core.display_rules import DURATION_PART_SEPARATOR
 from src.core.logger import logger
 from src.llm.usage import total_prompt_tokens
 
@@ -299,7 +300,7 @@ class BackgroundSpinner:
         now = time.monotonic()
         if self._cached_background_tasks is not None and now - self._cached_background_at < self._background_cache_ttl:
             return self._cached_background_tasks
-        snapshot = snapshot_running_tasks(self._root, origin_end="cli-attached")
+        snapshot = snapshot_running_tasks(self._root, origin_end="cli-attached", require_live=True)
         self._cached_background_tasks = snapshot
         self._cached_background_at = now
         return snapshot
@@ -814,15 +815,18 @@ class BackgroundSpinner:
             CliScrollback.write_markup(line)
         CliScrollback.write("")
 
-    def append_streaming_chunk(self, chunk: str) -> None:
-        """Append a chunk of streaming text."""
+    def append_streaming_chunk(self, chunk: str, *, is_error: bool | None = None) -> None:
+        """Append a chunk of streaming text.
+
+        ``is_error``：工具行失败态（attach 帧字段）；``None`` 时仍靠行内历史标记推断。
+        """
         if not chunk:
             return
         # 自愈：块被 reset/收尾清掉后仍有迟到 chunk 时重开，禁止静默丢正文/工具行
         if self._streaming_block is None:
             self.ensure_streaming()
         if self._streaming_block is not None:
-            self._streaming_block.append(chunk)
+            self._streaming_block.append(chunk, is_error=is_error)
             self._dirty = True
 
     def handle_event(self, event) -> None:
@@ -980,7 +984,7 @@ class BackgroundSpinner:
         width = 0
         now = time.monotonic()
         for row in rows:
-            elapsed = ActivityLiveTracker._format_elapsed(now - row.started_at).replace(" ", "")
+            elapsed = ActivityLiveTracker._format_elapsed(now - row.started_at).replace(DURATION_PART_SEPARATOR, "")
             _bright, dim = workspace_color(row.key)
             tag = f"[{row.name}]"
             rest = f" {elapsed}"
@@ -1120,11 +1124,19 @@ class BackgroundSpinner:
                     status_fragments.append(("class:prompt.thinking", "\n"))
                 elif self._background_tasks_snapshot().count > 0:
                     # 空闲但有后台任务在跑：与 web 端同款——spinner 槽照常画
-                    # 旋转帧 + 「后台 N 项任务运行中」（行常驻占位不跳变）。
-                    bg_count = self._background_tasks_snapshot().count
-                    status_fragments.append(
-                        ("class:prompt.thinking", f"{self._get_frame()} 后台 {bg_count} 项任务运行中\n")
-                    )
+                    # 旋转帧 + 任务名轮播（有 labels 时显示具体任务，否则退回计数）。
+                    snap = self._background_tasks_snapshot()
+                    bg_count = snap.count
+                    labels = self._background_labels(snap)
+                    if labels:
+                        label = labels[int(time.time() / 2.5) % len(labels)]
+                        if bg_count <= 1 or len(labels) <= 1:
+                            bg_text = f"后台 · {label}"
+                        else:
+                            bg_text = f"后台 {bg_count} 项 · {label}"
+                    else:
+                        bg_text = f"后台 {bg_count} 项任务运行中"
+                    status_fragments.append(("class:prompt.thinking", f"{self._get_frame()} {bg_text}\n"))
                 elif status_rows:
                     # 子智能体仍在跑、主回合 Thinking 已关：活动树行本身就是状态
                     pass

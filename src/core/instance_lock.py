@@ -29,7 +29,7 @@ class InstanceLockError(RuntimeError):
         super().__init__(f"已有 coara 实例在运行（PID {pid}），请先退出它。锁文件: {lock_path}")
 
 
-def _pid_alive(pid: int) -> bool:
+def pid_alive(pid: int) -> bool:
     """探测 PID 是否仍存活。
 
     Windows 上禁止 ``os.kill(pid, 0)``：signal 0 即 ``CTRL_C_EVENT``，
@@ -67,6 +67,9 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+_pid_alive = pid_alive  # 兼容旧私有名引用
 
 
 def _read_lock_pid(lock_path: Path) -> int | None:

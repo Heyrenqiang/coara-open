@@ -595,18 +595,21 @@ async def _run_matrix_client_inner(
         """图片消息：回调入口直接下载组块进批量聚合器，不占调度锁、免 BUSY_DROP。"""
         from src.matrix_client.ingress_helpers import (
             capture_matrix_turn_binding,
-            guest_room_allowed,
             matrix_view_session_key,
             resolve_matrix_trust_level,
             should_skip_matrix_self_event,
+            untrusted_ingress_allowed,
         )
         from src.matrix_client.media_inbound import build_media_batch_handler
 
         if should_skip_matrix_self_event(sender=event.sender, bot_user_id=config["user"]):
             return
         trust_level = resolve_matrix_trust_level(event.sender, cli_owner=ingress_host.cli_owner)
-        if trust_level == "untrusted" and not guest_room_allowed(room.room_id):
-            return
+        if trust_level == "untrusted":
+            _bind_coara, bind_ws_id = capture_matrix_turn_binding(root)
+            allowed, _reason = untrusted_ingress_allowed(root, room.room_id, workspace_id=bind_ws_id)
+            if not allowed:
+                return
 
         def _deliver_batch(room_id: str, blocks: list, caption: str, saved: list | None = None) -> None:
             bind_coara, bind_ws_id = capture_matrix_turn_binding(root)

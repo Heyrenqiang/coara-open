@@ -60,6 +60,7 @@ class WorkspaceSession:
         bind_provider, bind_model = entry_llm_override(entry)
 
         is_internal = getattr(entry, "kind", None) == WorkspaceKind.INTERNAL
+        is_external = getattr(entry, "kind", None) == WorkspaceKind.EXTERNAL
 
         # 空间是普通用户空间（可移出/可删），但同样要自己的会话主体。
         internal_cfg = None
@@ -103,6 +104,10 @@ class WorkspaceSession:
             max_tool_iterations=root_coara._max_tool_iterations,
             session_agent_kind=(persona_key if is_internal else None),
             **kwargs,
+        )
+        # 空间性质挂到会话：Matrix 访客门与工具策略可按 kind 分流
+        coara._workspace_kind = getattr(getattr(entry, "kind", None), "value", None) or (
+            "external" if is_external else ("internal" if is_internal else "normal")
         )
         if is_internal:
             # daily 统筹全部工作空间：不注入单空间环境种子（对齐旧 delegate 语义）
@@ -173,6 +178,13 @@ class WorkspaceSession:
                 )
             else:
                 logger.warning(f"Root send_file exists but bridge not found for workspace session {entry.name}")
+
+        # 空间级工具白名单（space.yaml 单真源）：声明了才收窄（核心集恒在）
+        from src.coara.workspace_capabilities import resolve_tool_whitelist
+
+        whitelist = resolve_tool_whitelist(entry.resolved_path())
+        if whitelist is not None:
+            coara._tool_manager.set_whitelist(whitelist)
 
         # 设置 trace sink（共享 RootCoara 的 EventBus）
         coara.set_trace_sink(root_coara.event_bus.publish)

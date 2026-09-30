@@ -759,7 +759,11 @@ class ForegroundCoaraShim:
             while True:
                 item = await queue.get()
                 if item[0] == "chunk":
-                    yield str(item[1])
+                    from src.cli.streaming import StreamChunk
+
+                    text = str(item[1])
+                    is_error = bool(item[2]) if len(item) > 2 else False
+                    yield StreamChunk(text, is_error=True) if is_error else text
                 elif item[0] == "end":
                     error = item[1]
                     if error:
@@ -876,13 +880,14 @@ class ForegroundCoaraShim:
                 stream["last_seq"] = max(int(stream.get("last_seq") or 0), int(frame.get("seq") or 0))
             return True
         if frame_type == "tool":
-            # 工具行：服务端 attach 独立成 tool 帧。转回 chunk 推进回合流； 必须带换行——无 \\n 时 DelegateLineFilter
-            # 会把连续工具扣成半行拼段。
+            # 工具行：服务端 attach 独立成 tool 帧。转回 chunk 推进回合流；必须带换行——无 \\n 时 DelegateLineFilter
+            # 会把连续工具扣成半行拼段。失败态跟帧字段 is_error（勿嵌隐式字符）。
             text = str(frame.get("text") or "")
             if text.strip():
                 if not text.endswith("\n"):
                     text = f"{text}\n"
-                stream["queue"].put_nowait(("chunk", text))
+                is_error = bool(frame.get("is_error")) or frame.get("ok") is False
+                stream["queue"].put_nowait(("chunk", text, is_error))
                 if server_turn_id:
                     stream["last_seq"] = max(int(stream.get("last_seq") or 0), int(frame.get("seq") or 0))
             return True

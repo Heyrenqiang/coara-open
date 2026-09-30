@@ -40,9 +40,7 @@ class EventBus:
         self._counter = 0
         # Track async tasks to prevent silent exception loss
         self._pending_tasks: set[asyncio.Task] = set()
-        # Tasks beyond _MAX_PENDING_TASKS still run but live here so shutdown()
-        # can cancel/await them instead of losing track of them entirely.
-        self._overflow_tasks: set[asyncio.Task] = set()
+        self._capacity_warning_emitted = False
 
     def publish(self, event: TraceEvent) -> None:
         """Publish event to all matching subscribers"""
@@ -62,49 +60,9 @@ class EventBus:
             except Exception as exc:
                 logger.warning(f"EventBus: sync subscriber '{sub_id}' failed for event '{topic}': {exc}")
 
-        # 3. Topic-specific async subscribers
-        if len(self._pending_tasks) > self._MAX_PENDING_TASKS // 2:
-            self._cleanup_pending_tasks()
-        for sub_id, sub in self._async_subscribers.get(topic, []):
-            try:
-                task = asyncio.create_task(self._safe_async_call(sub, event, sub_id, topic))
-                if len(self._pending_tasks) < self._MAX_PENDING_TASKS:
-                    self._pending_tasks.add(task)
-                    task.add_done_callback(self._pending_tasks.discard)
-                else:
-                    self._overflow_tasks.add(task)
-                    task.add_done_callback(self._overflow_tasks.discard)
-                    logger.warning(
-                        f"EventBus: pending task cap ({self._MAX_PENDING_TASKS}) reached; "
-                        f"async subscriber '{sub_id}' for event '{topic}' tracked in overflow set"
-                    )
-            except RuntimeError:
-                logger.warning(
-                    f"EventBus: no running event loop, async subscriber '{sub_id}' for event '{topic}' skipped"
-                )
-            except Exception as exc:
-                logger.warning(f"EventBus: failed to schedule async subscriber '{sub_id}' for event '{topic}': {exc}")
-
-        # 4. Wildcard async subscribers
-        for sub_id, sub in self._async_subscribers.get(None, []):
-            try:
-                task = asyncio.create_task(self._safe_async_call(sub, event, sub_id, topic))
-                if len(self._pending_tasks) < self._MAX_PENDING_TASKS:
-                    self._pending_tasks.add(task)
-                    task.add_done_callback(self._pending_tasks.discard)
-                else:
-                    self._overflow_tasks.add(task)
-                    task.add_done_callback(self._overflow_tasks.discard)
-                    logger.warning(
-                        f"EventBus: pending task cap ({self._MAX_PENDING_TASKS}) reached; "
-                        f"async subscriber '{sub_id}' for event '{topic}' tracked in overflow set"
-                    )
-            except RuntimeError:
-                logger.warning(
-                    f"EventBus: no running event loop, async subscriber '{sub_id}' for event '{topic}' skipped"
-                )
-            except Exception as exc:
-                logger.warning(f"EventBus: failed to schedule async subscriber '{sub_id}' for event '{topic}': {exc}")
+        self._cleanup_pending_tasks()
+        self._schedule_async_subscribers(self._async_subscribers.get(topic, []), event, topic)
+        self._schedule_async_subscribers(self._async_subscribers.get(None, []), event, topic)
 
     def subscribe(
         self,
@@ -147,18 +105,51 @@ class EventBus:
         except Exception as exc:
             logger.warning(f"EventBus: async subscriber '{sub_id}' failed for event '{topic}': {exc}")
 
+    def _schedule_async_subscribers(
+        self,
+        subscribers: list[tuple[str, AsyncSubscriber]],
+        event: TraceEvent,
+        topic: str,
+    ) -> None:
+        """Schedule subscribers while enforcing the global in-flight task cap."""
+        if not subscribers:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(f"EventBus: no running event loop; async subscribers for event '{topic}' skipped")
+            return
+
+        for sub_id, sub in subscribers:
+            if len(self._pending_tasks) >= self._MAX_PENDING_TASKS:
+                if not self._capacity_warning_emitted:
+                    logger.warning(
+                        f"EventBus: pending task cap ({self._MAX_PENDING_TASKS}) reached; "
+                        f"async notifications for event '{topic}' are being dropped"
+                    )
+                    self._capacity_warning_emitted = True
+                return
+            try:
+                task = loop.create_task(self._safe_async_call(sub, event, sub_id, topic))
+            except Exception as exc:
+                logger.warning(f"EventBus: failed to schedule async subscriber '{sub_id}' for event '{topic}': {exc}")
+                continue
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
+
     def _cleanup_pending_tasks(self) -> None:
         """Remove completed tasks from the pending set to prevent unbounded growth."""
         done_tasks = {task for task in self._pending_tasks if task.done()}
         self._pending_tasks.difference_update(done_tasks)
+        if len(self._pending_tasks) < self._MAX_PENDING_TASKS:
+            self._capacity_warning_emitted = False
 
     async def shutdown(self) -> None:
         """Cancel all tracked pending async-subscriber tasks and await them."""
         pending = [task for task in self._pending_tasks if not task.done()]
-        pending += [task for task in self._overflow_tasks if not task.done()]
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         self._pending_tasks.clear()
-        self._overflow_tasks.clear()
+        self._capacity_warning_emitted = False

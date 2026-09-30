@@ -33,6 +33,16 @@ def _default_coara_home() -> str | None:
     return str(home) if home else None
 
 
+def _available_model_entries(cfg: Any) -> list[Any] | None:
+    """提取 provider 配置里的 ``models.available`` 列表（yaml dict 与 config_manager 对象共用）。"""
+    if isinstance(cfg, dict):
+        models = cfg.get("models")
+        available = models.get("available") if isinstance(models, dict) else None
+    else:
+        available = (getattr(cfg, "models", None) or {}).get("available")
+    return available if isinstance(available, list) else None
+
+
 def _pricing_from_available(provider_name: str, available: list[Any], into: dict[str, ModelPricing]) -> None:
     for entry in available:
         if not isinstance(entry, dict):
@@ -48,22 +58,22 @@ def _pricing_from_available(provider_name: str, available: list[Any], into: dict
         )
 
 
-def _pricing_from_providers_yaml(path: Path, into: dict[str, ModelPricing]) -> None:
-    """直接解析 providers.yaml（devtools 等未 load config_manager 时的回退）。"""
+def _load_providers_yaml(path: Path) -> dict[str, Any]:
+    """直接解析 providers.yaml 的 providers 段（未 load config_manager 时的回退）。"""
     try:
         import yaml
 
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:
-        return
+        return {}
     providers = data.get("providers")
-    if not isinstance(providers, dict):
-        return
-    for provider_name, cfg in providers.items():
-        if not isinstance(cfg, dict):
-            continue
-        available = ((cfg.get("models") or {}) if isinstance(cfg.get("models"), dict) else {}).get("available")
-        if isinstance(available, list):
+    return providers if isinstance(providers, dict) else {}
+
+
+def _pricing_from_providers_yaml(path: Path, into: dict[str, ModelPricing]) -> None:
+    for provider_name, cfg in _load_providers_yaml(path).items():
+        available = _available_model_entries(cfg)
+        if available is not None:
             _pricing_from_available(str(provider_name), available, into)
 
 
@@ -93,8 +103,8 @@ def load_base_pricing_map(coara_home: Path | str | None = None) -> dict[str, Mod
                 cfg = config_manager.get_provider(provider_name)
             except Exception:
                 continue
-            available = (cfg.models or {}).get("available")
-            if isinstance(available, list):
+            available = _available_model_entries(cfg)
+            if available is not None:
                 _pricing_from_available(provider_name, available, result)
         if result:
             return _overlay_factory_pricing(result)
@@ -105,6 +115,7 @@ def load_base_pricing_map(coara_home: Path | str | None = None) -> dict[str, Mod
         from src.core.coara_home import system_dir_for_home
 
         candidates.append(system_dir_for_home(Path(coara_home)) / "providers.yaml")
+    candidates.append(Path("providers.yaml"))
     # 仓根回退：从本文件向上找带 providers.yaml 的仓库根（避免依赖 config 私有 API）
     here = Path(__file__).resolve()
     for parent in here.parents:

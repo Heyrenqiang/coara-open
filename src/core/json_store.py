@@ -88,8 +88,8 @@ def interprocess_file_lock(lock_path: Path):
     """同机跨进程互斥，用于「读—改—写」保护；锁文件仅作互斥，不承载数据。
 
     Windows 走 msvcrt.locking（阻塞式，系统自带重试），POSIX 走 fcntl.flock。
-    与 ``src/ui/web_views.py`` 的 view_seq 锁同款——锁是建议性的，双方都必须走
-    本函数才有效。
+    锁是建议性的，读写双方都走本函数才有效；web_views 的 view_seq 锁与
+    video_queue 的队列锁均委托到此处。
     """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     handle = lock_path.open("a+b")

@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.core.json_store import write_json_atomic
+from src.core.json_store import interprocess_file_lock, write_json_atomic
 from src.core.logger import logger
 
 MAX_ATTEMPTS = 3
@@ -83,33 +83,9 @@ def _runtime_root() -> Path:
     return (Path.cwd() / ".coara" / "runtime").resolve()
 
 
-@contextlib.contextmanager
 def _file_lock(lock_path: Path):
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_path.open("a+b")
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]  # POSIX 专有，Windows 走 msvcrt 分支
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            if os.name == "nt":
-                import msvcrt
-
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]  # POSIX 专有，Windows 走 msvcrt 分支
-        handle.close()
+    """跨进程互斥（实现统一在 core/json_store.interprocess_file_lock）。"""
+    return interprocess_file_lock(lock_path)
 
 
 class VideoQueue:

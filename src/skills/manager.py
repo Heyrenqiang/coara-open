@@ -148,6 +148,16 @@ class SkillManager:
         except Exception as exc:
             logger.warning(f"Failed to load skills from {dir_path}: {exc}")
 
+    def apply_deferred(self, deferred: list[str], *, allowed: set[str] | None = None) -> None:
+        """按配置挂起名单给已发现技能打戳；名单是唯一真相，文件内字段不参与。
+
+        allowed 为空间级技能白名单（space.yaml 的 skills 字段）：非 None 时名单外技能
+        一并视同挂起（不进主清单，仍可 search/activate）。
+        """
+        deferred_set = set(deferred)
+        for skill in self._skills.values():
+            skill.listed = skill.name not in deferred_set and (allowed is None or skill.name in allowed)
+
     def get(self, name: str) -> SkillDefinition:
         """获取单个 Skill"""
         if name not in self._skills:

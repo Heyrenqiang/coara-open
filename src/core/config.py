@@ -209,14 +209,22 @@ class ConfigManager:
         return ordered
 
     async def reload(self, config_paths: list[Path] | None = None) -> CoaraConfig:
-        """Force reload configuration from disk."""
-        self._config = None
+        """Force reload configuration from disk.
+
+        build-then-swap：``_config`` 只在 CoaraConfig 构造成功后才替换——
+        reload 期间在飞回合经 ``config`` property 读到的仍是上一份完整配置。
+        """
         return await self.load(config_paths)
 
     async def load(self, config_paths: list[Path] | None = None) -> CoaraConfig:
+        # reload 窗口安全的关键不变量：``_config`` 只在 CoaraConfig 构造成功后
+        # 才替换（见本函数尾部）；load 期间 ``config`` property 读到的是旧完整配置。
+        # 直接读 _raw_config/_providers 的私有路径只在启动期与保存路径出现，
+        # 不在 reload 热路径上。
         self._raw_config = {}
         self._providers = {}
         self._llm_profiles = {}
+        self._load_errors = []
 
         self._load_env()
         loaded: set[Path] = set()
@@ -275,6 +283,7 @@ class ConfigManager:
         skills_config = SkillsConfig(
             default_include=list(skills_raw.get("default_include") or []),
             default_exclude=list(skills_raw.get("default_exclude") or []),
+            deferred=list(skills_raw.get("deferred") or []),
         )
 
         output_truncation_config = self._safe_validate(
@@ -562,6 +571,7 @@ class ConfigManager:
             skills_raw = self._raw_config.get("skills", {})
             self._config.skills.default_include = list(skills_raw.get("default_include") or [])
             self._config.skills.default_exclude = list(skills_raw.get("default_exclude") or [])
+            self._config.skills.deferred = list(skills_raw.get("deferred") or [])
 
     def save_providers_yaml(self, data: dict[str, Any]) -> None:
         """Merge ``providers`` into providers.yaml without wiping sibling keys."""

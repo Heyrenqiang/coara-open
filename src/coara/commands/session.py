@@ -215,52 +215,45 @@ async def handle_status(root: RootCoara, args: CommandArgs) -> CommandResult:
 
 
 _HELP_TEXT = """常用命令：
-  /help      帮助
-  /status    当前状态（模型、工作空间、偏好）
-  /model     列出/切换模型（无可用模型时打开配置页「模型」添加密钥）
-  /new       新开一轮对话
-  /compact   手动压缩当前会话历史（LLM 摘要，被替代部分归档可回取）
-  /log       工具执行记录（/log 列表；/log <序号> 展开完整输出）
-  /report    向开发者提交问题报告（附带本轮会话；可 /report 描述）
-  /ws        工作空间（输入后 ↑↓ 切换；Esc 取消）
-  /ws <序号> 按列表序号切换
-  /ws switch 店名   切换工作空间
-  /ws rename 旧名 新名  重命名（路径不动）
-  /ws default 店名  设启动默认
-  /ws updates list 别名  看未读动态
-  /events    事件源（↑↓ 查看/重载）
-  /sandbox   切换沙箱（↑↓ 确认）
-  /thinking  思考模式（↑↓ on/off/强度）
-  /theme     配色主题（dark / light）
-  /tools     工具开关（/tools off <名称> 停用；/tools on <名称> 启用）
-  /message   系统消息（如 API key 提醒）
-  /qrcode    终端显示手机配对二维码（需 gomatrix 隧道就绪）
+  /help       帮助
+  /status     当前状态（模型、工作空间、偏好）
+  /model      列出 / 切换模型（无可用模型时打开配置页「模型」添加密钥）
+  /new        新开一轮对话
+  /compact    压缩当前会话历史（摘要可回取）
+  /usage [N]  本轮或最近 N 天用量
+  /log        工具执行记录（/log 列表；/log <序号> 展开）
+  /report     向开发者提交问题报告（可附描述）
+  /ws         工作空间（↑↓ 切换；也可 /ws <序号> 或 /ws switch <名>）
+  /ws rename  旧名 新名   重命名（路径不动）
+  /ws default <名>        设启动默认
+  /ws updates list [名]   看未读动态
+  /events     事件源（↑↓；/events reload 热重载）
+  /tools      工具开关（/tools off|on <名称>）
+  /sandbox    切换沙箱
+  /thinking   思考模式
+  /theme      配色（dark / light）
+  /message    系统消息
+  /login      登录
+  /qrcode     终端显示手机配对二维码
+  /email      配置邮箱
+  /restart    重启内核（仅托管进程可用）
 
 回复进行中也可立刻执行：/qrcode /help /status /tools /events /ws /login /model /report /message /log
-（其余 slash 等本轮结束后再跑；普通文字进接续输入；打断回复用 Ctrl+C）
+（其余 slash 等本轮结束后再跑；普通文字进接续输入；打断用 Ctrl+C）
 
-快捷键（CLI 端）：
-  Alt+V      粘贴剪贴板图片
-  Ctrl+V     粘贴文字
-  Ctrl+U     清空输入
-  Ctrl+C     有输入则清空；空闲退出；回复中打断
-  Ctrl+Enter 换行（支持 kitty 键盘协议的终端如 Windows Terminal 也可用 Shift+Enter）
-  Tab        补全命令
+快捷键：
+  Alt+V       粘贴剪贴板图片
+  Ctrl+V      粘贴文字
+  Ctrl+U      清空输入
+  Ctrl+C      有输入则清空；空闲退出；回复中打断
+  Ctrl+Enter  换行（Windows Terminal 等亦可用 Shift+Enter）
+  Tab         补全命令
 
-快捷键（Web 端）：
-  Shift+Enter  换行
-  Enter        发送
-
-启动：
-  coara          对话 + 网页 + 手机（三端同启）
-  coara -c       仅对话（CLI）
-  coara -w       仅网页
-  coara -x       仅手机（Matrix）
-  coara -cw      对话 + 网页（标志可组合）
-  coara status
-  coara providers
-  coara ws list
-  coara ws add <路径> --name <名>
-  coara ws rename <旧名> <新名>
-  coara ws default <工作空间名>
+启动与子命令：
+  coara                 确保内核常驻，本终端作为 CLI 端接入
+  coara tray            托盘常驻内核（Web / 手机由内核托管）
+  coara attach <空间名>  另开终端接入指定工作空间
+  coara status          运行时状态
+  coara providers       已配置的 provider
+  coara ws list|add|rename|default|remove
 """

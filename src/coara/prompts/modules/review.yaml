@@ -1,0 +1,12 @@
+# 消息中心模块（跨空间动态聚合 + 消息助手）
+title: 消息
+icon: AuditOutlined
+route: /review
+workspace_relation: filterable
+order: 10
+agentic:
+  enabled: true
+  persona_agent: review-assistant
+  role: 消息助手
+  expertise_areas: [workspace updates, triage, summary]
+  subject: review

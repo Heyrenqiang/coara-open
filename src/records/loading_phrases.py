@@ -1,17 +1,16 @@
-"""Thinking 行的轮换短语：整池洗牌袋 + 使用提示 + 每日定制短语.
+"""Thinking 行的轮换短语：抽样袋 + 使用提示 + 每日定制短语.
 
 词库来自 `docs/中文加载词库.md`（结构化副本 `loading_phrases.json`，两池：
 witty 幽默梗 / quotes 名言改造版）。进程启动与 /new、切换工作空间时
-整池打乱成袋（`reshuffle`），轮换时按 60 秒窗口顺序播放——袋多大一轮就多长
-（常驻池约 365 条 → 六小时余才穷尽），展现在用户面前的是随机序列，
-而不是「同一小批反复循环」。daily 定制词与使用提示一并进袋。
+重抽一批（`reshuffle`），轮换时按 60 秒窗口顺序播放。
+
+有当日定制时：定制 N 条与常驻抽样 N 条 1:1 进袋（上屏概率对等）；
+无定制时：常驻抽固定袋 + 小技巧。daily 定制词一日抛，过期回落常驻。
 提示内容以 docs/manual/16-CLI与WebUI.md 为准。
 
 daily 每日派发后还会结合当天工作写一批定制短语，落盘在
 ``records/agent/loading_phrases_custom.json``（同目录的 curator_state.json
-旁）。文件带 ``date`` 字段，**只当天有效**：是今天则混入批次小头，
-过期/缺失/损坏一律回落纯常驻词库（一日抛，旧文件不会误播）。启动加载、
-每次 reshuffle 重读。
+旁）。文件带 ``date`` 字段，**只当天有效**。启动加载、每次 reshuffle 重读。
 """
 
 from __future__ import annotations
@@ -55,9 +54,11 @@ TIPS: tuple[str, ...] = (
     "小技巧：/compact 压缩过长会话",
 )
 
-# 每批＝整池洗牌袋：常驻池（幽默+名言）全量 + 当日定制 + 使用提示，打乱后顺序播放。
-# 旧版每批只抽 27 条、约 27 分钟就转完一圈，用户会反复看到同样几句（感知成「总是这几条」）。
+# 每 60s 换一条。有当日定制时：定制 N 条 ↔ 常驻抽样 N 条（1:1 上屏）；
+# 无定制时：常驻抽样固定袋 + 小技巧（不是整池 365 条灌进一轮）。
 _ROTATE_SECONDS = 60
+# 无定制词时的常驻抽样上限（幽默+名言）；小技巧另附。
+_FALLBACK_RESIDENT = 40
 
 # 定制短语文件位置（模块级 set/get，避免 import 环：cli ← records ← coara）
 _custom_phrases_path: Path | None = None
@@ -97,13 +98,33 @@ def _load_custom_pool() -> tuple[str, ...]:
     return tuple(custom_payload().get("phrases", []))
 
 
-def _sample_batch() -> list[str]:
-    """整池洗牌袋：常驻池全量 + 当日定制 + 使用提示，打乱后顺序播放。
+def _resident_pool() -> list[str]:
+    return list(WITTY_POOL) + list(QUOTE_POOL)
 
-    池子多大，一轮就多长（常驻池约 365 条 → 每小时 60 条 → 六个多小时才穷尽），
-    且顺序是打乱的——展现在用户面前的就是随机序列，而不是「同一小批反复循环」。
+
+def _sample_resident(n: int) -> list[str]:
+    """从常驻池无放回抽 n 条；池不够大则全取。"""
+    pool = _resident_pool()
+    if n <= 0:
+        return []
+    if n >= len(pool):
+        return pool
+    return random.sample(pool, n)
+
+
+def _sample_batch() -> list[str]:
+    """组一轮播袋并打乱。
+
+    - 有当日定制：定制 N ↔ 常驻抽 N（真 1:1 上屏概率）；不做重复配平
+    - 无定制：常驻抽 ``_FALLBACK_RESIDENT`` 条 + 小技巧
     """
-    batch = list(WITTY_POOL) + list(QUOTE_POOL) + list(_load_custom_pool()) + list(TIPS)
+    custom = list(_load_custom_pool())
+    if custom:
+        batch = custom + _sample_resident(len(custom))
+    else:
+        batch = _sample_resident(_FALLBACK_RESIDENT) + list(TIPS)
+    if not batch:
+        batch = ["思考中……"]
     random.shuffle(batch)
     return batch
 

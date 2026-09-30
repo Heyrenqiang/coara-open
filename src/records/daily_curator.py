@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.core.json_store import write_json_atomic
 from src.core.logger import logger
 from src.workspace.types import ViewCapability
 
@@ -144,10 +145,7 @@ def load_curator_state(agent_dir: Path) -> dict[str, Any]:
 
 def save_curator_state(agent_dir: Path, state: dict[str, Any]) -> None:
     path = curator_state_path(agent_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    write_json_atomic(path, state)
 
 
 def _parse_dt(raw: Any, *, tz: ZoneInfo) -> datetime | None:
@@ -309,6 +307,10 @@ def ensure_daily_workspace_entry(root: Any) -> Any | None:
         return None
     # 只建工作目录，不碰 coara_home 结构（隔离测试环境允许 home 不存在）
     path.mkdir(parents=True, exist_ok=True)
+    # 空间身份单真源=space.yaml（09-29 裁决不做双写）
+    from src.workspace.identity import write_space_identity
+
+    write_space_identity(path, space_type="records", storefront="display", home_view="/records")
     provider, model = _daily_llm_params()
     entry = wm.registry.ensure_internal_workspace(
         path,
@@ -317,9 +319,6 @@ def ensure_daily_workspace_entry(root: Any) -> Any | None:
         provider=provider,
         model=model,
         summary="记录（系统展示空间：记录时间线主页，与 daily 对话）",
-        content_type="records",
-        storefront="display",
-        home_view="/records",
         persona=DAILY_WORKSPACE_NAME,
     )
     return entry

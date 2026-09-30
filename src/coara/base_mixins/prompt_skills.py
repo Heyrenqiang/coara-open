@@ -87,6 +87,17 @@ class PromptSkillsMixin:
     async def load_skills(self, only: list[str] | None = None) -> None:
         """Load discovered skills for the current workspace"""
         await self.skill_manager.discover(self.workspace_dir, coara_home=resolve_coara_home(self.workspace_dir))
+        # 挂起名单来自配置 skills.deferred（唯一真相）；SKILL.md 不参与。
+        # 空间级技能白名单（space.yaml 单真源）叠加：名单外视同挂起。
+        from src.coara.workspace_capabilities import resolve_skill_allowed
+        from src.core.config import config_manager
+
+        if config_manager._config is None:
+            await config_manager.load()
+        self.skill_manager.apply_deferred(
+            config_manager.config.skills.deferred,
+            allowed=resolve_skill_allowed(self.workspace_dir),
+        )
         all_skills = self.skill_manager.get_all()
         if only is None:
             self._skills = all_skills

@@ -1146,8 +1146,10 @@ class RootCoara(CoaraBase):
         if self._deferred_new_session_active(target):
             self._schedule_bg_completion_after_deferred(target, task_id, content, origin_source=origin_source)
             return
-        reply_source = self._resolve_reply_input_source(target, origin_source)
-        task = asyncio.create_task(self._consume_awakened_turn(target, task_id, content, origin_source=reply_source))
+        # 唤醒回合归属端 = 任务发起端 origin_source（用户裁决 09-28），不跟随
+        # 最近输入端——否则 matrix 发起的任务可能因用户最近在 web 打过字而把
+        # 应答正文投到 web（跨端串话）
+        task = asyncio.create_task(self._consume_awakened_turn(target, task_id, content, origin_source=origin_source))
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
@@ -1189,23 +1191,6 @@ class RootCoara(CoaraBase):
         task = asyncio.create_task(_flush())
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
-
-    def _resolve_reply_input_source(self, target: CoaraBase, origin_source: str = "") -> str:
-        """后台唤醒/注入后，LLM 回复应回投到哪个输入端"""
-        from src.coara.turn_source import LAUNCH_SOURCES
-
-        # 勿对空串 normalize（会塌成 cli），否则永远吃不到归属端。
-        last = str(getattr(target, "_last_user_input_source", "") or "").strip().lower()
-        if last in LAUNCH_SOURCES:
-            return last
-        so = getattr(target, "session_origin", None)
-        so_source = str((so or {}).get("source") or "").strip().lower()
-        if so_source in LAUNCH_SOURCES:
-            return so_source
-        origin = str(origin_source or "").strip().lower()
-        if origin in LAUNCH_SOURCES:
-            return origin
-        return origin or last or ""
 
     async def _consume_awakened_turn(
         self,

@@ -349,17 +349,12 @@ class ToolExecutor:
         """装配 tool_complete trace 事件 payload（含 diff 单源与录像带 diff 落盘）。"""
         from src.coara.display import format_tool_call_label
         from src.coara.tool_output.pipeline import serialize_display_blocks
-        from src.runtime.usage_args import compact_tool_usage_args
+        from src.runtime.usage_args import compact_tool_usage_args, tape_tool_arguments
         from src.runtime.usage_attribution import attribution_from_coara
 
-        # 工具行文本：成功＝调用摘要；失败再拼错误首行（端上人眼排障，模型通道仍看 content）
+        # 工具行只写调用摘要；失败靠 is_error 让端上标红。错误正文只在
+        # ToolResult.content（模型通道），不塞进人眼扫的工具行。
         tool_label = format_tool_call_label(tool.name, effective_call.arguments, max_len=None)
-        if result.is_error:
-            error_line = str(result.content or "").split("\n", 1)[0].strip()
-            if len(error_line) > 200:
-                error_line = error_line[:200] + "…"
-            if error_line:
-                tool_label = f"{tool_label} 报错: `{error_line}`"
         # 端归属由调用方带入（工具开始时锁定），此处不重算
         tool_complete_payload: dict[str, Any] = {
             "tool_name": tool.name,
@@ -380,6 +375,8 @@ class ToolExecutor:
             "tool_output_truncated": len(raw_output_text) > _MAX_TOOL_OUTPUT_CHARS,
             "tool_output_ref": ((result.metadata or {}).get("output_ref", "")),
             "usage_args": compact_tool_usage_args(tool.name, effective_call.arguments),
+            # 录像带详情：比用量摘要多留 write/edit 正文（聊天行不读此字段）
+            "tape_args": tape_tool_arguments(tool.name, effective_call.arguments),
             "cache_hit": cache_hit,
             "cli_silent": bool(getattr(coara, "_cli_silent", False)),
             **attribution_from_coara(coara),

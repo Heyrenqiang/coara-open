@@ -291,18 +291,84 @@ async def _drain_maintenance_turn(
     coara_home: str,
     *,
     source: str,
+    server: Any | None = None,
+    bus: Any | None = None,
 ) -> None:
-    """跑一轮维护回合；过程事件落目标空间维护带（与主带分离），不写主录像带。"""
-    _ = (workspace_dir, coara_home)
-    # source 沿用目标会话最近输入端（调用方解析），兜底 cli-attached。
+    """跑一轮维护回合；过程落目标空间主录像带（desk=janitor 标外挂录像带，
+    录像带视图按它聚成折叠组；聊天屏投影排除不受影响——janitor 的
+    session_agent_kind=subagent 照旧把帧挡在聊天区外）。
+
+    工具行/diff 经 EventBus trace 事件接进带（与 chunk 同一条带）：janitor 的
+    工具执行与主会话同链路（executor._emit_trace tool_complete/tool_result），
+    订阅总线按 janitor 实例的 coara_name="janitor" + payload.session_id 双重过滤
+    转发。回合结束退订。bus 由调用方从 root 传入（janitor 实例不设 _root_ref）。"""
+    tape_stream = None
+    subscription = None
+    if server is not None:
+        from src.ui.turn_stream import TurnStream
+
+        tape_stream = TurnStream(
+            f"janitor-{getattr(janitor, 'session_id', '')}",
+            source,
+            "root",
+            server,
+            session_id=str(getattr(janitor, "session_id", "") or ""),
+            workspace_dir=workspace_dir,
+        )
+        tape_stream.desk = "janitor"
+
+        janitor_session_id = str(getattr(janitor, "session_id", "") or "")
+        if bus is not None and janitor_session_id:
+
+            def _on_trace(event: Any) -> None:
+                try:
+                    # TraceEvent 契约：event_type / coara_name / payload（无 session_id 顶层字段）
+                    if str(getattr(event, "coara_name", "") or "") != "janitor":
+                        return
+                    payload = getattr(event, "payload", None) or {}
+                    if janitor_session_id and str(payload.get("session_id") or "") not in ("", janitor_session_id):
+                        return
+                    if str(getattr(event, "event_type", "") or "") != "tool_complete":
+                        return
+                    call_id = str(payload.get("tool_call_id") or payload.get("call_id") or "")
+                    # tool_label 是 executor 算好的统一文案（成功=调用摘要、失败带报错首行），
+                    # 与主会话工具行同一份口径，不自己拼。
+                    emit_kwargs: dict[str, Any] = {
+                        "text": str(payload.get("tool_label") or payload.get("tool_name") or "tool"),
+                        "tool_name": str(payload.get("tool_name") or ""),
+                        "tool_call_id": call_id,
+                        "duration_ms": payload.get("duration_ms"),
+                        "running": False,
+                        "is_error": bool(payload.get("is_error", False)),
+                    }
+                    # 参数/结果预览/spill 引用（与主会话 tool 帧同口径）
+                    from src.runtime.tape_tool_detail import apply_tape_tool_detail
+
+                    apply_tape_tool_detail(emit_kwargs, payload)
+                    tape_stream.emit("tool", **emit_kwargs)
+                    diff_lines = payload.get("diff_lines")
+                    if isinstance(diff_lines, dict) and diff_lines.get("hunks"):
+                        tape_stream.emit("diff", diff_lines=diff_lines, tool_call_id=call_id)
+                except Exception:  # noqa: BLE001 — 落带是观察动作，绝不反噬回合
+                    pass
+
+            subscription = bus.subscribe(_on_trace)
+
     stream = janitor.process_message(
         prompt,
         trust_level="owner",
         show_tool_summary=False,
         source=source,
     )
-    async for _ in stream:
-        pass
+    try:
+        async for chunk in stream:
+            if tape_stream is not None and isinstance(chunk, str) and chunk.strip():
+                tape_stream.emit("chunk", text=chunk)
+    finally:
+        if subscription is not None:
+            subscription.unsubscribe()
+        if tape_stream is not None:
+            tape_stream.finish()
 
 
 def run_janitor_maintenance(
@@ -331,7 +397,15 @@ def run_janitor_maintenance(
 
     async def _run() -> None:
         try:
-            await _drain_maintenance_turn(janitor, prompt, workspace_dir, coara_home, source=_source)
+            await _drain_maintenance_turn(
+                janitor,
+                prompt,
+                workspace_dir,
+                coara_home,
+                source=_source,
+                server=getattr(root, "_web_server", None),
+                bus=getattr(root, "event_bus", None),
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

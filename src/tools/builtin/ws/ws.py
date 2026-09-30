@@ -75,7 +75,7 @@ Actions
   不能移当前 active，也不能移回合中的空间
 - `rename`：只改登记名（`name`→`new_name`），路径与磁盘不动；勿用 remove+add 代替
 - `switch`：**仅**用户明确要求切换/进入某工作空间时调用；勿因列表里看见其它名字而自行切换；切换会结束当前回合
-- `kind`：查询或设置空间性质（`normal` / `internal` / `external`）；省略 `kind` 参数则查询
+- `kind`：查询或设置空间性质（`normal` / `external`；`internal` 由系统管理）；省略 `kind` 参数则查询
 
 注意
 - 切换必须用 `action=switch`，勿用 shell
@@ -101,7 +101,7 @@ Actions
                 ],
                 "description": (
                     "list=查询，不切换；switch=仅用户明确要求切换时；"
-                    "add/remove/rename；kind=设置空间性质，如 code"
+                    "add/remove/rename；kind=设置空间性质（normal/external）"
                 ),
             },
             "name": {
@@ -120,14 +120,14 @@ Actions
                 "type": "string",
                 "description": "add 时可选摘要",
             },
-"kind": {
-"type": "string",
-"description": (
-"kind 时设置的空间性质，normal=普通 / "
-"internal=系统服务台 / "
-"external=对外开放；省略时查询当前性质"
-),
-},
+            "kind": {
+                "type": "string",
+                "enum": ["normal", "external"],
+                "description": (
+                    "kind 时设置的空间性质，normal=普通 / "
+                    "external=对外开放（访客 untrusted）；省略时查询当前性质"
+                ),
+            },
             "create_path": {
                 "type": "boolean",
                 "description": "add 时目录不存在则创建，默认 true",
@@ -400,6 +400,10 @@ class WsInvocation(ToolInvocation):
         except ValueError:
             known = ", ".join(k.value for k in WorkspaceKind)
             return ToolResult.error(f"未知性质 '{self.kind}'，支持：{known}")
+
+        # internal 仅系统登记；用户只能在 normal ↔ external 间切换
+        if entry.kind == WorkspaceKind.INTERNAL or new_kind == WorkspaceKind.INTERNAL:
+            return ToolResult.error("internal 由系统管理，不能手动设置或改写系统空间性质")
 
         if entry.kind == new_kind:
             return ToolResult.success(f"工作空间 {entry.name} 性质已是 {new_kind.value}，未改动")

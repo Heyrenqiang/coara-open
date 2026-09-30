@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.coara_home import ensure_workspace_layout
+from src.core.instance_lock import pid_alive
 from src.core.json_store import write_json_atomic
 from src.core.logger import logger
 from src.core.time import utc_now_iso
@@ -49,39 +50,8 @@ def runtime_file(coara_home: Path) -> Path:
 
 
 def is_pid_alive(pid: int) -> bool:
-    """True when *pid* still refers to a running process"""
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-        # PROCESS_QUERY_LIMITED_INFORMATION is enough for GetExitCodeProcess on
-        # Vista+; fall back to PROCESS_QUERY_INFORMATION for older hosts.
-        process_query_limited = 0x1000
-        process_query = 0x0400
-        still_active = 259
-        handle = kernel32.OpenProcess(process_query_limited, False, int(pid))
-        if not handle:
-            handle = kernel32.OpenProcess(process_query, False, int(pid))
-        if not handle:
-            return False
-        try:
-            exit_code = wintypes.DWORD()
-            ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
-            if not ok:
-                return False
-            return int(exit_code.value) == still_active
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    """True when *pid* still refers to a running process（实现统一在 core/instance_lock.pid_alive）"""
+    return pid_alive(pid)
 
 
 def load_active_runtime(coara_home: Path) -> ActiveWorkspaceRuntime | None:

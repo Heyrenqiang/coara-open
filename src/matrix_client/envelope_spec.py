@@ -1,7 +1,7 @@
 """coara 控制信封协议常量与分类器。
 
 本文件由 scripts/dev/gen_envelopes.py 从 docs/protocol/coara-envelopes.json 生成，请勿手改。
-真源版本：v2（2026-09-11）
+真源版本：v2（2026-09-27）
 """
 
 from __future__ import annotations

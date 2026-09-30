@@ -134,6 +134,13 @@ async def execute_command(
     if args is None:
         return None
 
+    # 外挂进程（coara ws rename/remove/add）直接改注册表文件；主进程内存版
+    # 要等 process_message 前才 reload，斜杠命令不走那条路 → 改名后立刻
+    # /ws switch 会拿旧名解析失败。命令解析前补一次 mtime 快检。
+    wm = getattr(root, "workspace_manager", None)
+    if wm is not None:
+        wm.reload_if_stale()
+
     handler = _HANDLERS.get(args.name)
     if handler is None:
         return CommandResult(

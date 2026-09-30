@@ -222,6 +222,65 @@ def _build_chat_prompt_session(
             except RuntimeError:
                 pass
 
+    @bindings.add("c-v", eager=True)
+    def _paste_from_clipboard(event) -> None:
+        """Ctrl+V：资源管理器文件→绝对路径；长文本→落盘后贴路径；否则贴剪贴板文本。"""
+
+        async def _do_paste() -> None:
+            from src.utils.clipboard_image import get_clipboard_text
+            from src.utils.clipboard_paths import (
+                format_paths_for_input,
+                get_clipboard_file_paths,
+                is_long_paste_text,
+                save_pasted_long_text,
+            )
+
+            try:
+                paths = await get_clipboard_file_paths()
+            except Exception:
+                paths = []
+            if paths:
+                event.current_buffer.insert_text(format_paths_for_input(paths))
+                event.app.invalidate()
+                return
+            try:
+                text = await get_clipboard_text()
+            except Exception:
+                text = None
+            if text and is_long_paste_text(text):
+                ws_dir = None
+                root = getattr(spinner, "_root", None) if spinner is not None else None
+                fg = getattr(root, "foreground_coara", None) if root is not None else None
+                raw_ws = getattr(fg, "workspace_dir", None) if fg is not None else None
+                if raw_ws:
+                    from pathlib import Path
+
+                    from src.core.workspace_layout import UPLOAD_DIR_NAME
+
+                    ws_dir = Path(raw_ws) / UPLOAD_DIR_NAME
+                try:
+                    saved = await asyncio.to_thread(save_pasted_long_text, text, directory=ws_dir)
+                except Exception:
+                    saved = None
+                if saved is not None:
+                    event.current_buffer.insert_text(format_paths_for_input([str(saved)]))
+                    event.app.invalidate()
+                    return
+            if text:
+                event.current_buffer.insert_text(text)
+                event.app.invalidate()
+                return
+            data = event.app.clipboard.get_data()
+            if data is not None and getattr(data, "text", None):
+                event.current_buffer.paste_clipboard_data(data)
+                event.app.invalidate()
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(_do_paste())
+
     @bindings.add("escape", "v", eager=True)
     def _paste_image_from_clipboard(event) -> None:
         """Alt+V: paste clipboard image as Vision attachment (not plain text/path)."""

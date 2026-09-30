@@ -184,32 +184,36 @@ def run_supervisor(workspace: Path, home: Path | None, *, with_tray: bool) -> in
 
 def _make_open_web(workspace: Path, home: Path | None):
     def _open() -> None:
+        from src.core.logger import logger
         from src.ui.dashboard_tokens import load_or_create_dashboard_token
         from src.ui.web_server import open_or_focus_web_ui
 
         try:
-            token = load_or_create_dashboard_token(workspace, home) if home else ""
-        except Exception:
-            token = ""
-        port = int(os.environ.get("COARA_WEB_PORT", "8080"))
-        # 无任何可用模型时直落配置页「模型」：新用户装完第一屏就是填 key 的地方。
-        # 注意：supervisor 进程里 config_manager 默认从未加载过配置（加载只在内核进程
-        # 里发生），不先 load 就读 provider 列表永远为空 → 每次点托盘都误判成无模型弹
-        # 配置页（09-25 回归）。这里先确保加载完成再判；加载失败按「有模型」不打扰用户。
-        path = "/"
-        try:
-            from src.core.config import config_manager as _cfg_mgr
-            from src.llm.model_catalog import _enabled_provider_names
-
-            if getattr(_cfg_mgr, "_config", None) is None:
-                import asyncio
-
-                asyncio.run(_cfg_mgr.load())
-            if not _enabled_provider_names(_cfg_mgr):
-                path = "/config?focus=models"
-        except Exception:
+            try:
+                token = load_or_create_dashboard_token(workspace, home) if home else ""
+            except Exception:
+                token = ""
+            port = int(os.environ.get("COARA_WEB_PORT", "8080"))
+            # 无任何可用模型时直落配置页「模型」：新用户装完第一屏就是填 key 的地方。
+            # 注意：supervisor 进程里 config_manager 默认从未加载过配置（加载只在内核进程
+            # 里发生），不先 load 就读 provider 列表永远为空 → 每次点托盘都误判成无模型弹
+            # 配置页（09-25 回归）。这里先确保加载完成再判；加载失败按「有模型」不打扰用户。
             path = "/"
-        open_or_focus_web_ui(host="127.0.0.1", port=port, token=token, path=path)
+            try:
+                from src.core.config import config_manager as _cfg_mgr
+                from src.llm.model_catalog import _enabled_provider_names
+
+                if getattr(_cfg_mgr, "_config", None) is None:
+                    import asyncio
+
+                    asyncio.run(_cfg_mgr.load())
+                if not _enabled_provider_names(_cfg_mgr):
+                    path = "/config?focus=models"
+            except Exception:
+                path = "/"
+            open_or_focus_web_ui(host="127.0.0.1", port=port, token=token, path=path)
+        except Exception as exc:
+            logger.exception(f"[supervisor] tray open web failed: {exc}")
 
     return _open
 

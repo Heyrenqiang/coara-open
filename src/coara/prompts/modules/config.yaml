@@ -1,0 +1,12 @@
+# 配置模块（配置页 + 配置助手）
+title: 配置
+icon: SettingOutlined
+route: /config
+workspace_relation: none
+order: 80
+agentic:
+  enabled: true
+  persona_agent: config-assistant
+  role: 配置助手
+  expertise_areas: [providers, llm config, coara settings, records.enabled]
+  subject: config

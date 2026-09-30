@@ -1,0 +1,388 @@
+/** 轨迹视图样式：两栏（无限轨迹 / 详情面板） */
+
+.tr-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 0fr;
+  height: 100%;
+  min-height: 0;
+  background: var(--coara-bg);
+  transition: grid-template-columns 0.15s ease;
+}
+.tr-layout.tr-with-detail {
+  grid-template-columns: minmax(0, 1fr) var(--tr-detail-width);
+}
+
+/* ---- 顶部时间线（录像带的导航轴：缩放 + 刷选定位） ---- */
+.tr-timeline {
+  height: 52px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--coara-border-soft);
+  background: var(--coara-surface);
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+.tr-timeline canvas {
+  display: block;
+}
+
+/* ---- 中栏：轨迹流 ---- */
+.tr-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.tr-stream-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+.tr-stream {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0 20px;
+  min-height: 0;
+  width: 100%;
+}
+.tr-load-older {
+  display: block;
+  margin: 6px auto 10px;
+  padding: 4px 16px;
+  border: 1px solid var(--coara-border-muted);
+  border-radius: 999px;
+  background: var(--coara-surface);
+  font-size: 12px;
+  color: var(--coara-text-secondary);
+  cursor: pointer;
+}
+.tr-load-older:hover {
+  border-color: var(--coara-accent);
+  color: var(--coara-accent);
+}
+
+/* ---- 行类型 chip（封闭角色集 v2，色 = 语义） ---- */
+.tr-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 2.5px 5px;
+  border-radius: 5px;
+  color: var(--coara-text-tertiary);
+  background: var(--coara-bg-subtle);
+  border: 1px solid var(--coara-border-faint);
+  min-width: 19px;
+  justify-content: center;
+}
+.tr-chip .tr-chip-label { font-weight: 500; }
+.tr-chip-user { color: var(--coara-accent); background: var(--coara-accent-subtle); border-color: transparent; }
+.tr-chip-assistant { color: var(--coara-tape-assistant); background: var(--coara-tape-assistant-bg); border-color: transparent; }
+.tr-chip-thinking { color: var(--coara-tape-thinking); background: var(--coara-tape-thinking-bg); border-color: transparent; }
+.tr-chip-tool { color: var(--coara-warning); background: var(--coara-tape-tool-bg); border-color: transparent; }
+.tr-chip-inject { color: var(--coara-success); background: var(--coara-tape-inject-bg); border-color: transparent; }
+.tr-chip-system { color: var(--coara-text-tertiary); }
+.tr-chip-subagent { color: var(--coara-tape-subagent); background: var(--coara-tape-subagent-bg); border-color: transparent; }
+.tr-chip-janitor { color: var(--coara-tape-janitor); background: var(--coara-tape-janitor-bg); border-color: transparent; }
+@media (max-width: 900px) {
+  .tr-chip .tr-chip-label { display: none; }
+}
+
+/* 子树：组内子行的连接线与缩进 */
+.tr-tree-line {
+  flex-shrink: 0;
+  width: 10px;
+  height: 12px;
+  border-left: 1px solid var(--coara-border-muted);
+  border-bottom: 1px solid var(--coara-border-muted);
+  border-bottom-left-radius: 5px;
+  margin-left: 2px;
+}
+.tr-row-depth-1 { padding-left: 14px; }
+.tr-row-child-count {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--coara-text-tertiary);
+  background: var(--coara-bg-subtle);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+/* ---- 轨迹行 ---- */
+.tr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px 4px 10px;
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--coara-text-secondary);
+  min-width: 0;
+  border-left: 2px solid transparent;
+  /* 行高恒定：任何子元素异常都不撑开行（幽灵大块教训），溢出由 text 截断承担 */
+  height: 26px;
+  overflow: hidden;
+}
+.tr-row:hover {
+  background: var(--coara-bg-subtle);
+}
+.tr-row-selected {
+  background: var(--coara-accent-subtle);
+  border-left-color: var(--coara-accent);
+}
+.tr-row-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.tr-row[data-role="user"] .tr-row-text {
+  color: var(--coara-text);
+  font-family: inherit;
+}
+.tr-row[data-role="assistant"] .tr-row-text {
+  color: var(--coara-text-strong);
+  font-family: inherit;
+}
+.tr-row-source,
+.tr-row-duration,
+.tr-row-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--coara-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.tr-row-fold {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  font-size: 10px;
+  color: var(--coara-text-tertiary);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+/* 状态点 */
+.tr-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--coara-border);
+}
+.tr-dot-error {
+  background: var(--coara-error);
+}
+.tr-dot-running {
+  background: var(--coara-progress);
+  animation: tr-pulse 1.4s ease-in-out infinite;
+}
+@keyframes tr-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* 分隔行 */
+.tr-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  font-size: 11px;
+  color: var(--coara-text-tertiary);
+}
+.tr-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--coara-border-soft);
+}
+
+/* delegate 组：内嵌小录像带 */
+.tr-group-children {
+  border-left: 1px solid var(--coara-border-muted);
+  margin-left: 24px;
+}
+.tr-group-children .tr-row {
+  padding-left: 12px;
+}
+.tr-group-children .tr-row-subagent .tr-row-text {
+  color: var(--coara-text-secondary);
+}
+
+/* ---- 右栏：详情面板 ---- */
+.tr-detail {
+  border-left: 1px solid var(--coara-border-soft);
+  background: var(--coara-surface);
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+.tr-detail-resize {
+  width: 4px;
+  cursor: col-resize;
+  flex-shrink: 0;
+  background: transparent;
+}
+.tr-detail-resize:hover,
+.tr-detail-resize.tr-resizing {
+  background: var(--coara-accent-wash);
+}
+.tr-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+  min-width: 0;
+}
+.tr-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.tr-detail-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--coara-text);
+}
+.tr-detail-close {
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  color: var(--coara-text-tertiary);
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.tr-detail-close:hover {
+  color: var(--coara-text);
+}
+.tr-detail-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--coara-text-tertiary);
+  margin-bottom: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tr-detail-content {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--coara-text-strong);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 详情内容换行放置：pre 不再横向滚动，长行按宽度折行 */
+.tr-detail-content pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--coara-code-bg);
+  border-radius: 6px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: visible;
+}
+.tr-detail-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  color: var(--coara-text-tertiary);
+  font-size: 12px;
+}
+.tr-detail-section {
+  font-size: 12px;
+  color: var(--coara-text-tertiary);
+  margin: 14px 0 8px;
+}
+.tr-detail-section:first-child {
+  margin-top: 0;
+}
+.tr-detail-note {
+  font-size: 12px;
+  color: var(--coara-text-tertiary);
+  margin-bottom: 8px;
+}
+.tr-detail-more {
+  margin-top: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--coara-border-muted);
+  border-radius: 6px;
+  background: var(--coara-surface);
+  color: var(--coara-text);
+  cursor: pointer;
+}
+.tr-detail-more:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.tr-detail-callid {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.tr-detail-error-flag {
+  color: var(--coara-error);
+  font-weight: 600;
+}
+.tr-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin-bottom: 12px;
+}
+.tr-detail-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--coara-border-faint);
+}
+.tr-detail-table-dim {
+  color: var(--coara-text-tertiary);
+  font-size: 11.5px;
+}
+.tr-detail-diff {
+  margin-top: 10px;
+}
+
+/* ---- 工具条（搜索 + 全局折叠开关） ---- */
+.tr-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--coara-border-soft);
+  flex-shrink: 0;
+}
+.tr-search {
+  flex: 1;
+  max-width: 340px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  border: 1px solid var(--coara-border-muted);
+  border-radius: 7px;
+  background: var(--coara-surface);
+  color: var(--coara-text);
+  outline: none;
+}
+.tr-search:focus {
+  border-color: var(--coara-accent);
+  box-shadow: var(--coara-focus-ring);
+}
+.tr-toolbar-count {
+  font-size: 11.5px;
+  color: var(--coara-text-tertiary);
+  flex-shrink: 0;
+}
+
+/* 搜索未命中：降透明不删行（保持带子完整感） */
+.tr-row-dimmed {
+  opacity: 0.22;
+  transition: opacity 0.15s ease;
+}

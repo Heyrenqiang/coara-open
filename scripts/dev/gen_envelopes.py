@@ -78,6 +78,13 @@ def load_spec() -> dict:
             raise SystemExit(f"display_rules 条目缺 id / label_regex：{rule!r}")
     if not display.get("subagent_fold_groups"):
         raise SystemExit("display_rules 缺少 subagent_fold_groups")
+    if not display.get("tool_line", {}).get("label_paren_regex"):
+        raise SystemExit("display_rules 缺少 tool_line.label_paren_regex")
+    duration = display.get("duration_format") or {}
+    if not duration.get("tool_ms") or not duration.get("elapsed"):
+        raise SystemExit("display_rules 缺少 duration_format.tool_ms / elapsed")
+    if not display.get("silent_subagent_types", {}).get("types"):
+        raise SystemExit("display_rules 缺少 silent_subagent_types.types")
     return data
 
 
@@ -311,10 +318,21 @@ def _py_str(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _display_constants(spec: dict) -> tuple[str, dict, dict, list[str]]:
+    display = spec["display_rules"]
+    return (
+        str(display["tool_line"]["label_paren_regex"]),
+        dict(display["duration_format"]["tool_ms"]),
+        dict(display["duration_format"]["elapsed"]),
+        [str(t) for t in display["silent_subagent_types"]["types"]],
+    )
+
+
 def render_display_python(spec: dict) -> str:
     display = spec["display_rules"]
+    paren_re, tool_ms, elapsed, silent_types = _display_constants(spec)
     lines = [
-        '"""三端共享的显示口径常量与判据（聊天流噪音工具行 + 子智能体折叠组序）。',
+        '"""三端共享的显示口径常量与判据（聊天流噪音工具行 + 折叠组序 + 耗时口径 + 静默子智能体）。',
         "",
         _HEADER,
         f"真源版本：v{spec['version']}（{spec['updated']}）",
@@ -323,6 +341,21 @@ def render_display_python(spec: dict) -> str:
         "from __future__ import annotations",
         "",
         "import re",
+        "",
+        "#: 工具行标签括号形态正则（捕获组1=工具名、组2=参数正文）。",
+        f"TOOL_PAREN_LABEL_PATTERN: str = {_py_str(paren_re)}",
+        "",
+        "#: 工具调用耗时口径（毫秒入参）：<1000 显 `{ms}ms`；<10000 显一位小数 `{x.x}s`；否则整数 `{n}s`。",
+        f"DURATION_MS_SECONDS_AT: int = {int(tool_ms['seconds_at_ms'])}",
+        f"DURATION_MS_WHOLE_SECONDS_AT: int = {int(tool_ms['whole_seconds_at_ms'])}",
+        "",
+        "#: 回合/相位耗时口径（秒入参，取整后）：<60 显 `{n}s`；<3600 显 `{m}m {ss}s`；否则 `{h}h {mm}m {ss}s`。",
+        f"DURATION_MINUTE_SECONDS: int = {int(elapsed['minute_seconds'])}",
+        f"DURATION_HOUR_SECONDS: int = {int(elapsed['hour_seconds'])}",
+        f"DURATION_PART_SEPARATOR: str = {_py_str(str(elapsed['separator']))}",
+        "",
+        "#: 静默子智能体名单（janitor/daily 系统管家：工具摘要/diff 不进 CLI scrollback，三端同尺）。",
+        f"CLI_SILENT_SUBAGENT_TYPES: frozenset[str] = frozenset({tuple(sorted(silent_types))!r})",
         "",
         "#: 聊天流里不画的过程噪音行规则（真源顺序即判据顺序）。",
         "HIDDEN_TOOL_LINE_RULES: tuple[dict[str, object], ...] = (",
@@ -400,13 +433,30 @@ def render_display_python(spec: dict) -> str:
 def render_display_ts(spec: dict) -> str:
     display = spec["display_rules"]
     groups = display["subagent_fold_groups"]
+    paren_re, tool_ms, elapsed, silent_types = _display_constants(spec)
     order = ", ".join(_py_str(g["id"]) for g in groups)
+    silent = ", ".join(_py_str(t) for t in sorted(silent_types))
     lines = [
-        "/** 三端共享的显示口径常量与判据（聊天流噪音工具行 + 折叠组序）。",
+        "/** 三端共享的显示口径常量与判据（聊天流噪音工具行 + 折叠组序 + 耗时口径 + 静默子智能体）。",
         " *",
         f" * {_HEADER}",
         f" * 真源版本：v{spec['version']}（{spec['updated']}）",
         " */",
+        "",
+        "/** 工具行标签括号形态正则（捕获组1=工具名、组2=参数正文）。 */",
+        f"export const TOOL_PAREN_LABEL_RE = /{paren_re}/s;",
+        "",
+        "/** 工具调用耗时口径（毫秒入参）：<1000 显 `{ms}ms`；<10000 显一位小数 `{x.x}s`；否则整数 `{n}s`。 */",
+        f"export const DURATION_MS_SECONDS_AT = {int(tool_ms['seconds_at_ms'])};",
+        f"export const DURATION_MS_WHOLE_SECONDS_AT = {int(tool_ms['whole_seconds_at_ms'])};",
+        "",
+        "/** 回合/相位耗时口径（秒入参，取整后）：<60 显 `{n}s`；<3600 显 `{m}m {ss}s`；否则 `{h}h {mm}m {ss}s`。 */",
+        f"export const DURATION_MINUTE_SECONDS = {int(elapsed['minute_seconds'])};",
+        f"export const DURATION_HOUR_SECONDS = {int(elapsed['hour_seconds'])};",
+        f"export const DURATION_PART_SEPARATOR = {_py_str(str(elapsed['separator']))};",
+        "",
+        "/** 静默子智能体名单（janitor/daily 系统管家，三端同尺）。 */",
+        f"export const CLI_SILENT_SUBAGENT_TYPES: ReadonlySet<string> = new Set([{silent}]);",
         "",
         f"export const FOLD_GROUP_ORDER = [{order}] as const;",
         "export type FoldGroupId = (typeof FOLD_GROUP_ORDER)[number];",
@@ -470,17 +520,34 @@ def render_display_ts(spec: dict) -> str:
 def render_display_kotlin(spec: dict) -> str:
     display = spec["display_rules"]
     groups = display["subagent_fold_groups"]
+    paren_re, tool_ms, elapsed, silent_types = _display_constants(spec)
     order = ", ".join(f'"{g["id"]}"' for g in groups)
+    silent = ", ".join(f'"{t}"' for t in sorted(silent_types))
     lines = [
         "package com.example.agentchat.coara",
         "",
         "/**",
-        " * 三端共享的显示口径常量与判据（聊天流噪音工具行 + 折叠组序）。",
+        " * 三端共享的显示口径常量与判据（聊天流噪音工具行 + 折叠组序 + 耗时口径 + 静默子智能体）。",
         " *",
         f" * {_HEADER}",
         f" * 真源版本：v{spec['version']}（{spec['updated']}）",
         " */",
         "object DisplayRules {",
+        "    /** 工具行标签括号形态正则（捕获组1=工具名、组2=参数正文）。 */",
+        f'    val toolParenLabelRegex = Regex("""{paren_re}""", RegexOption.DOT_MATCHES_ALL)',
+        "",
+        "    /** 工具调用耗时口径（毫秒入参）：<1000 显 `{ms}ms`；<10000 显一位小数 `{x.x}s`；否则整数 `{n}s`。 */",
+        f"    const val DURATION_MS_SECONDS_AT: Long = {int(tool_ms['seconds_at_ms'])}L",
+        f"    const val DURATION_MS_WHOLE_SECONDS_AT: Long = {int(tool_ms['whole_seconds_at_ms'])}L",
+        "",
+        "    /** 回合/相位耗时口径（秒入参，取整后）：<60 显 `{n}s`；<3600 显 `{m}m {ss}s`；否则 `{h}h {mm}m {ss}s`。 */",
+        f"    const val DURATION_MINUTE_SECONDS: Int = {int(elapsed['minute_seconds'])}",
+        f"    const val DURATION_HOUR_SECONDS: Int = {int(elapsed['hour_seconds'])}",
+        f"    const val DURATION_PART_SEPARATOR: String = {_py_str(str(elapsed['separator']))}",
+        "",
+        "    /** 静默子智能体名单（janitor/daily 系统管家，三端同尺）。 */",
+        f"    val cliSilentSubagentTypes: Set<String> = setOf({silent})",
+        "",
         f"    val foldGroupOrder: List<String> = listOf({order})",
         "",
         "    val foldGroupTitles: Map<String, String> = mapOf(",
@@ -566,7 +633,7 @@ def main() -> int:
                 print(f"  - {p.relative_to(_REPO)}", file=sys.stderr)
             print("请运行：python scripts/dev/gen_envelopes.py", file=sys.stderr)
             return 1
-        print("✓ 信封常量与真源一致")
+        print("[OK] 信封常量与真源一致")
         return 0
 
     if drift:

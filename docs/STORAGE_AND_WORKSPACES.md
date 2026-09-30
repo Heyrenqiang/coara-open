@@ -67,8 +67,8 @@ coara Home 的解析顺序：合并配置的 `coara_home` 字段 → `COARA_HOME
       user/                     # 用户收藏（entries/ + files/）
     workflows/
       drafts/                   # WDL 草案
-      triggers.json             # 工作流触发器注册表
-      instances.db              # 工作流实例 SQLite
+      triggers.json             # 工作流触发器注册表（历史遗留，执行层剥离后不再消费）
+      instances.db              # 工作流实例 SQLite（wdl 软件侧数据，内核不读写）
     matters/                    # 事件源状态（定义在空间自治布局下位于各空间 `.coara/matters/`）
       definitions/*.yaml        # 无 registry（工作空间功能未启用）时的回退位；常规布局在 `<ws>/.coara/matters/definitions/`
       .state/                   # 事件去重、冷却、轮询水位（保持集中）
@@ -154,7 +154,7 @@ Token/工具用量 → usage       → usage/events.jsonl   （离线 / Web 用�
 
 适合单工作空间试用；**多工作空间长期使用请配置全局 Home**（如 `D:\coara`）。
 
-注意：错误日志（`errors.jsonl`）跟随 coara Home 的 logs 目录——配置了全局 Home 时在 `<coara_home>/workspaces/<id>/logs/errors.jsonl`，无全局 Home 时回退 `<workspace>/.coara/logs/errors.jsonl`。LLM 调用镜像按工作空间 × 智能体落盘 `.coara/llm/llm-calls.jsonl`（每实例一行全文），供独立开发者工具 `coara-devtools` 查看最后一轮调用。
+注意：错误日志（`errors.jsonl`）跟随 coara Home 的 logs 目录——配置了全局 Home 时在 `<coara_home>/workspaces/<id>/logs/errors.jsonl`，无全局 Home 时回退 `<workspace>/.coara/logs/errors.jsonl`。回合过程与工具行由会话视图落带（录像带 / `web_views`）承载，供轨迹视图回放。
 
 ---
 

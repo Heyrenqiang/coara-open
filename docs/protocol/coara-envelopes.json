@@ -1,7 +1,7 @@
 {
   "$schema": "./coara-envelopes.schema.json",
   "version": 2,
-  "updated": "2026-09-11",
+  "updated": "2026-09-27",
   "_comment": [
     "coara 三端（内核 / CLI / Web / Matrix-Android）控制信封协议的单一真源。",
     "任何一端的信封增减，都改这里，再用 scripts/dev/gen_envelopes.py 重新生成两端常量。",
@@ -193,6 +193,40 @@
         "reason": "只有 action=plan 不上屏（它的效果就是计划审阅气泡本身）；enter / exit 是模式开关，要上屏"
       }
     ],
+    "tool_line": {
+      "_comment": [
+        "工具行标签展示形态：把内核的 `tool(args)` 改成 `tool - args`（少一层括号噪音）；",
+        "括号形态原样返回非括号形态（`delegate coaras: …` 等）。",
+        "label_paren_regex：捕获组1=工具名、组2=参数正文（可能为空串）。Kotlin 用",
+        "DOT_MATCHES_ALL、JS 用 s 标志编译——两者语义同位。"
+      ],
+      "label_paren_regex": "^([A-Za-z_][\\w.]*)\\((.*)\\)$"
+    },
+    "duration_format": {
+      "_comment": [
+        "耗时显示的两档读法。真源只承载口径常量（阈值与单位分隔符），",
+        "端上各自实现分支（语言格式化细节不同），共用同一组常量。"
+      ],
+      "tool_ms": {
+        "seconds_at_ms": 1000,
+        "whole_seconds_at_ms": 10000,
+        "_comment": "工具调用耗时（毫秒入参）：<seconds_at_ms 显 `{ms}ms`；<whole_seconds_at_ms 显一位小数 `{x.x}s`（阈值点显如 `1.0s`）；否则四舍五入整数 `{n}s`"
+      },
+      "elapsed": {
+        "minute_seconds": 60,
+        "hour_seconds": 3600,
+        "separator": " ",
+        "_comment": "回合/相位耗时（秒入参，取整后）：<minute 显 `{n}s`；<hour 显 `{m}m {ss}s`（分秒两位补零、分隔符空格）；否则 `{h}h {mm}m {ss}s`"
+      }
+    },
+    "silent_subagent_types": {
+      "_comment": [
+        "静默子智能体名单：工具摘要/diff 不进 CLI scrollback，web 活动树与手机端同尺静默。",
+        "真源在本文件；scripts/dev/gen_envelopes.py 生成 display_rules.CLI_SILENT_SUBAGENT_TYPES，",
+        "builtin_agents 再 re-export，CLI/Web/手机读生成产物保持同尺。"
+      ],
+      "types": ["daily", "janitor"]
+    },
     "subagent_fold_groups": [
       { "id": "brief", "title": "任务指令", "default_open": false },
       { "id": "process", "title": "过程", "default_open": true },

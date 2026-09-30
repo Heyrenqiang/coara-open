@@ -105,14 +105,14 @@ coara 的挂起工具 activate 借此落地（仅 kimi+k3 生效，其它 provid
 
 ### 3.4 观测
 
-- `src/coara/llmlog.py::_usage_record()` 把 `cache_hit_ratio` 写进每次 LLM 调用的记录；
-- 每工作空间 × 每智能体的最后一轮完整快照落盘 `.coara/llm/llm-calls.jsonl`（每实例一行全文），由独立开发者工具 `coara-devtools` 查看。
+- `src/llm/usage.py` / `src/runtime/usage_query.py` 归一化并聚合 `cache_hit_ratio`（侧栏与 CLI 状态条展示）
+- 回合过程与工具行：个人页「录像带」（轨迹视图，读会话视图落带）
 
 ---
 
 ## 4. 上下文消息标签与注入形态
 
-所有运行时注入的上下文消息使用**中文 XML 标签**（识别逻辑：`src/coara/llmlog.py::_is_context_user_message`）。标签 helper 在 `src/core/message_tags.py`；`<工作空间消息>` 的解析在 `workspace_message_injector.py`。`<state_snapshot>` 是保留的英文标签（上下文压缩，见 `src/context/window.py`）。
+所有运行时注入的上下文消息使用**中文 XML 标签**（标签 helper：`src/core/message_tags.py`）。`<工作空间消息>` 的解析在 `workspace_message_injector.py`。`<state_snapshot>` 是保留的英文标签（上下文压缩，见 `src/context/window.py`）。
 
 | 标签 | 用途 |
 |------|------|
@@ -161,7 +161,7 @@ coara 的挂起工具 activate 借此落地（仅 kimi+k3 生效，其它 provid
 - 注入条件：当前 `message_history` 中**尚无任一模前缀种子**时注入一次；以伪造 USER 消息形式进入 history，保持 system prompt 静态。默认拆成多条：用户规则 → 环境上下文 → AGENTS.md → ws.md（缺文件则跳过；概况缺文件用占位句）。
 - 环境条内容：日期、cwd、平台、位置行等；位置行可经 `config.yaml` 的 `environment.location` 配置（默认「江西赣州信丰」，空字符串则省略该行）。
 - Git 快照（`git status -sb`）只对 `coaras` 子智能体注入（`include_git=True`）。
-- 顺序/开关：`<coara_home>/system/context_modules.yaml`（devtools 可改）。
+- 顺序/开关：`<coara_home>/system/context_modules.yaml`（配置页可改）。
 
 ### 4.3 工具回传包装
 
@@ -185,7 +185,8 @@ coara 的挂起工具 activate 借此落地（仅 kimi+k3 生效，其它 provid
 | 压缩与快照 | `src/context/window.py`、`injections/snapshot_injector.py` |
 | 远端 | `matrix_client/ingress_helpers.py`、`coara/remote_turn.py` |
 | usage 归一化 | `src/llm/usage.py` |
-| LLM 调用日志 | `src/coara/llmlog.py` |
+| 用量查询 / 缓存命中率 | `src/runtime/usage_query.py` |
+| 会话视图落带（录像带） | `src/ui/web_views.py`、`src/ui/trajectory.py` |
 
 ---
 

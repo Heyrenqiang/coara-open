@@ -275,7 +275,7 @@ LLM 无 tool_calls 但前台 delegate 未结束 → 轮次不退出，
 - **TraceStore**：全量落盘 `traces/trace_events.jsonl`；CLI 订阅同一 EventBus。
 - **Web**：无 Trace 复盘页；右侧工具活动侧栏吃 `trace_batch` + `/api/trace/events?kinds=tool`。
 - CLI `ActivityLiveTracker` 用 `workspace_trace_event` 做内存投影（不写 `activity/`）。
-- 调试单个 LLM 请求：独立开发者工具 `coara-devtools`（`python -m src.devtools`，默认 8090），读各工作空间 `.coara/llm/llm-calls.jsonl` 磁盘镜像（每实例一行全文，含 system prompt / 工具 Schema / 对话 / 响应），按工作空间 × 智能体看最后一轮。delegate 行的 tok 显示是 context 口径（最后一轮 prompt，与主会话侧栏一致），不是跨轮累计。
+- 调试单个回合过程：个人页「录像带」（轨迹视图，读会话视图落带）。delegate 行的 tok 显示是 context 口径（最后一轮 prompt，与主会话侧栏一致），不是跨轮累计。
 
 ---
 

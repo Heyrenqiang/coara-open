@@ -27,8 +27,8 @@ coara v8 是 **Python 优先的多智能体运行时**：asyncio 核心、内置
 
 所有运行时节点共享同一基类 `CoaraBase`，能力由运行时接线决定：`delegate_depth`、工具白名单、`owner_only`/`is_owner_context` 可见性、plan 模式允许列表、调用层审批（`call_policy`）。
 
-- **语言**：Python 3.11+ / **许可证**：MIT / **包名**：`coara` / **版本**：见 `pyproject.toml` / **仓库**：`D:\code_ws\v8`（Windows 开发环境）
-- **规模**：`src/` 512 个 Python 文件；`tests/` 359 个测试模块（共 384 个 `.py`；分默认 / extended / e2e / real_env 四档，见 [`tests/README.md`](tests/README.md)）
+- **语言**：Python 3.11+ / **许可证**：MIT / **包名**：`coara` / **版本**：见 `pyproject.toml` / **仓库**：`D:\code_ws\coara`（Windows 开发环境）
+- **规模**：`src/` 488 个 Python 文件；`tests/` 382 个 `.py`（分默认 / extended / e2e / real_env 四档，见 [`tests/README.md`](tests/README.md)）
 
 ## 技术栈
 
@@ -72,9 +72,8 @@ src/
 ├── account/          # 账户与授权能力（由实现包注册；开源版剥离）
 ├── telemetry/        # 遥测上报客户端（由实现包注册；开源版剥离）
 ├── matrix_host/      # GoMatrix / 隧道的 adopt-or-spawn 与看护
-├── session_log/      # 会话事件带（记录、投影、归档）
-├── devtools/         # 独立开发者工具（python -m src.devtools，LLM 请求镜像）
-├── llm/              # Provider 抽象、流式、重试、profile、service
+ ├── session_log/      # 会话事件带（记录、投影、归档）
+ ├── llm/              # Provider 抽象、流式、重试、profile、service
 ├── matrix_client/    # Matrix 机器人集成
 ├── records/          # 统一记录域：facade/migrate/store + agent_* 与 user_* 实现
 ├── prompt/           # Prompt 构建器、YAML 加载器、环境变量注入、agent 注册表
@@ -268,7 +267,7 @@ mypy src/
   - 长连接/队列资源（如 aiosqlite）测试必须显式 close，否则解释器退出挂住
   - 直接实例化 `WorkflowPersistence` / `aiosqlite.connect` 必须 `await persistence.close()`——每个连接一条非 daemon 工作线程（阻塞 `queue.get()`），不关则**用例全过但进程永不退出**（exit=4294967295）。排查「跑完不退」用 `python -c "import faulthandler; faulthandler.dump_traceback_later(25, exit=True); ..."`
   - 后台跑测试必带 `--timeout`（显式单条用例上限，配合 pyproject 120s 兜底），避免挂死套件拖成永远 running
-- **布局**：31 个 `test_*/` 子系统目录（test_agent/…test_workspace/）+ 共享 `helpers.py` / `real_env_helpers.py` / `workflow_wdl_fixtures.py`
+- **布局**：30 个 `test_*/` 子系统目录（test_agent/…test_workspace/）+ 共享 `helpers.py` / `real_env_helpers.py` / `workflow_wdl_fixtures.py`
 
 ## 关键架构模式
 
@@ -358,7 +357,7 @@ mypy src/
 - **busy 判据（易回归）**：`has_active_turn()` 四层判据——`_inside_turn`（迭代内）→ `_active_turn`（回合运行时）→ `_process_lock.locked()`（持锁）→ `_turn_queue.depth>0`（队列有等待者）。队列层兜底「锁释放瞬间、新回合尚未拿锁」的调度窗口——该窗口前三层全假但回合链未断，跟话仍应走 continuation 注入（09-23 跟话延迟 P0 根因）。web `_handle_chat` 跟话分支另补 `_turn_tails` 未排干判定（leftover 链排水间隙）
 - **Matrix（可选）**：GoMatrix 纯 Go homeserver（`gomatrix/`，构建 `cd gomatrix && go build -o gomatrix.exe ./cmd/gomatrix`），coara 托管拉起/看护（adopt-or-spawn + 隧道公网可达性看门狗：quick tunnel 被回收/断网恢复后自动重建，见 `src/matrix_host/supervisor.py`）；`matrix-nio` 客户端自动接受邀请；多 agent 共享房间按 `@mention` 路由（`mention_routing.py`）；文件桥 `MatrixFileBridge`；开机自启 `coara autostart on|off|status`（`src/cli/autostart.py`，注册表/desktop 文件为唯一事实源）
 - **Web UI**：`DashboardRestHandlers`（REST）+ `WebServer`（/ws `trace_batch` 实时推送）内嵌同进程；Vite React SPA（`src/ui/web/`）；token 认证；打开/唤起判定在 `WebServer.open_or_focus_decision` + `src/ui/web_tab_presence.py`（已有标签只抬窗 + 推 SPA 导航，绝不开新标签）。关键优化：trace 100ms 批处理、5s 轻量心跳、订阅 `workspace_switched` EventBus 刷新 trace_store、并行 root 关闭
-- **安全模型**（两层 + 身份分层）：① 调用层 `ToolExecutionPolicy`（`src/agent/tool_policy.py`）——**审批按身份分**：拥有者本人回合（`_is_owner_context` 为真；拿不到身份时按拥有者）**工具静态硬门一律不参与**，只认 LLM 自述 `require_approval: true` 与 `call_policy.prompt` 点名（信任交给模型自决）；对外回合（executor 注入 `trust_level`）硬门全生效——工具声明 `requires_approval`（shell 破坏性基名集合、写类越出挂载）/ LLM 自述 / `call_policy.prompt` 任一命中弹确认，审批送拥有者。5 分钟超时=未执行；`auto_allow` 旁路，`prompt` 优先；子智能体与 janitor/daily 整体跳过（审批只发生在委派边界）；② 执行沙箱 `src/tools/sandbox.py`（仅 `trust_level="untrusted"` 启用）：拦命令/路径/私网 URL、净化环境变量
+- **安全模型**（两层 + 身份分层）：① 调用层 `ToolExecutionPolicy`（`src/agent/tool_policy.py`）——**审批按身份分**：拥有者本人回合（`_is_owner_context` 为真；拿不到身份时按拥有者）**工具静态硬门一律不参与**，只认 LLM 自述 `require_approval: true` 与 `call_policy.prompt` 点名（信任交给模型自决）；对外回合（executor 注入 `trust_level`）硬门全生效——工具声明 `requires_approval`（shell 破坏性基名集合、写类越出挂载）/ LLM 自述 / `call_policy.prompt` 任一命中弹确认，审批送拥有者。5 分钟超时=未执行；`auto_allow` 旁路，`prompt` 优先；子智能体与 janitor/daily 整体跳过（审批只发生在委派边界）。**当前口径：全部按内部处理**——gomatrix 私人 homeserver，`resolve_matrix_trust_level` 一律返回 owner（09-27 用户拍板），external 双门（guest_rooms + kind=external）休眠保留为未来开放接入点；② 执行沙箱 `src/tools/sandbox.py`（仅 `trust_level="untrusted"` 启用）：拦命令/路径/私网 URL、净化环境变量
 - **文件工具安全**：全部要求**绝对路径**；写类越出挂载走人工审批门（delegate 子代理 strict resolver 硬拒）；挂载 `mode=ro` 的只读空间由写类工具硬拒（`src/tools/builtin/file_io/file_support.py`）；`resolve_workspace_path()` 拒相对路径/UNC/扩展路径/ADS；`glob`/`grep` 默认 workspace 根；注入检测 `detect_suspicious()` + `wrap_external_content()`
 
 ## 技能系统
@@ -366,6 +365,7 @@ mypy src/
 技能是**面向 LLM 的运行时指令**（非代码插件）：每个技能 = 目录 + `SKILL.md`（YAML frontmatter + 正文）。权威文档：[`docs/技能系统.md`](docs/技能系统.md)
 
 - **加载优先级**（后者覆盖前者）：内置 `skills/` → 用户级 `users/default/skills/` → 工作空间级 `.coara/skills/`（目录存在即加载）→ 运行时额外路径
+- **挂起治理**：挂起名单唯一真相是配置 `skills.deferred`（配置页「技能」区可切换，新会话生效）；SKILL.md 不声明挂起与否。名单内技能不进主清单，提示词里只露裸名，经 `skill(action=search)` 查描述后 activate
 - **运行时使用（仅 Root）**：`skill(action=search|activate)`（search 返回候选名+描述，activate 加载完整 SKILL.md 入历史）；`/new` 清除激活
 - **内置技能**：`event-source`、`工作空间管理`、`skill-creator`、`tool-creator`、`create-rule`
 

@@ -86,7 +86,7 @@ def main() -> int:
             say(proc.stdout.strip()[-2000:] or proc.stderr.strip()[-2000:])
             exit_code = 1
         else:
-            say("✓ 自持内核与 wdl-engine 行为一致（等价性通过）")
+            say("[OK] 自持内核与 wdl-engine 行为一致（等价性通过）")
     else:
         say("· wdl-engine 未安装 —— 跳过等价性比对（这正是解耦的目标状态）")
 
@@ -102,7 +102,7 @@ def main() -> int:
         for name, mine, theirs in drift:
             say(f"    {name}: 自持 {mine} · wdl {theirs}")
     else:
-        say("✓ 三个内核源文件与 wdl-engine 逐字节一致")
+        say("[OK] 三个内核源文件与 wdl-engine 逐字节一致")
 
     return exit_code
 

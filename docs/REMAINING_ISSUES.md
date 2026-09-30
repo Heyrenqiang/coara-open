@@ -104,21 +104,6 @@
 
 > 2026-09-16 P3 批次核销 12 条：#12 单例生命周期表入架构契约、#16 文件桥惰性索引、#17 EventBus 退订清残留、#18 switch_llm_global 前台判定同源化、#20 file_watch 去抖改 Timer 线程、#21 AgentRegistry 单例收敛、#22 LLMError 包装样板抽 helper、#23 前端类型补全 + 死 action 删除、#24 fire-and-forget 收编、#25 docstring 失实修正、#26 磁盘卫生约 19MB；web 改造遗留 #30 sidecar 节流写移出事件循环、#33 折叠封顶显式标记 + 老 brief 反查、#34 补注入判据收窄同步核销。2253+384 全绿
 
-------|------|------|
-| #12 | 全局单例过多（tool_registry/llm_service/context_window_manager/BashBackgroundRunner/BackgroundAgentManager） | 短期文档化每个单例生命周期与重置方法 |
-| #13 | 测试 SimpleNamespace mock 过多（352 处/55 文件） | 定义共享 typed mock 类 |
-| #14 | AGENTS.md 过长 | 拆分，架构深挖进 COARA_ARCHITECTURE.md |
-| #15 | 无用户反馈闭环 | /report 已走子智能体内部通道，缺 issue tracker/稳定反馈端点 |
-| #16 | `src/ui/web_file_bridge.py:74-85` resolve_file 未命中全目录 iterdir 前缀匹配 | 投递目录大时 O(n)；可建索引（2026-09-09 复核仍在） |
-| #17 | `src/coara/event_bus.py:59-63` 订阅表 defaultdict 空列表残留 + 退订 O(topics) | 轻微内存驻留；topic 数有限（复核仍在） |
-| #18 | `src/coara/root.py` switch_llm_global 用 manager.active_entry 判前台，后台空间回合中执行可错位 | 窗口小；可改显式前台引用（复核仍在，行号现为 :406/:516/:538） |
-| #20 | `src/event_sources/sources/file_watch.py:21,67,89` 共享 4 线程 debounce 池，`_fire` 线程内 sleep 阻塞，慢路径（网络盘 resolve）可占满 | 新事件排队延迟甚至丢失；可加超时/队列上限（复核仍在） |
-| #21 | `src/prompt/agent_registry.py:35-41` _agents 类属性 + `__new__` 单例冗余，绕过单例构造共享状态 | 主要影响测试隔离（复核仍在） |
-| #22 | 各 provider 重复 LLMError 包装样板（`openai.py:530-537`、`responses.py:312,446`） | 重试已集中 retry.py，异常包装可抽公共 helper；2026-09-09 新增 |
-| #23 | 前端 `ServerMessage` 联合类型（`src/ui/web/src/lib/ws.ts:34`）未覆盖 `subagent_start/complete/failed`、`background_agent_*` 等生命周期事件（后端 `trace_broadcast.py:63-67` 下发、store.ts 用裸 Set 消费） | TS 契约不健全，运行期靠 trace_batch 兜底不崩溃；`store.ts` 另有 3 个零调用死 action（`clearTraceEvents`/`resetModuleSession`）可删；2026-09-09 新增 |
-| #24 | fire-and-forget 任务引用丢失集合：`src/coara/base.py:798`（diff ensure_future）、`src/coara/mobile_sync.py:218,308,366,405`（create_task 不存引用）、`src/ui/web_server.py:453`（browser focus） | 异常时仅「Task exception never retrieved」噪声，不影响主流程；可统一收编到持引用容器；2026-09-09 新增 |
-| #25 | `src/ui/web_socket_registry.py:11` docstring 声称「single event loop, no locks needed」但实现有 `asyncio.Lock()`（:56） | 文档误导，改注释即可；2026-09-09 新增 |
-| #26 | 仓库磁盘卫生（均为 gitignored，不入库）：src+tests 约 1545 个 .pyc/61+ `__pycache__`、`build/` 501 个 .py（旧 wheel 残留）、`MagicMock/` 56 文件（mock.coara_home 测试残渣）、`gomatrix/gomatrix.exe~` 18MB | 可选定期清理；git 追踪层面无冗余（`standalone/makevideo` 为 embody/screenshot 工具引擎，活跃）；2026-09-09 新增 |
 
 ---
 
@@ -151,7 +136,7 @@
 ### #32 [P2] 子智能体帧投递失败只记 debug——已收口 09-13
 
 - **位置**：`src/coara/base.py::_route_subagent_tool_line`（`except → logger.debug`）、子智能体 chunk 投递路径同款、`src/ui/web_views.py::_persist_line_meta` 失败也是 debug
-- **问题**：这几条帧没有第二个来源（`subagent_chunk` 不落带、工具行只投不发第二遍），投递/落盘失败即永久缺失；而默认日志级别下 debug 不可见，排障时表现为「展开区少一段」且查不到原因
+- **问题**：工具行这类帧没有第二个来源（只投不发第二遍），投递/落盘失败即永久缺失；而默认日志级别下 debug 不可见，排障时表现为「展开区少一段」且查不到原因（`subagent_chunk` 现已一律落带，读端归集进 `subagent_texts`，投递失败可从录像带回补）
 - **方案**：失败至少 warning，并带上 `source / session_id / tool_call_id` 键名（与 `EndRegistry` 的 route miss 日志同格式，一眼对上）。S
 
 ### #35 [P2] `delegate(action=message)` 对运行中的前台子智能体不可用——已修 09-13

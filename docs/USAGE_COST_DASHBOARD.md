@@ -6,7 +6,7 @@
 > 日历热图定时间范围（点选日 / 整周 / 整月）+ 主维度（空间/智能体/模型）切换与行内交叉下钻，
 > 数据走 `/api/usage/range` 任意日区间聚合，一次请求带回三组交叉拆分）。
 > 2026-08-26 起展示口径**单源化**：金额/词元/命中率/费用状态统一由后端
-> `src/runtime/usage_display.py` 算好（`*_display` 等字段），Web / Android / devtools
+> `src/runtime/usage_display.py` 算好（`*_display` 等字段），Web / Android
 > 只渲染，不再各自用 TS/Kotlin/JS 实现格式化。
 
 ## 1. 背景与定位
@@ -153,7 +153,7 @@ providers:
 - 无 `turn_id` 的历史记录：并入 `turn_id=""` 的「历史记录」组（大轮层退化），费用照常算
 - 限制：默认按 ts 倒序取最近 500 个小轮，防止明细无限膨胀
 - 会话 / 大轮 / 小轮每层都带 `*_display` 展示字段；`totals` 为本次返回明细的合计
-  （只覆盖返回的 limit 条，供 devtools 头部行直渲）
+  （只覆盖返回的 limit 条，供展示端头部行直渲）
 
 ## 6. WebUI 展示（第一期）
 
@@ -185,7 +185,7 @@ providers:
 
 ### 6.4 数字规范（单源，2026-08-26 起）
 
-所有展示文案在 `src/runtime/usage_display.py` 算好，前端（Web / Android / devtools）
+所有展示文案在 `src/runtime/usage_display.py` 算好，前端（Web / Android）
 只渲染 `*_display` 字段，不得再对原始数值做格式化：
 
 - 金额 `format_usage_money`：`¥` + 千分位；≥100 整数，≥1 两位小数，≥0.0001 四位小数，
@@ -216,7 +216,6 @@ providers:
 - 手机端用量模块已落地（2026-09-12）：`/api/usage/range`（`summarize_usage_range`）按任意日区间
   聚合，除总览/按日/三维分组外还产出 `workspace_agents` / `workspace_models` / `agent_models`
   三组交叉，端上一次请求即可做主维度切换 + 行内下钻；会话→大轮→小轮明细仍走 `/api/usage/detail`
-  （费用明细也可在 coara-devtools 的 LLM log 按小轮/回合查看）
 - 滚动 N 天看板（`/api/usage/dashboard`）继续服务 Web；手机端不再消费它
 - LLM 自省：把会话费用摘要注入上下文，让 agent 看到花费后自动优化（降轮次、护缓存）
 - WebUI 配置页：模型价格可视化编辑（一期在 providers.yaml 手改）

@@ -208,7 +208,7 @@ coara 将**连接**（`providers:`，怎么连）与**消费方**（`llm_profile
 | `agent.<name>` | 按模型/场景的命名档案（用户模板带 `agent.minimax`、`agent.deepseek`、`agent.kimi`、`agent.zhipu`） |
 | `agent.web_search` | `web_search` 工具内决策 |
 | `context.compression` | `ContextWindowManager` 上下文压缩 |
-| `workflow.node` | 工作流节点（引擎子进程内节点智能体 LLM） |
+| `workflow.node` | 工作流节点（历史 profile 名；现行 flow 现场与独立 WDL 软件的节点 LLM 解析入口） |
 
 - 未配置 `llm_profiles` 时，由 `default_provider` / `default_model` 合成一套等价 profile（`src/llm/profile_resolver.py` 的 `build_default_profiles`）。
 - CLI 查看：`coara providers` · `coara llm-profiles`。
@@ -267,6 +267,7 @@ session:
 | `records.daily_model` | — | daily 专用模型；省略取 provider 默认模型 |
 | `skills.default_include` | `[]` | Dashboard 推荐勾选（`/api/v1/skills` 的 recommended 标记）；**不**写入 system prompt |
 | `skills.default_exclude` | `[]` | 从 default 推荐中排除 |
+| `skills.deferred` | `[]` | 挂起技能名单：不常驻 Root 提示词，经 `skill(search/activate)` 按需激活；配置页技能区可切换，新会话生效 |
 
 | `log_level` | `"INFO"` | 日志级别 |
 | `tools.disabled` | `[]` | 主会话工具开关：列表内工具不注入 prompt 且执行被拒（实验/裁剪用，如 `disabled: [edit]`） |
@@ -471,7 +472,7 @@ SDK 内置重试已关闭（`max_retries=0`），重试统一由 `src/llm/retry.
 | 提醒（Reminder） | `<coara_home>/reminders/store.json` | WebUI 自动化组；对话里 `reminder` 工具 | 即时 |
 | 工作空间登记 | `registry/workspaces.yaml` | WebUI 工作空间组；`ws` 工具；`coara ws` CLI | 即时 |
 | 技能清单（default_include） | `config.yaml` 的 `skills` 节 | WebUI 模型组；手编 | 新会话 |
-| 技能 listed 治理 | 每个 `SKILL.md` frontmatter | 手编 | 新会话 |
+| 技能挂起名单（deferred） | `config.yaml` 的 `skills.deferred` | WebUI 配置页「技能」区开关；手编 | 新会话 |
 | 本地记录 | `users/default/records/{agent,user}/` | WebUI 记录页；`record` / `local_search`；手点收藏（无 CLI `/collect`） | 即时 |
 | 工作流草案 | `users/default/workflows/drafts/` | WebUI 工作流页；`orchestrator` 工具 | 即时 |
 | API key | `system/.env` | 手编；首启向导；配置页 Providers | 重启进程 |

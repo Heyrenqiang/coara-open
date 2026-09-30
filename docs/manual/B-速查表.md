@@ -76,7 +76,7 @@
 |------|------|
 | `ws` | `list` / `add` / `remove` / `rename` / `switch`（登记生命周期） |
 | `review` | `board` / `list` / `pending` / `stats` / `read` / `archive` / `dismiss` / `elevate` / `resolve` / `mark_read`（动态批复，janitor 专属） |
-| `orchestrator` | `spawn`（登记节点）/ `run`（点火/提交引擎）/ `wait`（等收尾）/ `status`（看输出）/ `save`（从图自动投影落盘）/ `load`（恢复）/ `result`（查结果）/ `delete`（删草案）/ `update` / `edge` / `remove`（运行中调整） |
+| `orchestrator` | `spawn`（登记节点）/ `run`（点火 flow / 校验 WDL 投影）/ `wait`（等收尾）/ `status`（看输出）/ `save`（从图自动投影落盘）/ `load`（恢复）/ `result`（查结果）/ `delete`（删草案）/ `update` / `edge` / `remove`（运行中调整）；正式执行交独立 WDL 软件（`wdl/`） |
 | `todo` | `read` / `add` / `adjust` / `remove` / `clear` |
 | `skill` | `search` / `activate` |
 | `reminder` | `add_once` / `add_interval` / `add_cron` / `list` / `remove` |
@@ -108,7 +108,7 @@
 | 单文件查询/小改 | Root 直接用工具 |
 | 多路并行找资料 | 委派多个 coaras（任务书写明只读） |
 | 独立工程子任务 | 委派 coaras |
-| 已登记工作空间的定时巡检/维护 | 配 cron 事件源（`handle: park`）+ 工作流 trigger 直启 |
+| 已登记工作空间的定时巡检/维护 | 配 cron 事件源（`handle: park`）落箱提醒，处置后动手 |
 | 多步骤、有依赖、要质检 | 工作流 |
 
 **事件来了怎么办？（事件源 `salience` / `handle`）**
@@ -150,7 +150,7 @@
 | trace 详情文件 | 5000 条（超出裁剪最旧 20%）；JSONL 超 50MB 轮转 |
 | 分身 / 后台任务持久化记录 | 各 500 条 |
 | 单工作空间动态 | 500 条 |
-| 工作流终态实例 | 30 天后归档 |
+| 工作流终态实例 | 30 天后归档（独立 WDL 软件侧） |
 
 ## B.11 章节索引
 

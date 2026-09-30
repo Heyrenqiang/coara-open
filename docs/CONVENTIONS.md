@@ -133,12 +133,11 @@ Agent 应在首次编辑前、`grep` 定位后、或 `write` 覆盖前主动 `re
 - `orchestrator(spawn, flow=…, node_id=…, prompt=…, depends_on=…, routes_to=…)` — 登记 flow 节点（停车 coaras）
 - `orchestrator(action="run"|"wait"|"status", flow=…)` — 点火 / 等收尾 / 查节点输出
 - `orchestrator(action="save", flow=…)` — 从会话内图自动投影并校验落盘（也可 `definition=…` 直接存文本）；`load(flow=…)` 恢复
-- `orchestrator(action="run", wdl=…|draft_id=…)` — 提交 WorkflowEngine 执行
-- `orchestrator(action="result", instance_id=…)` — 查看结构化运行结果
+- `orchestrator(action="run", wdl=…|draft_id=…)` — 校验内核投影，通过后提示用独立 WDL 软件（`wdl/`，`wdl run` / `wdl serve`）执行；内核不再执行 WDL
 - `orchestrator(action="delete", draft_id=…)` — 删除草案（弹窗确认）
 - `orchestrator(action="update"|"edge"|"remove", flow=…, …)` — 运行中调整：改节点任务/路由、加删边（frm/to/on）、删未运行节点
 
-实例状态、取消、恢复等管理操作通过 Web UI（内核托管的 Web 服务 → /workflow）完成。
+正式执行的实例状态、取消、恢复等管理操作由独立 WDL 软件（`wdl/`）自管（画布工作台 / `wdl` 命令）。
 
 **WDL 怎么写**由 `orchestrator` 工具描述独占（挂起工具，`tool(action="activate")` 揭示后即见完整指南）。字段语义见 [`WORKFLOW_SPEC.md`](./WORKFLOW_SPEC.md)。图校验逻辑见 `src/workflow/core/semantics.py` 的 `validate_graph`，canonical 序列化见 `src/workflow/core/serde.py`。
 

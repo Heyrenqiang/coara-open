@@ -32,7 +32,7 @@ coara 是一个 Python 多智能体运行时：**无头内核（daemon/tray）�
 2. **回合循环**：`CoaraBase.process_message()` → `run_turn_loop()`（`src/coara/turn_orchestrator.py`）是运行时心脏，负责上下文准备、LLM 调用、工具执行、守卫与 trace。
 3. **工具分层注册**：进程级 3 个 + 每实例运行时工具 + Root 专属工具，可见性再经白名单/plan-mode/deferred 过滤。
 4. **三条消息通道**：`EventBus`（发后即忘的观测事件）与 `UnifiedScheduler`（必须进入对话循环的消息）分工明确；trace 经 EventBus 汇入 TraceStore 供 Web UI 展示。
-5. **进程模型**：无头内核（daemon/tray，持有 RootCoara）+ WorkflowEngineRuntime（multiprocessing 子进程，队列 IPC）+ 子智能体（进程内协程）+ bash 后台任务（真子进程）；**终端只是端**——裸 `coara` 拉起/复用常驻内核后 attach（`src/cli/main.py`）。
+5. **进程模型**：无头内核（daemon/tray，持有 RootCoara）+ 子智能体（进程内协程）+ bash 后台任务（真子进程）；正式工作流由独立 **WDL 软件**（`wdl/`）执行，不在内核进程模型内——内核只做 WDL 的生产者与文件宿主；**终端只是端**——裸 `coara` 拉起/复用常驻内核后 attach（`src/cli/main.py`）。
 
 全系统挂载关系一图览：
 
@@ -42,17 +42,14 @@ coara 运行时的进程与执行体
 │   ├── RootCoara
 │   │   ├── CoaraBase 回合循环（process_message → run_turn_loop）
 │   │   ├── EventBus（trace 汇聚中心）+ UnifiedScheduler（入站消息队列）
-│   │   ├── WorkflowBridge（工作流子进程 IPC 桥）
 │   │   └── 全局服务：workspace_manager / reminder / event_source
 │   ├── 子智能体（同进程协程，delegate 工具创建）
 │   │   ├── 前台：asyncio.create_task；结果由 LLM 调 delegate(action="wait") 显式收齐，回合出口只软提醒一次
 │   │   └── 后台：BackgroundAgentManager，完成后经 EventBus 通知注入
 │   ├── WorkspaceSession（每个工作空间一个对等 CoaraBase，含启动空间）
-│   ├── bash 后台任务子进程（新进程组，输出写 .coara/tasks/）
-└── WorkflowEngineRuntime 子进程（mp.Process，按需拉起，mp.Queue 双向 IPC）
-    ├── KernelGraphRunner：执行内核投影（节点=智能体，边=拓扑）
-    ├── delegate 池：节点复用 CoaraBase 实例
-    └── WorkflowPersistence：SQLite 持久化，终态 30 天归档
+│   └── bash 后台任务子进程（新进程组，输出写 .coara/tasks/）
+└── （内核外）独立 WDL 软件 wdl/（wdl run / wdl serve：KernelGraphRunner、持久化、画布工作台）
+    —— 与内核零 import；内核只做投影校验与文件宿主
 ```
 
 ### 进程与执行体一览
@@ -61,7 +58,7 @@ coara 运行时的进程与执行体
 |--------|------|----------|------|
 | RootCoara | 内核进程内 asyncio 对象 | daemon/tray 常驻内核启动时创建（裸 `coara` 拉起后 attach） | 直接方法调用；端经 EndChannel/WS |
 | 子智能体 | 同进程 asyncio 协程 | `delegate` 工具 | 协程 await / continuation_input |
-| WorkflowEngineRuntime | 独立子进程 | Root 按需拉起 | `multiprocessing.Queue` 双向 |
+| WDL 引擎 | 独立软件进程（`wdl/`，不在内核进程模型内） | 用户经 `wdl run` / `wdl serve` 或画布启动 | 与内核零 import；读草案文件 |
 | bash 后台任务 | 独立 OS 子进程（新进程组） | `shell` 工具后台模式 | 输出写文件，完成发 EventBus |
 
 ---
@@ -71,7 +68,7 @@ coara 运行时的进程与执行体
 ```text
 src/
 ├── cli/              # CLI 客户端：attach 传输/UI、attached_chat_runner、显示控制、scrollback、spinner、托盘入口
-├── coara/            # 内核：RootCoara / CoaraBase / 回合循环 / 命令层 / 输出路由(segment+end_registry) / 端注册 / 工作流桥 / 事件总线 / 调度器
+├── coara/            # 内核：RootCoara / CoaraBase / 回合循环 / 命令层 / 输出路由(segment+end_registry) / 端注册 / 事件总线 / 调度器
 ├── core/             # 跨层原语：tool_base / events / message_tags / process / text / read_format / system_messages（分层铁律：支撑层禁 import 上层）
 ├── agent/            # 工具执行器、hooks、循环检测、回合控制
 ├── background/       # bash 后台 runner、TaskStore
@@ -90,7 +87,7 @@ src/
 ├── ui/               # Web 服务：web_server / turn_stream / attach_ws / trace_broadcast / web_views（视图存储）/ TraceStore / handlers
 ├── utils/            # 剪贴板、图像处理、多模态
 ├── workspace/        # 工作空间注册表、VFS、权限、updates（动态存储）
-└── workflow/         # 工作流内核（core 图模型/serde/semantics）、持久化、触发器、结果投递
+└── workflow/         # WDL 草案生产侧（draft_store/service、core 图模型/serde/semantics 自持副本）；执行在仓库 `wdl/`
 
 tests/  skills/  gomatrix/  docs/
 ```
@@ -110,7 +107,7 @@ tests/  skills/  gomatrix/  docs/
 ├── 运行时入口层
 │   └── RootCoara（root.py / root_lifecycle.py）
 │       ├── 注册 Root 专属工具、加载技能、启动调度消费循环
-│       ├── 持有 EventBus + UnifiedScheduler + WorkflowBridge
+│       ├── 持有 EventBus + UnifiedScheduler
 │       └── 管理 WorkspaceSession 与全局服务
 ├── 核心运行时层（所有节点共用）
 │   ├── CoaraBase.process_message → run_turn_loop（base.py / turn_orchestrator.py）
@@ -119,7 +116,6 @@ tests/  skills/  gomatrix/  docs/
 │   └── ContextWindowManager（压缩 + 守卫，context/window.py）
 ├── 编排协调层
 │   ├── UnifiedScheduler + inbound_router（入站消息进对话）
-│   ├── WorkflowBridge → WorkflowEngineRuntime 子进程
 │   └── BackgroundAgentManager（后台 delegate 生命周期）
 ├── 能力层
 │   ├── 内置工具（file_io / web / delegate / workflow / shell / …）
@@ -247,7 +243,7 @@ RootCoara.initialize() 启动链
 │   ├── attach_usage_collector()
 │   └── 后台任务完成订阅；孤儿 running_* SubagentStore / TaskStore 恢复（遍历注册表全部活跃空间）
 ├── scheduler 消费循环 + idle watcher
-├── EventSourceManager + workflow trigger 注册表
+├── EventSourceManager
 └── 就绪日志
 ```
 
@@ -592,7 +588,7 @@ todo / delegate / flow / workflow 的执行边界
 │   ├── 多步任务 → todo 自我推进
 │   ├── 需独立上下文 → delegate 子智能体
 │   ├── 需 agentic 流程 → orchestrator(spawn, flow=…) 编排内存态 flow 图
-│   └── 需正式流程 → 用 orchestrator 织图并提交内核投影（save/run）给引擎
+│   └── 需正式流程 → 用 orchestrator 织图并投影落盘（save），执行交独立 WDL 软件（wdl/）
 ├── todo
 │   ├── 按 session 持久化，todo(action=read|update) 维护（整表覆盖）
 │   ├── 未完结 → TurnController 不允许回合退出
@@ -612,9 +608,9 @@ todo / delegate / flow / workflow 的执行边界
 │   ├── save(flow=…) 从图自动投影为 WDL 并落盘（无需单独 export）
 │   └── schedule 仅记录（内部不生效），投影到 WDL 后由外部引擎承载
 └── workflow（系统级子系统，存储/配置锚定 config home，与工作空间无关）
-    ├── 内核投影（nodes + edges）经 orchestrator 存取/提交
+    ├── 内核投影（nodes + edges）经 orchestrator 存取/校验
     ├── 草案是唯一活模型：编排写穿 <系统home>/users/default/workflows/drafts/，编辑器实时同步
-    └── 执行在 WorkflowEngineRuntime 子进程（实例库/日志在系统目录），结果经 bridge 回注对话
+    └── 执行由独立 WDL 软件（wdl/）承担；内核只做投影校验与文件宿主，orchestrator(run) 校验通过后提示用 wdl 执行
 ```
 
 ### 9.1 todo（自我推进清单）
@@ -695,7 +691,7 @@ todo / delegate / flow / workflow 的执行边界
 | | EventBus（`src/coara/event_bus.py`） | UnifiedScheduler（`src/coara/scheduler.py`） |
 |---|---|---|
 | 语义 | 发后即忘的发布/订阅 | 必须进 Root 对话循环的消息队列 |
-| 典型内容 | trace 事件、UI 更新、后台完成通知 | 用户输入、工作流结果、入站事件、后台 auto-run |
+| 典型内容 | trace 事件、UI 更新、后台完成通知 | 用户输入、入站事件、后台 auto-run |
 | 错过代价 | 只是观测缺失 | 会破坏对话状态或丢 LLM 响应 |
 
 经验法则：消息缺失会破坏对话或需要 LLM 响应 → scheduler；只服务 dashboard/CLI spinner/trace → EventBus。
@@ -707,9 +703,7 @@ todo / delegate / flow / workflow 的执行边界
 
 ### 10.2 入站路由
 
-`src/coara/inbound_router.py` 负责 scheduler 消息分派。消息内容体系下，事件源与提醒到点只落工作空间动态收件箱、后台完成只进驻发起会话历史，均**不再**入队叫醒主会话；剩余：
-
-- 工作流结果：经 `WorkflowBridge` 把子进程事件转成 scheduler 消息；默认不注入主会话（落动态 / Web UI / 后台完成通道）
+`src/coara/inbound_router.py` 负责 scheduler 消息分派。消息内容体系下，事件源与提醒到点只落工作空间动态收件箱、后台完成只进驻发起会话历史，均**不再**入队叫醒主会话；工作流终态由独立 WDL 软件自管与展示，到达内核的调度终态消息 debug 忽略。
 
 ### 10.3 后台任务完成通知链路
 
@@ -811,38 +805,22 @@ session 创建内容：共享 Root 的 persona/provider/`workspace_manager`；�
 
 每个节点运行时都是一个完整的 `CoaraBase` 智能体（工具循环、技能、防护、trace），经引擎 `_delegate_pool` 复用。详见 [`docs/节点即智能体.md`](节点即智能体.md)。
 
-### 13.2 提交链路：Root → 引擎
+### 13.2 提交链路：Root → 独立 WDL 软件
+
+内核**不执行** WDL。`orchestrator(action="run")` 只做投影校验与文件宿主：
 
 ```text
-提交链路的调用层级（引擎侧模块已随执行层剥离至独立 WDL 软件 wdl/；内核只做投影校验与文件宿主）
-├── orchestrator(action="run", draft_id=…|wdl=…) → 校验内核投影后交独立 WDL 软件执行
-│     （save 先 validate_projection → normalize_projection，src/workflow/draft_service.py）
-├── WorkflowBridge.submit_workflow()（src/coara/workflow_bridge.py）——已随执行层剥离
-└── WorkflowEngineController（src/workflow/engine_controller.py）——已随执行层剥离
-    ├── mp.Queue 发 {"type": "start_workflow", task_id, wdl}
-    └── 按需拉起 mp.Process(target=workflow_engine_main)
-        └── WorkflowEngineRuntime（src/coara/workflow_engine.py）——已随执行层剥离
-            ├── 命令循环：start / cancel / resume / inject
-            ├── KernelGraphRunner（wdl/src/wdl/core/kernel_runner.py）执行内核投影
-            ├── WorkflowPersistence（wdl/src/wdl/persistence.py，SQLite/aiosqlite）持久化实例状态
-            └── mp.Queue 回送事件 → Bridge 转成 EventBus trace + scheduler 消息
+orchestrator(action="save", …)
+  └── validate_projection → normalize_projection（src/workflow/draft_service.py）
+orchestrator(action="run", draft_id=…|wdl=…)
+  └── 校验内核投影，通过后提示用独立 WDL 软件执行（wdl/，wdl run / wdl serve）
 ```
 
-`WorkflowBridge` 同时维护活动实例集合与终态动态标题文案（完成/失败/已取消），并同步到工作空间动态。
+执行层（引擎进程、delegate 池、持久化、画布工作台）全部在独立 WDL 软件 `wdl/` 侧，与内核零 import。内核 `inbound_router` 对调度终态消息 debug 忽略；工作流终态由 wdl 软件自管与展示。`src/workflow/core/` 是 wdl 内核投影语义（`wdl/src/wdl/core/`）的自持副本，漂移有哨兵（`tests/test_workflow/test_core_fork_parity.py`、`scripts/dev/check_core_fork.py`）。
 
-### 13.3 引擎内部
+### 13.3 挂起与恢复
 
-- **delegate 池**：`_delegate_pool` 按池键（workspace | persona | meta_task | provider | model）复用 `CoaraBase` 实例——acquire 弹空闲实例（无则新建）跑一个节点后 release 放回，避免重复初始化；并行分支各取不同实例；引擎关闭时统一 shutdown 池
-- **节点执行**：`_kernel_node_executor` 把节点 id 作 persona 名、task 作 meta_task 构造 `WorkflowNodeAgent`，跑完整子智能体回合后把最后一条 assistant 消息作为 `steps.<节点名>.text` 交付
-- **激活语义**：`ActivationEngine`（`src/workflow/core/semantics.py`）做 wait/kick 边分类、就绪判定、激活上限裁决；两宿主共用
-- **持久化**：`busy_timeout = 5000`ms；终态实例超过 30 天先归档到 `workflow_instances_archive` 再删除（`prune_completed_instances(keep_days=30)`）；关闭时显式 `persistence.close()`（aiosqlite 连接是非守护线程，不关会拖住进程退出）
-- **父活检测**：引擎是非 daemon 子进程，主循环每次队列空转 tick（1s）计数，每 5 tick 经 psutil 探一次父进程（ppid + create_time 防 pid 复用）；父进程已死则先 `recover_orphaned_running` 再有秩序退出（`run()` 末尾 `os._exit(0)` 兜底，防泄漏线程拖住退出）
-
-### 13.4 挂起与恢复
-
-- **中断恢复**：引擎异常退出后重启把 running 实例标记为 `interrupted`，经 Web UI `/resume` 或引擎 resume 恢复；`KernelGraphRunner.resume` 认领实例（写 RUNNING，fenced 下 owner 换当前令牌）
-- **唤醒扫描**：`WorkflowWakeScanner`（`src/workflow/scanner.py`）每 5s 扫时间唤醒与事件超时（间隔可用 `COARA_WAKE_SCAN_INTERVAL` 配置）
-- **外部事件**：`RootCoara.inject_workflow_event(instance_id, event_type, payload)` 经 bridge 注入子进程
+工作流实例的挂起、恢复、唤醒扫描、外部事件注入均由独立 WDL 软件（`wdl/`）自管，不在内核进程模型内。
 
 ---
 
@@ -927,7 +905,7 @@ trace 数据流
 
 ### 17.3 事件源
 
-`EventSourceManager`（`src/event_sources/manager.py`）：文件监听 / 轮询 / webhook（默认 `127.0.0.1:8765`）/ cron 四种 kind；事件定义在 `<workspace>/.coara/matters/definitions/*.yaml`；事件内容**无条件**落所属空间动态收件箱（`handle: janitor` 是预留值，落箱后不派 LLM）；工作流 trigger 注册表命中即直启 WDL。
+`EventSourceManager`（`src/event_sources/manager.py`）：文件监听 / 轮询 / webhook（默认 `127.0.0.1:8765`）/ cron 四种 kind；事件定义在 `<workspace>/.coara/matters/definitions/*.yaml`；事件内容**无条件**落所属空间动态收件箱；`handle` 实际只有 `park` / `janitor` 两种（`janitor` 是预留值，落箱后不派 LLM，与 `park` 同效），都只是落箱挂住，由用户经 `/ws updates` 处置。WDL 执行由独立软件 `wdl/` 承担，内核只做投影校验与文件宿主，**没有**「事件命中直启 WDL」这条路。
 
 ### 17.4 工作空间动态（updates）
 
@@ -941,7 +919,7 @@ trace 数据流
 
 - **发现顺序**（`SkillManager.discover()`，后者覆盖前者）：内置 `skills/` → 用户级 `<coara_home>/users/default/skills/` → 工作区级 `.coara/skills/`（目录存在即加载）→ 额外路径
 - **实例隔离**：每个 CoaraBase 持有自己的 `SkillManager`（`self.skill_manager`，不再有模块级全局单例），发现池与 mtime 缓存互不影响——多工作空间并存时后 discover 者不再覆盖前者；Web 设置页的技能列表走 `control_plane` 的独立只读实例
-- **运行时使用**（仅 Root 的 `skill` 工具）：`skill(action=search)` 在全部技能（含挂起）中按关键词查候选（query 留空返回全量）；`skill(action=activate)` 把完整 SKILL.md 加载进 `message_history`。system prompt 经 `${COARA_SKILL_LIST}` 占位符注入启动时发现的技能名（会话内静态；`listed` 标记的技能给名+描述，挂起的只给裸名并指引用 search 查描述）
+ - **运行时使用**（仅 Root 的 `skill` 工具）：`skill(action=search)` 在全部技能（含挂起）中按关键词查候选（query 留空返回全量）；`skill(action=activate)` 把完整 SKILL.md 加载进 `message_history`。system prompt 经 `${COARA_SKILL_LIST}` 占位符注入启动时发现的技能名（会话内静态，两级都只给裸名；配置 `skills.deferred` 名单内的挂起技能单列一行并指引用 search 查描述，挂起与否只由配置名单决定，SKILL.md 不声明）
 - **会话状态**：`SkillSessionState.activated` 跟踪已激活技能；`/new` 清空
 - `config.yaml skills.default_include` 只在列表输出标 `[default]`
 - 当前内置：`event-source`、`工作空间管理`、`skill-creator`、`tool-creator`、`create-rule`；编排用挂起工具 `orchestrator`；图/视频用内置 `media`

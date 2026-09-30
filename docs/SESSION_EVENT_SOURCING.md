@@ -18,7 +18,7 @@
         ├── janitor 快照（投影为旧格式 JSON，janitor 读法不变）
         └── 审计视图（derive_messages(skip_shadowed=False)，被替代历史可重建）
 
-测量流（外键锚定，独立存储）  usage/events.jsonl、llm-calls.jsonl
+测量流（外键锚定，独立存储）  usage/events.jsonl
         锚定 session_id + turn_id 指向事件源
 
 资产层（独立产品，不进录像带）  records 收藏、daily 日报、ws.md 概况

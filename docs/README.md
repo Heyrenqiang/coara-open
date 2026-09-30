@@ -116,7 +116,7 @@
 2. **CLI cwd** = 当前工作空间；**name** = registry 身份。
 3. 外部事件无条件写入工作空间动态（存储在 `<workspace>/.coara/inbox/`，空间自治布局），默认 `handle: park` 挂住等用户。
 4. 手机 Matrix 绑定 `{coara_home}/runtime/active.json`。
-5. 定时执行走 **cron 事件源**（`kind: cron` 到点发事件，可直启工作流 trigger 或 `handle: janitor` 让管家处置；见 `docs/工作空间与事项制度.md`）。
+5. 定时执行走 **cron 事件源**（`kind: cron` 到点发事件落收件箱，`handle: park` 或预留的 `janitor` 等你处置；要跑工作流由你或 Root 处置后提交独立 WDL 软件；见 `docs/工作空间与事项制度.md`）。
 
 ---
 
@@ -137,7 +137,7 @@
 {coara_home}/runtime/active.json
 {workspace}/.coara/inbox/                    # 工作空间动态（空间自治布局）
 {workspace}/.coara/matters/definitions/      # 事件源定义（空间自治布局）
-{coara_home}/users/default/workflows/        # 草案、触发器、实例 DB
+{coara_home}/users/default/workflows/        # WDL 草案（触发器/实例 DB 为历史遗留，内核不再消费）
 {coara_home}/system/                         # .env、config.yaml、providers.yaml
 ```
 

@@ -17,7 +17,7 @@
 4. [事件流水线与 salience / handle](#4-事件流水线与-salience--handle)
 5. [去重与状态](#5-去重与状态)
 6. [webhook 接收服务](#6-webhook-接收服务)
-7. [与 janitor / Workflow 的衔接](#7-与-janitor--workflow-的衔接)
+7. [与 janitor 的衔接](#7-与-janitor-的衔接)
 8. [操作命令](#8-操作命令)
 9. [运维手册：App 反馈 webhook 闭环](#9-运维手册app-反馈-webhook-闭环)
 10. [文件索引](#10-文件索引)
@@ -31,10 +31,9 @@ file_watch / interval_poll / webhook / cron
         ↓ InboundEvent
 EventSourceManager._handle_event
         ↓ 去重（cooldown + 路径冷却）
-        ├─→ workflow trigger 注册表（事件直启 WDL）
         ├─→ 无条件落工作空间动态收件箱（<workspace>/.coara/inbox/）
         │     salience=high → 跨空间前台待处理视图
-        └─→ handle=janitor → 预留值：落箱后不派 LLM，内容留在收件箱
+        └─→ handle=janitor → 预留值：落箱后不派 LLM（与 park 同效），内容留在收件箱
 ```
 
 关键约定：
@@ -64,7 +63,7 @@ EventSourceManager._handle_event
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `id` | 必填 | 事件源 id（webhook URL、去重状态、cron trigger 绑定都用它） |
+| `id` | 必填 | 事件源 id（webhook URL、去重状态都用它） |
 | `enabled` | `true` | 停用的定义加载但不启动 |
 | `kind` | 必填 | `file_watch` / `interval_poll` / `webhook` / `cron` |
 | `workspace` | 必填 | 归属工作空间名（须在 registry 登记） |
@@ -136,13 +135,11 @@ EventSourceManager._handle_event
 
 注意：GoMatrix 的 Matrix 隧道（手机聊天）与这条 webhook 隧道是**两条线**，重启 gomatrix 不会自动带上 `/report` 接收。
 
-## 7. 与 janitor / Workflow 的衔接
+## 7. 与 janitor 的衔接
 
-事件通过去重后、落收件箱**之前**，先做工作流 trigger 自动启动：
+事件通过去重后**无条件**落收件箱，再按 `handle` 处置（§4）：`park` 与预留的 `janitor` 都只把内容留在收件箱等你批示，不派 LLM。
 
-1. **Workflow trigger 自动启动**：`RootCoara._on_workflow_trigger(event_id, payload)` 查 trigger 注册表，命中的 WDL 直接提交引擎执行（事件 payload 作为 inputs）。注册机制见 [工作空间与事项制度.md](./工作空间与事项制度.md) §4。cron 源到点的 `cron.tick` 同样可命中 trigger 直启定时工作流。
-
-落箱之后按 `handle` 处置（§4）：`park` 与预留的 `janitor` 都只把内容留在收件箱等你批示。两条（trigger 直启 / 落箱曝光）**并行生效**，互不排斥。
+WDL 执行由独立软件 `wdl/` 承担（`wdl run` / `wdl serve`），内核只做投影校验与文件宿主；事件源**不会**直启 WDL。
 
 概念与设计见 [工作空间与事项制度.md](./工作空间与事项制度.md)。
 
@@ -206,10 +203,11 @@ COARA_WEBHOOK_TOKEN=<与 yaml 中 webhook_secret 相同>
 
 默认模板源 `handle: park`：事件写入 `暄` 工作空间动态，Root 不自动开回合。用户查看动态后说「处理一下」，或由 Root 按 `suggested_delegate: coaras` 提示 `delegate(coaras, workspace="暄")`。
 
-要事件**自动**触发处理，二选一：
+要事件**自动**触发处理，目前只有落箱一途：
 
-- `handle` 保持 `park`（唯一生效值）：事件落箱后等你经 `/ws updates` 处置
-- 或配工作流 trigger：把 WDL 草案绑定该事件源（`schedule.kind: event` + `event_id`），事件命中直启工作流（不经 janitor）
+- `handle` 保持 `park`（唯一生效值；`janitor` 为预留，同效）：事件落箱后等你经 `/ws updates` 处置
+
+WDL 执行由独立软件 `wdl/` 承担，事件源不会直启工作流；要跑正式流水线，由你或 Root 在处置后另行提交。
 
 ### 9.4 file_watch / poll 备用通道
 

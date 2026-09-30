@@ -25,8 +25,7 @@ venv/
 env/
 ENV/
 
-# Local secrets. Keep checked-in .env.example as the variable reference;
-# runtime keys live in <COARA_HOME>/system/.env (not the repo root).
+# Local secrets; runtime keys live in <COARA_HOME>/system/.env (not the repo root).
 .env
 .coara/.env
 .coara/config.yaml

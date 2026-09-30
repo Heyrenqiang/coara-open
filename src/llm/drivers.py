@@ -19,7 +19,7 @@ def infer_driver(provider_name: str, base_url: str, explicit: str | None) -> str
         raise ConfigError(
             f"Unknown LLM driver '{explicit}' for provider '{provider_name}'. "
             "Use `driver: openai` or `driver: responses` "
-            "(see deploy/official/templates/providers.yaml)."
+            "(see the release providers.yaml template)."
         )
 
     # DeepSeek / MiniMax 官方端点默认 Responses；勿落到 Chat Completions

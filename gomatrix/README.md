@@ -36,7 +36,7 @@ gomatrix.exe --config gomatrix.toml   # 指定配置文件（coara 托管即用�
 gomatrix.exe --no-tunnel              # 仅局域网开发模式（无公网配对 QR）
 ```
 
-复制 `gomatrix.toml.example` → `gomatrix.toml` 可自定义隧道和 agent。
+加一份 `gomatrix.toml` 可自定义隧道和 agent。
 
 ## 手机连接（任意网络）
 
@@ -79,7 +79,7 @@ public_url = "https://matrix.example.com"
 
 > 相对的 `database_path` / `media_path` 以**配置文件所在目录**为基准解析，不随进程工作目录移动。
 
-完整示例见 [`gomatrix.toml.example`](gomatrix.toml.example)。核心字段：
+完整字段说明：
 
 ```toml
 server_name = "coara.local"
@@ -220,7 +220,6 @@ gomatrix/
 │   ├── service/              # 业务逻辑（用户、房间、时间线、sync、媒体、agent）
 │   ├── tunnel/               # Cloudflare 隧道管理
 │   └── utils/                # ID 生成、校验、内容类型
-├── gomatrix.toml.example
 └── go.mod
 ```
 

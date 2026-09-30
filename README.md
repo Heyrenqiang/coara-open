@@ -50,7 +50,7 @@ pip install -e ".[dev]"
 coara
 ```
 
-一条 `coara` 命令即可启动。首次使用在 Web 配置页「模型」添加 API key。配置样例见 `config.yaml.example`、`providers.yaml.example` 与 `.env.example`。
+一条 `coara` 命令即可启动。首次使用在 Web 配置页「模型」添加 API key。配置以发布模板为准。
 
 Web UI 需要先构建前端（Node 18+）：
 

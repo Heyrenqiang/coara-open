@@ -7,4 +7,3 @@ providers.yaml
 config.local.yaml
 llm_preferences.yaml
 
-!.env.example

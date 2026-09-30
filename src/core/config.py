@@ -354,7 +354,7 @@ class ConfigManager:
             "No LLM configuration found. "
             f"Expected {system_dir_for_home(home) / 'providers.yaml'} or "
             f"<repo_root>/providers.yaml. "
-            "Copy providers.yaml.example to one of these locations."
+            "Copy the release providers.yaml template to one of these locations."
         )
 
     def _resolve_coara_home_config(self) -> Path | None:

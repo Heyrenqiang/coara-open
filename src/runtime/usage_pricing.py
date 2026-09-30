@@ -119,10 +119,7 @@ def load_base_pricing_map(coara_home: Path | str | None = None) -> dict[str, Mod
     # 仓根回退：从本文件向上找带 providers.yaml 的仓库根（避免依赖 config 私有 API）
     here = Path(__file__).resolve()
     for parent in here.parents:
-        if (parent / "pyproject.toml").is_file() and (parent / "providers.yaml").is_file():
-            candidates.append(parent / "providers.yaml")
-            break
-        if (parent / "pyproject.toml").is_file() and (parent / "providers.yaml.example").is_file():
+        if (parent / "pyproject.toml").is_file():
             break
     home_fallback = _default_coara_home()
     if home_fallback:

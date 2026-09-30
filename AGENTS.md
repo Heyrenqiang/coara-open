@@ -47,7 +47,7 @@ coara v8 是 **Python 优先的多智能体运行时**：asyncio 核心、内置
 | 文件 | 用途 |
 |------|------|
 | `pyproject.toml` | 主构建配置 — setuptools、元数据、依赖、入口点（`coara` → `src.cli.main:cli`）、ruff 与 pytest 工具配置 |
-| `deploy/official/templates/` | **最终用户默认唯一真相**（Build-Release 拷进安装包）；`config.yaml.example`/`providers.yaml.example` 仅为开发参考 |
+| `deploy/official/templates/` | **最终用户默认唯一真相**（Build-Release 拷进安装包） |
 | `docs/CONFIGURATION.md` | 配置速查 / COARA_HOME / 用户默认 templates / 发布隔离要点 |
 | `llm_preferences.yaml` | `/model` 聊天命令写入，持久化到 `<coara_home>/users/default/`（无 home 时为 `<cwd>/.coara/`） |
 | `<coara_home>/system/config.yaml`、`providers.yaml`、`.env` | 本地生效配置（不入 git；从 templates 复制） |
@@ -371,7 +371,7 @@ mypy src/
 
 ## 配置
 
-1. **环境变量**：`<coara_home>/system/.env` 是 API key 的唯一落点——分 **LLM**（配置页「模型」，`providers.yaml` 的 `api_key_env`）与 **工具**（配置页「工具」凭据，如 `AGNES_MEDIA_API_KEY` / 搜索 / 邮件）；变量名分开，值可以相同。模型保存时经 `migrate_inline_api_keys_to_env` 写入；`env.example` 仅为变量参考
+1. **环境变量**：`<coara_home>/system/.env` 是 API key 的唯一落点——分 **LLM**（配置页「模型」，`providers.yaml` 的 `api_key_env`）与 **工具**（配置页「工具」凭据，如 `AGNES_MEDIA_API_KEY` / 搜索 / 邮件）；变量名分开，值可以相同。模型保存时经 `migrate_inline_api_keys_to_env` 写入
 2. **Provider / 全局配置**：从 `deploy/official/templates/` 复制 → `<coara_home>/system/providers.yaml` / `config.yaml`（勿把本机私货打进 templates；providers.yaml 不写死 `agent.main` 的 provider——由 default_provider 合成跟随全局默认，硬绑会把默认链架空；providers.yaml 只保留 `api_key_env` 声明不存 key）；用户级覆盖 `users/default/config.yaml`；开发机在 `COARA_DEV=1` 时可叠加仓根 `config.yaml`/`providers.yaml`（`.env` 只认 home，见 `docs/CONFIGURATION.md`）
 3. **coara_home 解析**：合并配置 `coara_home` 字段 → `COARA_HOME` env → `<cwd>/.coara`（单工作空间试用）
 4. **上下文模块**（AGENTS.md / 用户规则 / 情境注入）顺序可配置：`<coara_home>/system/context_modules.yaml`（详见 `docs/工作空间概况.md`）；用户规则本体 `system/user_rules.md` 可在配置页通用设置卡手动编辑（`/api/v1/user-rules`），新会话生效

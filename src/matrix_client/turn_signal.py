@@ -98,11 +98,18 @@ async def matrix_turn_scope(
     send_chunk: Any | None = None,
     background_active: Callable[[], bool] | None = None,
     send_stats: TurnSendStats | None = None,
+    ws_tag: tuple[str, str] | None = None,
 ) -> AsyncIterator[None]:
-    """Wrap a Matrix turn; send the [COARA_TURN] end envelope on exit. 正常结束、异常、slash 命令提前返回都会送到"""
+    """Wrap a Matrix turn; send the [COARA_TURN] end envelope on exit. 正常结束、异常、slash 命令提前返回都会送到
+
+    ws_tag=(ws_id, ws_name)：绑进 ContextVar，让结束信封与回合外发送都带空间标签——
+    本 scope 包在 stream_to_matrix 外层，信封发送时回合内的标签绑定早已复位，必须在这里重绑
+    """
     from src.core.logger import logger
+    from src.matrix_client.send_guard import reset_matrix_ws_tag, set_matrix_ws_tag
 
     logger.info("matrix turn start (room_id={})", room_id)
+    _tag_token = set_matrix_ws_tag(*(ws_tag or ("", "")))
     try:
         yield
     except BaseException as exc:
@@ -116,11 +123,14 @@ async def matrix_turn_scope(
     else:
         logger.info("matrix turn end: completed (room_id={})", room_id)
     finally:
-        if send_chunk is not None:
-            background = False
-            if background_active is not None:
-                with suppress(Exception):
-                    background = bool(background_active())
-            chunk_losses = send_stats.failed_chunks if send_stats is not None else 0
-            envelope = turn_end_envelope(background=background, chunk_losses=chunk_losses)
-            await _send_end_envelope_with_retry(send_chunk, room_id, envelope)
+        try:
+            if send_chunk is not None:
+                background = False
+                if background_active is not None:
+                    with suppress(Exception):
+                        background = bool(background_active())
+                chunk_losses = send_stats.failed_chunks if send_stats is not None else 0
+                envelope = turn_end_envelope(background=background, chunk_losses=chunk_losses)
+                await _send_end_envelope_with_retry(send_chunk, room_id, envelope)
+        finally:
+            reset_matrix_ws_tag(_tag_token)

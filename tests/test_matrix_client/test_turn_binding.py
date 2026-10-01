@@ -102,8 +102,8 @@ async def test_text_turn_and_leftover_stay_on_bound_session(_patch_ingress) -> N
     assert b.calls == 0
     # Initial message + drained leftover continuation, both on A.
     assert a.calls == 2
-    # Detached chunks carry the origin workspace tag.
-    assert any(s.startswith("[alpha]") for s in sent)
+    # detached 前缀已随分空间显示移除：归属由 content.coara_ws_* 标签承载
+    assert sent == ["A回复", "A回复"]
 
 
 @pytest.mark.asyncio

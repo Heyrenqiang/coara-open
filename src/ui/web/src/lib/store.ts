@@ -74,8 +74,11 @@ interface AppState {
   messages: ChatMessage[];
   turnActive: boolean;
   currentTurnId: string | null;
-  /** 斜杠命令执行中（如 /compact）：无回合事件，单独驱动 spinner 行。 */
-  pendingCommand: string | null;
+/** 斜杠命令执行中（如 /compact）：无回合事件，单独驱动 spinner 行。
+ *  与 pendingCommandWorkspace 配对——命令归属发起时的空间，spinner 只在该空间视图显示。 */
+pendingCommand: string | null;
+/** pendingCommand 的发起空间（workspaceDir）。null = 未知/无空间，按当前视图匹配。 */
+pendingCommandWorkspace: string | null;
   /** 当前回合开始时间（ms，performance/Date.now），spinner 已用时间用。 */
   turnStartedAt: number | null;
   /** 当前会话 ID —— 空间一条线上的会话段标注（/new 换段）。不作数据边界。 */
@@ -1415,6 +1418,7 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
   currentTurnId: null,
   turnStartedAt: null,
   pendingCommand: null,
+pendingCommandWorkspace: null,
   sessionId: null,
   workspaceDir: null,
   sessionIdByWorkspace: {},
@@ -1951,8 +1955,15 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       }
 
       case "command_result": {
-        // 本连接单播回执：先清 pendingCommand（否则边界丢帧会让 /compact spinner 永挂）。 再按空间/会话边界决定是否上屏
-        set({ pendingCommand: null });
+        // 本连接单播回执：按帧携带的空间标签清对应桶（归属未知或帧无标签兜底全清）。
+        // 再按空间/会话边界决定是否上屏。
+        set((s) => {
+          const dir = typeof msg.workspace_dir === "string" && msg.workspace_dir.trim() ? msg.workspace_dir : null;
+          if (!dir || s.pendingCommandWorkspace === null || s.pendingCommandWorkspace === dir) {
+            return { pendingCommand: null, pendingCommandWorkspace: null };
+          }
+          return {};
+        });
         if (!msgSubject || msgSubject === "root") {
           const frameDir = msg.workspace_dir;
           if (typeof frameDir === "string" && frameDir.trim()) {
@@ -2058,8 +2069,14 @@ export const useStore = create<AppState>((set, get) => ({  connected: false,
       }
 
       case "error": {
-        // 本连接错误回执：先清 pendingCommand，再按边界决定是否上屏
-        set({ pendingCommand: null });
+        // 本连接错误回执：按帧携带的空间标签清对应桶（归属未知或帧无标签兜底全清），再按边界决定是否上屏
+        set((s) => {
+          const dir = typeof msg.workspace_dir === "string" && msg.workspace_dir.trim() ? msg.workspace_dir : null;
+          if (!dir || s.pendingCommandWorkspace === null || s.pendingCommandWorkspace === dir) {
+            return { pendingCommand: null, pendingCommandWorkspace: null };
+          }
+          return {};
+        });
         const frameDir = msg.workspace_dir;
         if (typeof frameDir === "string" && frameDir.trim()) {
           if (!_frameInBoundary(msg, get())) break;

@@ -124,4 +124,21 @@ assert(dGrouped.length === 1 && dGrouped[0].kind === "group", "daily → one gro
 assert(dGrouped[0].group?.key.startsWith("daily:"), "daily group key");
 assert(dGrouped[0].group?.header.text?.includes("daily"), "daily header label");
 
+// 跨段也聚一棵常驻树：janitor 跑多次、中间隔着普通行，仍归同一组（计数累加）
+const gap: TrajectoryRow = {
+  seq: 15,
+  ts: 15,
+  source: "web",
+  turn_id: "t0",
+  role: "assistant",
+  text: "普通回合行",
+};
+const j3: TrajectoryRow = { ...j1, seq: 16, text: "再扫概况" };
+const mixed = groupTrajectoryRows([j1, j2, gap, j3]);
+const jGroups = mixed.filter((l) => l.kind === "group" && l.group?.header.actor === "janitor");
+assert(jGroups.length === 1, "janitor 跨段仍一棵组");
+assert(jGroups[0].group?.children.length === 3, "组内 3 行（含跨段新帧）");
+assert(jGroups[0].group?.header.text?.includes("3 项"), "组头计数随更新");
+assert(mixed.some((l) => l.kind === "row" && l.row?.seq === 15), "普通行不被吸进组");
+
 console.log("trajectoryData.selftest: ok");

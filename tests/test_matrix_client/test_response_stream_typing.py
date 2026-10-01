@@ -46,9 +46,10 @@ async def test_stream_forwards_all_assistant_chunks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_detached_turn_chunks_sent_with_workspace_prefix() -> None:
-    """Mid-turn workspace switch: remaining chunks still go to the room,
-    prefixed with the origin workspace name."""
+async def test_detached_turn_chunks_sent_without_workspace_prefix() -> None:
+    """Mid-turn workspace switch: remaining chunks still go to the room.
+    detached 前缀已随分空间显示移除——归属由 content.coara_ws_* 标签承载，
+    正文不再加空间前缀。"""
     root = _FakeRoot(["切前\n", "切后一\n", "✓ shell(ls)\n", "切后二\n"])
     root._foreground_session_id = "ws-a"
     root.workspace_dir = "D:/ws/shop"
@@ -68,9 +69,9 @@ async def test_detached_turn_chunks_sent_with_workspace_prefix() -> None:
         send_chunk=send_chunk,
     )
 
-    # Tool-summary chunks are still not sent remotely; detached text chunks
-    # carry the workspace tag.
-    assert sent == ["切前\n", "[shop] 切后一\n", "[shop] 切后二\n"]
+    # Tool-summary chunks are still not sent remotely; text chunks no longer
+    # carry a workspace prefix (归属改走消息标签，手机端按空间分页)。
+    assert sent == ["切前\n", "切后一\n", "切后二\n"]
 
 
 def test_tool_summary_should_send_to_matrix_removed() -> None:

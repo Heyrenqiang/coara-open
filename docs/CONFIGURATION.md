@@ -4,7 +4,8 @@
 >
 > 最小可运行链路：`.env`（API Key） + `providers.yaml`（模型）→ `coara`
 >
-> **用户默认唯一真相**：发布模板目录（闭源仓 deploy/official/templates/，进安装包；`install.ps1` 仅在缺失时写入 `COARA_HOME`）。  
+> **用户默认唯一真相**：deploy/official/templates/（闭源仓）（进安装包；`install.ps1` 仅在缺失时写入 `COARA_HOME`）。  
+> 仓库根 `*.example` / 本机真实 yaml·`.env` **不进**用户包。发版隔离见 [`deploy/official/RELEASE_WORKFLOW.md`](../deploy/official/RELEASE_WORKFLOW.md) §配置隔离。
 >
 > **与用户手册的关系**：[`manual/19-配置系统.md`](./manual/19-配置系统.md) 讲概念与加载机制；本文是**逐键速查表**。
 
@@ -120,7 +121,7 @@ copy deploy\official\templates\config.yaml $env:COARA_HOME\system\config.yaml
 
 ## 三、`providers.yaml` — LLM 提供商
 
-结构以发布模板 providers.yaml 为准（出厂四家：`deepseek` / `kimi`(k3) / `zhipu` / `minimax`，每家两个最新模型；Agnes 段不在模板里，见 §3.0）：
+结构以用户模板 发布模板 providers.yaml（闭源仓） 为准（出厂四家：`deepseek` / `kimi`(k3) / `zhipu` / `minimax`，每家两个最新模型；Agnes 段不在模板里，见 §3.0）：
 
 ```yaml
 default_profile: agent.main
@@ -248,7 +249,7 @@ session:
 
 ## 四、`config.yaml` — 全局行为
 
-复制发布模板 `config.yaml` → `<coara_home>/system/config.yaml`（全部可选，不配也有默认值）。模板含 matrix / events / reminders / cli / output_truncation / runtime_enhancements / security / records / session / tools 等节。
+复制 `deploy/official/templates/config.yaml` → `<coara_home>/system/config.yaml`（全部可选，不配也有默认值）。用户模板含 matrix / events / reminders / cli / output_truncation / runtime_enhancements / security / records / session / tools 等节。
 
 ### 4.1 顶层通用项
 
@@ -424,7 +425,7 @@ runtime_enhancements:
 
 SDK 内置重试已关闭（`max_retries=0`），重试统一由 `src/llm/retry.py` 管控（退避 + Retry-After + 总预算）。回合中可用 `/status` 查看相位行（等待模型响应 / 接收模型响应含分片数 / 执行工具 / 本地处理中 + 已耗时），用于区分「API 没回」与「本地卡住」。
 
-### 4.10 其它零散节（开发参考发布模板 config.yaml）
+### 4.10 其它零散节（开发参考 `deploy/official/templates/config.yaml`）
 
 | 节 | 字段（默认值） | 说明 |
 |----|----------------|------|
@@ -496,8 +497,8 @@ SDK 内置重试已关闭（`max_retries=0`），重试统一由 `src/llm/retry.
 | `<coara_home>/runtime/active.json` | 当前 live CLI 工作空间（手机 Matrix 绑定） |
 | `<workspace>/.coara/matters/definitions/` | 事件源定义 YAML（仓库 `events/*.example` 是模板；空间自治布局） |
 | `<coara_home>/users/default/matters/.state/` | 事件源去重状态 |
-| `<coara_home>/users/default/skills/` | 用户级技能 |
-| `skills/`（仓库内） | 内置技能（只读） |
+| `<coara_home>/users/default/skills/` | 全局级技能（所有空间可见，可覆盖出厂同名） |
+| `skills/`（仓库内） | 出厂技能（全局级，只读） |
 
 ---
 

@@ -54,7 +54,6 @@ async def dispatch_matrix_end_frame(
     *,
     room_id: str,
     send_chunk: SendChunkFn,
-    body_prefix: Callable[[], str] | None = None,
 ) -> None:
     """把一帧内核输出投成房间消息 —— 手机链路的唯一帧出口
 
@@ -63,7 +62,7 @@ async def dispatch_matrix_end_frame(
       端上折进发起它的 delegate 工具行；判据只看父标识——实例重建时子智能体正文会以
       ``kind="chunk"`` 混进主会话流（base.py 已打父标），只按 kind 判定会让它退化成正文
     - 注入信封（``<后台结果>`` / ``<系统提醒>`` …）只给模型看，不投房间
-    - 其余按正文发送，``body_prefix`` 提供 detached 回合的空间前缀
+    - 其余按正文发送（空间归属由 content.coara_ws_* 标签承载，端上按空间分页）
     """
     kind = str(frame.get("kind") or "")
     if kind == "tool":
@@ -122,8 +121,7 @@ async def dispatch_matrix_end_frame(
         # 子智能体帧缺父标识：直发房间会显示成主消息，丢掉（异常态，web/CLI 出口同尺）
         logger.warning("matrix end frame dropped: %s without parent call id", kind)
         return
-    prefix = body_prefix() if body_prefix is not None else ""
-    await send_chunk(room_id, f"{prefix}{chunk}" if prefix else chunk)
+    await send_chunk(room_id, chunk)
 
 
 def is_tool_summary_chunk(chunk: str) -> bool:
@@ -221,20 +219,6 @@ async def stream_coara_reply_to_matrix(
         if bind_ws_id is not None
         else (matrix_view_session_key(root) or getattr(root, "_foreground_session_id", None))
     )
-    from src.coara.turn_detach import workspace_display_name
-
-    def still_fg() -> bool:
-        current = matrix_view_session_key(root) or getattr(root, "_foreground_session_id", None)
-        return current == turn_ws_id
-
-    # 可变容器：显示通道闭包与驱动循环共享 detached 前缀状态。
-    _detached: dict[str, str | None] = {"prefix": None}
-
-    def _compute_detached_prefix() -> str:
-        if _detached["prefix"] is None:
-            ws_name = workspace_display_name(root, str(getattr(turn_coara, "workspace_dir", "") or ""))
-            _detached["prefix"] = f"[{ws_name}] " if ws_name else ""
-        return _detached["prefix"] or ""
 
     # 后正文带前缀续投（与旧循环一致）。
     end_registry = getattr(root, "end_registry", None)
@@ -289,20 +273,25 @@ async def stream_coara_reply_to_matrix(
     sender: Any = None
     if end_registry is not None:
 
-        def _body_prefix() -> str:
-            """回合已 detach（本端当前看的空间变了）时给正文加空间前缀"""
-            return "" if still_fg() else _compute_detached_prefix()
-
         async def sender(frame: dict) -> None:
             _tape_frame(frame)
             await dispatch_matrix_end_frame(
                 frame,
                 room_id=room_id,
                 send_chunk=send_chunk,
-                body_prefix=_body_prefix,
             )
 
         end_registry.register("matrix", sender, _sess_id)
+    # 空间标签绑定：本回合经 matrix_room_send_text 发出的所有消息自动带
+    # coara_ws_id/coara_ws_name，手机端按空间分页过滤的唯一依据（改名不影响，
+    # 端上只认 id）。回合区间外发送（命令回执、同步推送）不绑标签。
+    from src.coara.turn_detach import workspace_display_name
+    from src.matrix_client.send_guard import reset_matrix_ws_tag, set_matrix_ws_tag
+
+    _ws_tag_token = set_matrix_ws_tag(
+        str(turn_ws_id or ""),
+        workspace_display_name(root, str(getattr(turn_coara, "workspace_dir", "") or "")),
+    )
     try:
         async with _ensure_matrix_turn_context(room_id, send_chunk):
             async for chunk in turn_coara.process_message(
@@ -330,12 +319,10 @@ async def stream_coara_reply_to_matrix(
                     continue
                 if sender is not None:
                     continue
-                if not still_fg():
-                    await send_chunk(room_id, f"{_compute_detached_prefix()}{chunk}")
-                    continue
                 # App "..." stop after the first assistant message while Coara was
                 await send_chunk(room_id, chunk)
     finally:
+        reset_matrix_ws_tag(_ws_tag_token)
         _record_tape(root, {**_tape_base, "kind": "turn_end", "payload": {"reason": "complete"}})
         if end_registry is not None and sender is not None:
             end_registry.unregister("matrix", sender, _sess_id)

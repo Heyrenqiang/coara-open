@@ -17,6 +17,7 @@ import {
   type CommandInfo,
   type SlashPickerOptionInfo,
 } from "../../lib/api";
+import { useStore } from "../../lib/store";
 import {
   buildSlashCompletions,
   slashCancelStem,
@@ -220,24 +221,42 @@ function snapshotTransferEntries(data: DataTransfer | null): {
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
 
-/** 输入草稿持久化键：切模块/刷新后恢复未发送内容（对话页输入体验）。 */
-const CHAT_DRAFT_KEY = "coara.chat.draft";
+/** 输入草稿持久化键（按空间分桶）：切模块/刷新后恢复未发送内容，
+ *  切空间时各空间的草稿互不串扰（与手机端 ChatDraftStore 同构）。 */
+const CHAT_DRAFT_KEY_PREFIX = "coara.chat.draft";
 /** 附件草稿（已落盘 uploads 的元数据；不含 blob 预览）。 */
-const CHAT_DRAFT_ATTACH_KEY = "coara.chat.draft.attachments";
+const CHAT_DRAFT_ATTACH_KEY_PREFIX = "coara.chat.draft.attachments";
 /** 草稿落 localStorage 的防抖窗口。 */
 const DRAFT_WRITE_DEBOUNCE_MS = 300;
 
-function writeDraft(text: string): void {
+/** 空间键归一：workspaceDir 原样入键（绝对路径天然唯一）；空 = 边界未定前的单桶。 */
+function draftTextKey(wsDir: string): string {
+  return wsDir ? `${CHAT_DRAFT_KEY_PREFIX}.${wsDir}` : CHAT_DRAFT_KEY_PREFIX;
+}
+
+function draftAttachKey(wsDir: string): string {
+  return wsDir ? `${CHAT_DRAFT_ATTACH_KEY_PREFIX}.${wsDir}` : CHAT_DRAFT_ATTACH_KEY_PREFIX;
+}
+
+function writeDraft(wsDir: string, text: string): void {
   try {
-    localStorage.setItem(CHAT_DRAFT_KEY, text);
+    localStorage.setItem(draftTextKey(wsDir), text);
   } catch {
     /* localStorage 不可用时静默降级为内存态 */
   }
 }
 
-function readDraftAttachments(): Attachment[] {
+function readDraft(wsDir: string): string {
   try {
-    const raw = localStorage.getItem(CHAT_DRAFT_ATTACH_KEY);
+    return localStorage.getItem(draftTextKey(wsDir)) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function readDraftAttachments(wsDir: string): Attachment[] {
+  try {
+    const raw = localStorage.getItem(draftAttachKey(wsDir));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -260,7 +279,7 @@ function readDraftAttachments(): Attachment[] {
   }
 }
 
-function writeDraftAttachments(atts: Attachment[]): void {
+function writeDraftAttachments(wsDir: string, atts: Attachment[]): void {
   try {
     const rows = atts
       .filter((a) => a.ref && !a.ref.startsWith("pending-"))
@@ -272,18 +291,18 @@ function writeDraftAttachments(atts: Attachment[]): void {
         ...(a.previewText ? { previewText: a.previewText } : {}),
       }));
     if (rows.length === 0) {
-      localStorage.removeItem(CHAT_DRAFT_ATTACH_KEY);
+      localStorage.removeItem(draftAttachKey(wsDir));
       return;
     }
-    localStorage.setItem(CHAT_DRAFT_ATTACH_KEY, JSON.stringify(rows));
+    localStorage.setItem(draftAttachKey(wsDir), JSON.stringify(rows));
   } catch {
     /* ignore */
   }
 }
 
-function clearDraftAttachments(): void {
+function clearDraftAttachments(wsDir: string): void {
   try {
-    localStorage.removeItem(CHAT_DRAFT_ATTACH_KEY);
+    localStorage.removeItem(draftAttachKey(wsDir));
   } catch {
     /* ignore */
   }
@@ -360,24 +379,23 @@ function hasDraggedFiles(e: DragEvent): boolean {
   return Array.from(e.dataTransfer.types).includes("Files");
 }
 
-function loadDraftAttachments(): Attachment[] {
-  return readDraftAttachments().map((a) =>
+function loadDraftAttachments(wsDir: string): Attachment[] {
+  return readDraftAttachments(wsDir).map((a) =>
     a.kind === "image" ? { ...a, previewUrl: uploadRawUrl(a.ref) } : a,
   );
 }
 
 export const ChatInput = memo(function ChatInput({ onSend, onCommand, disabled }: ChatInputProps) {
-  const [text, setText] = useState(() => {
-    try {
-      return localStorage.getItem(CHAT_DRAFT_KEY) ?? "";
-    } catch {
-      return "";
-    }
-  });
+  // 草稿按空间分桶：workspaceDir 是当前视图空间（绝对路径天然唯一）；
+  // 边界未定（刷新/切空间初期）时为 null，草稿读写落空键单桶
+  const workspaceDir = useStore((s) => s.workspaceDir);
+  const wsDirRef = useRef(workspaceDir ?? "");
+  wsDirRef.current = workspaceDir ?? "";
+  const [text, setText] = useState(() => readDraft(useStore.getState().workspaceDir ?? ""));
   // 与文本草稿同寿：刷新/切模块后恢复已落盘 uploads 附件（pending 不入盘）。
   const initialAttsRef = useRef<Attachment[] | null>(null);
   if (initialAttsRef.current === null) {
-    initialAttsRef.current = loadDraftAttachments();
+    initialAttsRef.current = loadDraftAttachments(useStore.getState().workspaceDir ?? "");
   }
   const [attachments, setAttachments] = useState<Attachment[]>(() => initialAttsRef.current!);
   // state 异步——发送路径 await 上传后不能信闭包里的 attachments，
@@ -387,7 +405,7 @@ export const ChatInput = memo(function ChatInput({ onSend, onCommand, disabled }
     const next = updater(attachmentsRef.current);
     attachmentsRef.current = next;
     setAttachments(next);
-    writeDraftAttachments(next);
+    writeDraftAttachments(wsDirRef.current, next);
   };
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   const [pickers, setPickers] = useState<Record<string, SlashPickerOptionInfo[]>>({});
@@ -411,11 +429,13 @@ export const ChatInput = memo(function ChatInput({ onSend, onCommand, disabled }
 
   // 草稿持久化：防抖写（每次击键都同步落 localStorage 会与流式渲染抢主线程），
   // 卸载（切模块）时把未落盘的那份补写出去，草稿不丢。
+  // 写入经 wsDirRef 取当前桶：防抖计时器存活期跨了切空间，闭包里的旧键会把
+  // 旧草稿误写进新桶
   useEffect(() => {
     if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(() => {
       draftTimerRef.current = null;
-      writeDraft(textRef.current);
+      writeDraft(wsDirRef.current, textRef.current);
     }, DRAFT_WRITE_DEBOUNCE_MS);
     return () => {
       if (draftTimerRef.current !== null) {
@@ -431,10 +451,28 @@ export const ChatInput = memo(function ChatInput({ onSend, onCommand, disabled }
         clearTimeout(draftTimerRef.current);
         draftTimerRef.current = null;
       }
-      writeDraft(textRef.current);
+      writeDraft(wsDirRef.current, textRef.current);
     },
     [],
   );
+
+  // 切空间换草稿桶：把目标空间的文本与附件装回输入区（旧桶内容已在防抖写/
+  // 附件变更时落盘，切走不丢）
+  useEffect(() => {
+    const dir = workspaceDir ?? "";
+    if (draftTimerRef.current !== null) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
+    const nextText = readDraft(dir);
+    textRef.current = nextText;
+    setText(nextText);
+    const nextAtts = loadDraftAttachments(dir);
+    attachmentsRef.current = nextAtts;
+    setAttachments(nextAtts);
+    // 初始化态已由 useState 惰性读取同一份草稿，跳过首次回装
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceDir]);
 
   const refreshCommands = () => {
     fetchCommandList()
@@ -469,14 +507,14 @@ export const ChatInput = memo(function ChatInput({ onSend, onCommand, disabled }
 
   const clearInput = () => {
     setText("");
-    writeDraft("");
+    writeDraft(wsDirRef.current, "");
     applyAttachments((prev) => {
       prev.forEach((a) => {
         if (a.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(a.previewUrl);
       });
       return [];
     });
-    clearDraftAttachments();
+    clearDraftAttachments(wsDirRef.current);
     pendingTextBodiesRef.current.clear();
     skippedOptimisticRef.current.clear();
     setCompletionIdx(0);

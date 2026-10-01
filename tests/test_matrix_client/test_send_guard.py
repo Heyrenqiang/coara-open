@@ -36,6 +36,33 @@ def test_turn_end_envelope_content_flagged_final() -> None:
     assert _build_text_content("普通输出")["coara_turn"] == "intermediate"
 
 
+def test_ws_tag_written_into_content_and_reset() -> None:
+    """空间标签经 ContextVar 写入 content；reset 后不再携带（手机端分空间过滤的唯一依据）。"""
+    from src.matrix_client.send_guard import _build_text_content, reset_matrix_ws_tag, set_matrix_ws_tag
+
+    token = set_matrix_ws_tag("ws-1", "v8")
+    try:
+        content = _build_text_content("hello")
+        assert content["coara_ws_id"] == "ws-1"
+        assert content["coara_ws_name"] == "v8"
+    finally:
+        reset_matrix_ws_tag(token)
+    assert "coara_ws_id" not in _build_text_content("hello")
+
+
+@pytest.mark.asyncio
+async def test_turn_scope_tags_end_envelope_and_restores() -> None:
+    """matrix_turn_scope 的 ws_tag 让回合外发送（含结束信封）也带空间标签，退出后复位。"""
+    from src.matrix_client.send_guard import _build_text_content
+    from src.matrix_client.turn_signal import matrix_turn_scope
+
+    async with matrix_turn_scope("!r", ws_tag=("ws-1", "v8")):
+        content = _build_text_content("hello")
+        assert content["coara_ws_id"] == "ws-1"
+        assert content["coara_ws_name"] == "v8"
+    assert "coara_ws_id" not in _build_text_content("hello")
+
+
 @pytest.mark.asyncio
 async def test_matrix_room_send_text_rejects_room_send_error() -> None:
     client = MagicMock(logged_in=True)

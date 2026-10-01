@@ -58,7 +58,9 @@ const SessionModelSelect = memo(function SessionModelSelect({
 
 export function ChatView() {
   const turnActive = useStore((s) => s.turnActive);
-  const pendingCommand = useStore((s) => s.pendingCommand);
+  const pendingCommand = useStore((s) =>
+    s.pendingCommandWorkspace === s.workspaceDir || s.pendingCommandWorkspace === null ? s.pendingCommand : null,
+  );
   const connected = useStore((s) => s.connected);
   const connError = useStore((s) => s.connError);
   const activeName = useStore((s) => s.activeName);
@@ -187,7 +189,10 @@ export function ChatView() {
   );
 
   const sendCommand = useCallback((text: string) => {
-    useStore.setState({ pendingCommand: text.split(/\s+/)[0] });
+    useStore.setState({
+      pendingCommand: text.split(/\s+/)[0],
+      pendingCommandWorkspace: useStore.getState().workspaceDir,
+    });
     getWS().send({
       type: "command",
       text,

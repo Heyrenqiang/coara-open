@@ -917,9 +917,9 @@ trace 数据流
 
 技能是**面向 LLM 的运行时指令**（不是代码插件）：每个技能一个目录，含 `SKILL.md`（YAML frontmatter + Markdown 正文）。增删技能只在磁盘上放/删目录。
 
-- **发现顺序**（`SkillManager.discover()`，后者覆盖前者）：内置 `skills/` → 用户级 `<coara_home>/users/default/skills/` → 工作区级 `.coara/skills/`（目录存在即加载）→ 额外路径
+- **发现顺序**（`SkillManager.discover()`，后者覆盖前者）：出厂 `skills/`（全局级，程序目录只读）→ 全局级 `<coara_home>/users/default/skills/`（覆盖出厂同名）→ 工作区级 `.coara/skills/`（目录存在即加载）→ 额外路径
 - **实例隔离**：每个 CoaraBase 持有自己的 `SkillManager`（`self.skill_manager`，不再有模块级全局单例），发现池与 mtime 缓存互不影响——多工作空间并存时后 discover 者不再覆盖前者；Web 设置页的技能列表走 `control_plane` 的独立只读实例
- - **运行时使用**（仅 Root 的 `skill` 工具）：`skill(action=search)` 在全部技能（含挂起）中按关键词查候选（query 留空返回全量）；`skill(action=activate)` 把完整 SKILL.md 加载进 `message_history`。system prompt 经 `${COARA_SKILL_LIST}` 占位符注入启动时发现的技能名（会话内静态，两级都只给裸名；配置 `skills.deferred` 名单内的挂起技能单列一行并指引用 search 查描述，挂起与否只由配置名单决定，SKILL.md 不声明）
+ - **运行时使用**（仅 Root 的 `skill` 工具）：`skill(action=search)` 按关键词查候选（query 留空返回全量；scope=all 另列其它空间的技能并标注来源）；`skill(action=activate)` 把完整 SKILL.md 加载进 `message_history`；`skill(action=import)` 把其它空间的技能整份复制到本空间（复制非引用，同名需 overwrite）。system prompt 经 `${COARA_SKILL_LIST}` 占位符注入启动时发现的技能名（会话内静态，两级都只给裸名；配置 `skills.deferred` 名单内的挂起技能单列一行并指引用 search 查描述，挂起与否只由配置名单决定，SKILL.md 不声明）
 - **会话状态**：`SkillSessionState.activated` 跟踪已激活技能；`/new` 清空
 - `config.yaml skills.default_include` 只在列表输出标 `[default]`
 - 当前内置：`event-source`、`工作空间管理`、`skill-creator`、`tool-creator`、`create-rule`；编排用挂起工具 `orchestrator`；图/视频用内置 `media`

@@ -575,11 +575,17 @@ class CoaraMatrixBot:
         raw_send_chunk = self._ingress_host.send_chunk
         turn_stats = turn_send_stats(raw_send_chunk)
         turn_send: Any = turn_stats.send if turn_stats is not None else raw_send_chunk
+        from src.coara.turn_detach import workspace_display_name
+
         async with matrix_turn_scope(
             room_id,
             send_chunk=raw_send_chunk,
             background_active=background_work_active,
             send_stats=turn_stats,
+            ws_tag=(
+                str(bind_ws_id or ""),
+                workspace_display_name(self.root, str(getattr(bind_coara, "workspace_dir", "") or "")),
+            ),
         ):
             await _deliver_image_turn(
                 self.root,

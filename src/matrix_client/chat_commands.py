@@ -105,9 +105,19 @@ async def try_handle_matrix_chat_command(
     if room_id:
         # /compact 等慢命令要跑 LLM：包 turn scope，结束发 [COARA_TURN] 信封，
         # 手机端靠它点亮/熄灭 typing（入站本身点灯，信封灭灯）。
+        # 信封同样要带空间标签：手机端 typing 按空间分桶，无标签灭灯找不到桶
+        from src.coara.turn_detach import workspace_display_name
+        from src.matrix_client.ingress_helpers import matrix_view_session_key
         from src.matrix_client.turn_signal import matrix_turn_scope
 
-        async with matrix_turn_scope(room_id, send_chunk=lambda _rid, body: send_text(body)):
+        async with matrix_turn_scope(
+            room_id,
+            send_chunk=lambda _rid, body: send_text(body),
+            ws_tag=(
+                str(matrix_view_session_key(root) or ""),
+                workspace_display_name(root, str(getattr(target, "workspace_dir", "") or "")),
+            ),
+        ):
             result = await execute_command(
                 root,
                 raw,

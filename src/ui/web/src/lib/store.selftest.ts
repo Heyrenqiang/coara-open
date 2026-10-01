@@ -745,6 +745,26 @@ function hBound(msg: Record<string, unknown>): void {
   assert(s().pendingCommand === null, "silent command: pendingCommand cleared");
 }
 
+// silent command: 回执带空间标签时，归属未知（未记 workspace）也要清桶——
+// 否则命令发出时 workspaceDir 未就绪（null）会让 spinner 永挂（回归）
+{
+reset();
+const s = useStore.getState;
+useStore.setState({ pendingCommand: "/model", pendingCommandWorkspace: null });
+h({
+type: "command_result",
+workspace_dir: "D:/ws/a",
+result: {
+output: "",
+action: "none",
+data: { navigate: "/config?focus=models" },
+exit_session: false,
+},
+});
+assert(s().pendingCommand === null, "workspace-untagged command cleared by tagged frame");
+assert(s().pendingCommandWorkspace === null, "workspace bucket cleared");
+}
+
 // compact: clear pending
 {
   reset();

@@ -173,3 +173,129 @@ async def test_legacy_skill_actions_rejected(action: str) -> None:
     tool = SkillTool(parent_coara=MagicMock())
     with pytest.raises(ValueError, match="Unknown skill action"):
         tool.create_invocation({"action": action, "name": "demo"})
+
+@pytest.mark.asyncio
+async def test_import_skill_copies_from_other_workspace(tmp_path) -> None:
+    from unittest.mock import AsyncMock
+
+    from src.skills.manager import SkillManager
+    from src.workspace.registry import WorkspaceRegistry
+
+    src_ws = tmp_path / "src_ws"
+    skill_dir = src_ws / ".coara" / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\ndescription: 演示\n---\n正文内容", encoding="utf-8")
+    (skill_dir / "extra.txt").write_text("附件", encoding="utf-8")
+    cur_ws = tmp_path / "cur_ws"
+    cur_ws.mkdir()
+
+    registry = WorkspaceRegistry(tmp_path / "home")
+    registry.document = type(registry.document)()
+    registry.ensure_workspace(src_ws, name="源空间")
+    registry.ensure_workspace(cur_ws, name="当前")
+
+    root = MagicMock()
+    root.workspace_manager.registry = registry
+    coara = MagicMock()
+    coara._root_ref = root
+    coara.workspace_dir = str(cur_ws)
+    coara.skill_manager = SkillManager()
+    await coara.skill_manager.discover(cur_ws, coara_home=None)
+    coara.load_skills = AsyncMock()
+
+    tool = SkillTool(parent_coara=coara)
+    result = await tool.create_invocation(
+        {"action": "import", "name": "demo-skill", "from_workspace": "源空间"}
+    ).execute()
+    assert not result.is_error
+    dest = cur_ws / ".coara" / "skills" / "demo-skill"
+    assert (dest / "SKILL.md").exists()
+    assert (dest / "extra.txt").read_text(encoding="utf-8") == "附件"
+    assert "源空间" in (dest / ".imported-from").read_text(encoding="utf-8")
+    assert "正文内容" in (dest / "SKILL.md").read_text(encoding="utf-8")
+
+    # 覆盖需 overwrite=true
+    result = await tool.create_invocation(
+        {"action": "import", "name": "demo-skill", "from_workspace": "源空间"}
+    ).execute()
+    assert result.is_error
+    assert "overwrite" in str(result.content)
+    result = await tool.create_invocation(
+        {"action": "import", "name": "demo-skill", "from_workspace": "源空间", "overwrite": True}
+    ).execute()
+    assert not result.is_error
+
+
+@pytest.mark.asyncio
+async def test_import_rejects_skill_already_loadable(tmp_path) -> None:
+    from src.skills.manager import SkillManager
+    from src.workspace.registry import WorkspaceRegistry
+
+    # 源空间造一个与出厂技能同名的技能：当前链已可加载 → 拒绝搬运
+    src_ws = tmp_path / "src_ws"
+    skill_dir = src_ws / ".coara" / "skills" / "event-source"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: event-source\ndescription: 山寨\n---\nx", encoding="utf-8")
+    cur_ws = tmp_path / "cur_ws"
+    cur_ws.mkdir()
+
+    registry = WorkspaceRegistry(tmp_path / "home")
+    registry.document = type(registry.document)()
+    registry.ensure_workspace(src_ws, name="源空间")
+    registry.ensure_workspace(cur_ws, name="当前")
+
+    root = MagicMock()
+    root.workspace_manager.registry = registry
+    coara = MagicMock()
+    coara._root_ref = root
+    coara.workspace_dir = str(cur_ws)
+    coara.skill_manager = SkillManager()
+    await coara.skill_manager.discover(cur_ws, coara_home=None)
+
+    tool = SkillTool(parent_coara=coara)
+    result = await tool.create_invocation(
+        {"action": "import", "name": "event-source", "from_workspace": "源空间"}
+    ).execute()
+    assert result.is_error
+    assert "无需搬运" in str(result.content)
+    assert not (cur_ws / ".coara" / "skills" / "event-source").exists()
+
+
+@pytest.mark.asyncio
+async def test_search_scope_all_lists_foreign_workspaces(tmp_path) -> None:
+    from src.skills.manager import SkillManager
+    from src.workspace.registry import WorkspaceRegistry
+
+    src_ws = tmp_path / "src_ws"
+    skill_dir = src_ws / ".coara" / "skills" / "foreign-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: foreign-skill\ndescription: 外部技能\n---\nx", encoding="utf-8")
+    cur_ws = tmp_path / "cur_ws"
+    cur_ws.mkdir()
+
+    registry = WorkspaceRegistry(tmp_path / "home")
+    registry.document = type(registry.document)()
+    registry.ensure_workspace(src_ws, name="源空间")
+    registry.ensure_workspace(cur_ws, name="当前")
+
+    root = MagicMock()
+    root.workspace_manager.registry = registry
+    coara = MagicMock()
+    coara._root_ref = root
+    coara.workspace_dir = str(cur_ws)
+    coara._skill_session = SkillSessionState()
+    coara.skill_manager = SkillManager()
+    await coara.skill_manager.discover(cur_ws, coara_home=None)
+
+    tool = SkillTool(parent_coara=coara)
+
+    # 默认 scope=current：看不到其它空间的技能
+    result = await tool.create_invocation({"action": "search", "query": "foreign"}).execute()
+    assert "foreign-skill" not in str(result.content)
+
+    # scope=all：列出并标注来源空间
+    result = await tool.create_invocation({"action": "search", "query": "foreign", "scope": "all"}).execute()
+    body = str(result.content)
+    assert "foreign-skill" in body
+    assert "源空间" in body
+    assert "import" in body

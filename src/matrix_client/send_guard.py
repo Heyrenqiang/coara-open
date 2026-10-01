@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import re
 import uuid
@@ -18,6 +19,24 @@ _MD_CODE_BLOCK_RE = re.compile(r"```(\w+)?\n(.*?)```", re.DOTALL)
 _MD_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _MD_ITALIC_RE = re.compile(r"\*(.+?)\*")
+
+# 消息空间标签：手机端按空间分页显示的归属依据。回合开始时由
+# response_stream.stream_to_matrix 绑定（ContextVar 随任务传播），
+# 所有经 matrix_room_send_text 的消息自动带上；未打标的消息端上按
+# 现行行为展示（兼容旧内核）。改名不影响过滤——端上只认 id。
+_ws_tag_var: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+    "matrix_ws_tag", default=None
+)
+
+
+def set_matrix_ws_tag(ws_id: str, ws_name: str) -> contextvars.Token:
+    """绑定本任务后续发送的空间标签；返回 token 供 reset"""
+    tag = (ws_id.strip(), ws_name.strip())
+    return _ws_tag_var.set(tag if (tag[0] or tag[1]) else None)
+
+
+def reset_matrix_ws_tag(token: contextvars.Token) -> None:
+    _ws_tag_var.reset(token)
 
 
 def is_matrix_client_logged_in(client: Any) -> bool:
@@ -113,6 +132,10 @@ def _build_text_content(body: str) -> dict[str, Any]:
     content: dict[str, Any] = {"msgtype": "m.text", "body": body}
     # 仅 final 灭灯，intermediate 继续亮；[COARA_TURN] 结束信封即 final 载体
     content["coara_turn"] = "final" if body.startswith("[COARA_TURN]") else "intermediate"
+    # 空间标签（自定义字段，Matrix 协议允许）：手机端按空间分页过滤的唯一依据
+    tag = _ws_tag_var.get()
+    if tag is not None:
+        content["coara_ws_id"], content["coara_ws_name"] = tag
     if any(c in body for c in ("**", "```", "`")):
         content["format"] = "org.matrix.custom.html"
         content["formatted_body"] = simple_md_to_html(body)

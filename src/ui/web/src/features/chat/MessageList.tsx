@@ -59,6 +59,9 @@ const LIVE_ROWS_NO_CONTAIN = 24;
 /** 距底部多少像素内视为「在底部」，恢复自动跟随。 */
 const STICK_THRESHOLD = 48;
 
+/** 「回到最新」浮出阈值：距底部超过一屏即视为在看历史（与手机端同口径）。 */
+const BACK_TO_LATEST_MIN_DISTANCE_RATIO = 1;
+
 /** 量锚：贴底或视口顶首条可见行（空高行跳过）。 */
 function measureScrollAnchor(el: HTMLElement): ScrollAnchor {
   if (el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD) return BOTTOM_ANCHOR;
@@ -932,6 +935,8 @@ export const MessageList = memo(function MessageList() {
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRafRef = useRef<number | null>(null);
   const stickToBottomRef = useRef(true);
+  /** 距底部超过一屏：即使窗口仍跟随尾部（win.end === null），也浮出「回到最新」。 */
+  const [farFromBottom, setFarFromBottom] = useState(false);
   /** 滚动监听只挂一次，空间归属经 ref 读当前值。 */
   const workspaceDirRef = useRef<string | null>(workspaceDir);
   workspaceDirRef.current = workspaceDir;
@@ -946,6 +951,10 @@ export const MessageList = memo(function MessageList() {
       rafId = null;
       const anchor = measureScrollAnchor(container);
       stickToBottomRef.current = anchor.kind === "bottom";
+      // 距底超过一屏 → 浮「回到最新」；回到底部自动收。布尔翻转才 setState，不重渲每帧。
+      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const far = distance > container.clientHeight * BACK_TO_LATEST_MIN_DISTANCE_RATIO;
+      setFarFromBottom((prev) => (prev === far ? prev : far));
       // 手动滚到底 ＝ 回到最新：窗口重新跟随尾部（幂等：已跟随则返回同引用，不触发重渲）
       if (anchor.kind === "bottom") {
         setWin((w) => (w.end === null ? w : { ...w, end: null }));
@@ -980,10 +989,12 @@ export const MessageList = memo(function MessageList() {
     if (!el || earlierLoading) return;
     prependAnchorRef.current = measureScrollAnchor(el);
     stickToBottomRef.current = false;
-    // 窗口上移一页（不加深）：右端由「贴底」改为绝对行号，并受最早行约束。
+    // 窗口在已加载消息内还能上移：上移一页（不加深）；已到顶则不动窗口，
+    // 等服务端 prepend 新行后窗口右端（绝对行号）自然让位给更早内容
     setWin((w) => {
       const len = useStore.getState().messages.length;
       const end = w.end ?? len;
+      if (end <= MAX_RENDERED_MESSAGES) return w;
       const next = Math.max(MAX_RENDERED_MESSAGES, end - EARLIER_PAGE_ROWS);
       return next >= end ? w : { ...w, end: next };
     });
@@ -994,6 +1005,7 @@ export const MessageList = memo(function MessageList() {
   /** 回到最新：窗口重新跟随尾部，并滚到底。 */
   const handleBackToLatest = useCallback(() => {
     stickToBottomRef.current = true;
+    setFarFromBottom(false);
     setWin((w) => (w.end === null ? w : { ...w, end: null }));
     const el = scrollContainerRef.current;
     if (el) scrollBottomWithCompensation(el);
@@ -1071,6 +1083,20 @@ export const MessageList = memo(function MessageList() {
     return messages.slice(start, end);
   }, [messages, windowEnd]);
   const canMoveEarlier = windowEnd > MAX_RENDERED_MESSAGES;
+
+  // 内容增高（新消息/流式）不触发 scroll 事件，但会把视口顶离底部——
+  // 消息提交后量一次距底距离。放 useEffect + rAF：useLayoutEffect 里读 scrollHeight
+  // 会在 DOM 刚变更时强制同步布局，流式期每 chunk 一次即 layout thrashing。
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const raf = requestAnimationFrame(() => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const far = distance > el.clientHeight * BACK_TO_LATEST_MIN_DISTANCE_RATIO;
+      setFarFromBottom((prev) => (prev === far ? prev : far));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [visibleMessages]);
 
   // Throttled scroll-to-bottom: during streaming, chunks arrive at high frequency. C
   useEffect(() => {
@@ -1165,7 +1191,7 @@ export const MessageList = memo(function MessageList() {
             type="link"
             size="small"
             onClick={handleLoadEarlier}
-            disabled={earlierLoading || !canMoveEarlier}
+            disabled={earlierLoading || (!canMoveEarlier && !hasMoreHistory)}
             style={{ color: "var(--coara-text-muted)" }}
           >
             {earlierLoading ? (
@@ -1173,7 +1199,7 @@ export const MessageList = memo(function MessageList() {
                 <LoadingOutlined style={{ marginRight: 6 }} />
                 加载中…
               </>
-            ) : canMoveEarlier ? (
+            ) : canMoveEarlier || hasMoreHistory ? (
               "加载更早消息"
             ) : (
               "已到最早"
@@ -1234,7 +1260,7 @@ export const MessageList = memo(function MessageList() {
             </div>
           );
         })}
-      {!atLatest && visibleMessages.length > 0 && (
+      {(!atLatest || farFromBottom) && visibleMessages.length > 0 && (
         <div
           style={{
             position: "sticky",

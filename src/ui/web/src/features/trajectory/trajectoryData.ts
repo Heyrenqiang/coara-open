@@ -146,45 +146,44 @@ export function groupTrajectoryRows(rows: TrajectoryRow[]): TrajectoryLine[] {
     lines.push({ kind: "row", row });
   }
 
-  // 外挂录像带：连续的 actor=janitor|daily 行聚成折叠组，合成折叠头
-  // （无 delegate 父行——维护流不是谁 spawn 的）。
+  // 外挂录像带：actor=janitor|daily 的行按 actor 聚成一棵常驻折叠组（合成折叠头，
+  // 无 delegate 父行——维护流不是谁 spawn 的）。组挂在该 actor 首次出现的位置，
+  // 后续新帧持续并入同一组，组头计数随更新（不再按连续段切成碎组）。
   // 合成头 seq 用负值独占，避免与首子行同 seq 撞 seqToFlat / data-flat-index / 选中 id。
   const result: TrajectoryLine[] = [];
   const MAINT_ACTORS = new Set(["janitor", "daily"]);
-  let maintRun: TrajectoryRow[] = [];
-  let maintActor = "";
-  const flushMaint = () => {
-    if (maintRun.length === 0) return;
-    const first = maintRun[0];
-    const actor = maintActor || "janitor";
-    const header: TrajectoryRow = {
-      ...first,
-      seq: -1 - first.seq,
-      role: "janitor",
-      actor,
-      text: `${actor} 维护 · ${maintRun.length} 项`,
-      parent: undefined,
-      tool: undefined,
-    };
-    result.push({
-      kind: "group",
-      group: { key: `${actor}:${first.seq}`, header, children: maintRun },
-    });
-    maintRun = [];
-    maintActor = "";
-  };
+  const maintGroups = new Map<string, TrajectoryGroup>();
   for (const line of lines) {
     const actor = line.kind === "row" ? line.row?.actor ?? "" : "";
     if (line.kind === "row" && line.row && MAINT_ACTORS.has(actor)) {
-      if (maintRun.length > 0 && maintActor !== actor) flushMaint();
-      maintActor = actor;
-      maintRun.push(line.row);
+      let group = maintGroups.get(actor);
+      if (!group) {
+        const first = line.row;
+        const header: TrajectoryRow = {
+          ...first,
+          seq: -1 - first.seq,
+          role: "janitor",
+          actor,
+          text: "",
+          parent: undefined,
+          tool: undefined,
+        };
+        group = { key: `${actor}:${first.seq}`, header, children: [] };
+        maintGroups.set(actor, group);
+        result.push({ kind: "group", group });
+      }
+      group.children.push(line.row);
       continue;
     }
-    flushMaint();
     result.push(line);
   }
-  flushMaint();
+  for (const group of maintGroups.values()) {
+    group.children.sort((a, b) => a.seq - b.seq);
+    const header = group.header;
+    if (!header) continue;
+    const actor = header.actor ?? "janitor";
+    group.header = { ...header, text: `${actor} 维护 · ${group.children.length} 项` };
+  }
   return result;
 }
 

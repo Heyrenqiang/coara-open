@@ -27,8 +27,8 @@ coara v8 是 **Python 优先的多智能体运行时**：asyncio 核心、内置
 
 所有运行时节点共享同一基类 `CoaraBase`，能力由运行时接线决定：`delegate_depth`、工具白名单、`owner_only`/`is_owner_context` 可见性、plan 模式允许列表、调用层审批（`call_policy`）。
 
-- **语言**：Python 3.11+ / **许可证**：MIT / **包名**：`coara` / **版本**：见 `pyproject.toml` / **仓库**：`D:\code_ws\coara`（Windows 开发环境）
-- **规模**：`src/` 488 个 Python 文件；`tests/` 382 个 `.py`（分默认 / extended / e2e / real_env 四档，见 [`tests/README.md`](tests/README.md)）
+- **语言**：Python 3.11+ / **许可证**：MIT / **包名**：`coara` / **版本**：见 `pyproject.toml` / **仓库**：`D:\code_ws\v8`（Windows 开发环境）
+- **规模**：`src/` 506 个 Python 文件；`tests/` 358 个测试模块（共 383 个 `.py`；分默认 / extended / e2e / real_env 四档，见 [`tests/README.md`](tests/README.md)）
 
 ## 技术栈
 
@@ -364,9 +364,9 @@ mypy src/
 
 技能是**面向 LLM 的运行时指令**（非代码插件）：每个技能 = 目录 + `SKILL.md`（YAML frontmatter + 正文）。权威文档：[`docs/技能系统.md`](docs/技能系统.md)
 
-- **加载优先级**（后者覆盖前者）：内置 `skills/` → 用户级 `users/default/skills/` → 工作空间级 `.coara/skills/`（目录存在即加载）→ 运行时额外路径
+- **加载优先级**（后者覆盖前者）：出厂 `skills/`（全局级）→ 全局级 `users/default/skills/` → 工作空间级 `.coara/skills/`（目录存在即加载）→ 运行时额外路径
 - **挂起治理**：挂起名单唯一真相是配置 `skills.deferred`（配置页「技能」区可切换，新会话生效）；SKILL.md 不声明挂起与否。名单内技能不进主清单，提示词里只露裸名，经 `skill(action=search)` 查描述后 activate
-- **运行时使用（仅 Root）**：`skill(action=search|activate)`（search 返回候选名+描述，activate 加载完整 SKILL.md 入历史）；`/new` 清除激活
+- **运行时使用（仅 Root）**：`skill(action=search|activate|import)`（search 返回候选名+描述、scope=all 另列其它空间技能；activate 加载完整 SKILL.md 入历史；import 把其它空间技能整份复制到本空间）；`/new` 清除激活
 - **内置技能**：`event-source`、`工作空间管理`、`skill-creator`、`tool-creator`、`create-rule`
 
 ## 配置

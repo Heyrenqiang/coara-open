@@ -64,9 +64,9 @@ def _retract_switch_ui_transcript(source_coara: Any) -> None:
 
 class WsTool(BaseTool):
     name = "ws"
-    summary = "已登记工作空间的 list / add / remove / rename / switch / kind"
+    summary = "已登记工作空间的 list / add / remove / rename / switch / kind / summary"
     display_name = "Workspace"
-    description = """管理已登记工作空间（coara Home 注册表），查询、登记、移出、改名、切换、设置性质
+    description = """管理已登记工作空间（coara Home 注册表），查询、登记、移出、改名、切换、设置性质、维护一句话摘要
 
 Actions
 - `list`：只查询，标出（当前）；用户问「在哪个工作空间」时 list 后直接回答，**不要**自行切换
@@ -76,6 +76,7 @@ Actions
 - `rename`：只改登记名（`name`→`new_name`），路径与磁盘不动；勿用 remove+add 代替
 - `switch`：**仅**用户明确要求切换/进入某工作空间时调用；勿因列表里看见其它名字而自行切换；切换会结束当前回合
 - `kind`：查询或设置空间性质（`normal` / `external`；`internal` 由系统管理）；省略 `kind` 参数则查询
+- `summary`：设置或更新空间的一句话摘要（`name` + `summary` 文本，不超过 50 字），供空间列表提示这个空间是干什么的
 
 注意
 - 切换必须用 `action=switch`，勿用 shell
@@ -98,10 +99,12 @@ Actions
                     "rename",
                     "switch",
                     "kind",
+                    "summary",
                 ],
                 "description": (
                     "list=查询，不切换；switch=仅用户明确要求切换时；"
-                    "add/remove/rename；kind=设置空间性质（normal/external）"
+                    "add/remove/rename；kind=设置空间性质（normal/external）；"
+                    "summary=设置空间一句话摘要"
                 ),
             },
             "name": {
@@ -118,7 +121,7 @@ Actions
             },
             "summary": {
                 "type": "string",
-                "description": "add 时可选摘要",
+                "description": "摘要文本：add 时可选；action=summary 时必填（不超过 50 字）",
             },
             "kind": {
                 "type": "string",
@@ -181,6 +184,8 @@ class WsInvocation(ToolInvocation):
             return f"Set workspace {self.workspace_name or '?'} kind={self.kind or '（查询）'}"
         if self.action == "switch":
             return f"Switch to workspace {self.workspace_name or '?'}"
+        if self.action == "summary":
+            return f"Set workspace summary {self.workspace_name or '?'}"
         return "List registered workspaces"
 
     async def execute(self, signal=None) -> ToolResult:
@@ -208,6 +213,9 @@ class WsInvocation(ToolInvocation):
 
         if self.action == "switch":
             return await self._execute_switch(manager)
+
+        if self.action == "summary":
+            return await self._execute_summary(manager)
 
         return ToolResult.error(f"Unknown ws action: {self.action}")
 
@@ -410,6 +418,24 @@ class WsInvocation(ToolInvocation):
         entry.kind = new_kind
         manager.registry.save()
         return ToolResult.success(f"已设置工作空间 {entry.name} 性质：{new_kind.value}")
+
+    async def _execute_summary(self, manager: Any) -> ToolResult:
+        """设置或更新空间一句话摘要（注册表 = 消费端真相）。"""
+        if not self.workspace_name:
+            return ToolResult.error("summary 需要 name")
+        if not self.summary:
+            return ToolResult.error("summary 需要 summary 文本")
+        if len(self.summary) > 50:
+            return ToolResult.error("摘要不超过 50 字")
+
+        entry = manager.registry.resolve_name_or_id(self.workspace_name)
+        if entry is None:
+            return ToolResult.error(f"未找到工作空间 {self.workspace_name}")
+
+        updated = manager.set_summary(entry.id, self.summary)
+        if updated is None:
+            return ToolResult.error(f"未找到工作空间 {self.workspace_name}")
+        return ToolResult.success(f"已更新 {updated.name} 摘要：{updated.summary}")
 
     async def _execute_switch(self, manager: Any) -> ToolResult:
         if not self.workspace_name:

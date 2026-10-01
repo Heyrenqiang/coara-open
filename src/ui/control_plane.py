@@ -16,7 +16,7 @@ from src.core.errors import SkillError, SkillNotFoundError
 from src.core.json_store import write_text_atomic
 from src.core.logger import logger
 from src.skills.loader import SkillLoader
-from src.skills.manager import SkillManager, infer_skill_source
+from src.skills.manager import SkillManager, infer_skill_source, is_factory_skill
 
 if TYPE_CHECKING:
     from src.core.types import SkillDefinition
@@ -123,7 +123,7 @@ class SkillValidationError(SkillError):
 
 
 async def _resolve_skill(name: str, workspace_dir: Path, coara_home: Path | None = None) -> SkillDefinition | None:
-    """按名称解析技能；以发现结果为准（builtin→user→workspace 后者覆盖前者）。"""
+    """按名称解析技能；以发现结果为准（出厂默认→全局级→工作区 后者覆盖前者）。"""
     from src.core.coara_home import resolve_coara_home
 
     home = coara_home or resolve_coara_home(workspace_dir)
@@ -166,7 +166,7 @@ async def read_skill_content(name: str, workspace_dir: Path, coara_home: Path | 
         "path": str(path),
         "frontmatter_raw": frontmatter_raw,
         "body": body,
-        "readonly": infer_skill_source(skill.location) == "builtin",
+        "readonly": is_factory_skill(skill.location),
     }
 
 
@@ -182,8 +182,8 @@ async def write_skill_content(
     skill = await _resolve_skill(name, workspace_dir, coara_home)
     if skill is None:
         raise SkillNotFoundError(name)
-    if infer_skill_source(skill.location) == "builtin":
-        raise SkillPermissionError("内置技能是包内资产，不可在线修改")
+    if is_factory_skill(skill.location):
+        raise SkillPermissionError("出厂技能是包内资产，不可在线修改；在全局级放同名副本即可覆盖")
     path = Path(skill.location)
     try:
         raw = path.read_text(encoding="utf-8")

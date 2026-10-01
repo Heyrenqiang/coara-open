@@ -78,17 +78,13 @@ async def test_dispatch_envelopes_child_frames_whatever_the_kind() -> None:
     assert _payload(sent[1])["kind"] == "subagent_result"
 
 
-async def test_dispatch_plain_text_and_prefix() -> None:
+async def test_dispatch_plain_text() -> None:
     sent, send_chunk = await _collect()
     await dispatch_matrix_end_frame({"kind": "chunk", "text": "主会话正文"}, room_id="!r", send_chunk=send_chunk)
-    await dispatch_matrix_end_frame(
-        {"kind": "chunk", "text": "切空间后正文"},
-        room_id="!r",
-        send_chunk=send_chunk,
-        body_prefix=lambda: "[shop] ",
-    )
+    # detached 前缀已随分空间显示移除：归属由 content.coara_ws_* 承载，正文不再加空间前缀
+    await dispatch_matrix_end_frame({"kind": "chunk", "text": "切空间后正文"}, room_id="!r", send_chunk=send_chunk)
     await dispatch_matrix_end_frame({"kind": "chunk", "text": "   "}, room_id="!r", send_chunk=send_chunk)
-    assert sent == ["主会话正文", "[shop] 切空间后正文"]
+    assert sent == ["主会话正文", "切空间后正文"]
 
 
 async def test_dispatch_drops_injected_envelopes() -> None:

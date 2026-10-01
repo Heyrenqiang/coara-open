@@ -132,7 +132,10 @@ function BackgroundTaskPanel({
 export function TurnSpinner() {
   const turnActive = useStore((s) => s.turnActive);
   const turnStartedAt = useStore((s) => s.turnStartedAt);
-  const pendingCommand = useStore((s) => s.pendingCommand);
+  // 命令 spinner 按空间键控：A 空间发起的 /compact，切到 B 后 B 不显示（命令归属发起空间）。
+  const pendingCommand = useStore((s) =>
+    s.pendingCommandWorkspace === s.workspaceDir || s.pendingCommandWorkspace === null ? s.pendingCommand : null,
+  );
   const bgTasks = useStore((s) => Number(s.runtime?.background_tasks) || 0);
   const bgLabels = useStore((s) => {
     const raw = s.runtime?.background_task_labels;

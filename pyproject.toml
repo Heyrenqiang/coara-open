@@ -1,6 +1,6 @@
 [project]
 name = "coara"
-version = "1.0.87"
+version = "1.0.88"
 description = "An AI assistant runtime that can create and organize sub-agents"
 readme = "README.md"
 requires-python = ">=3.11"

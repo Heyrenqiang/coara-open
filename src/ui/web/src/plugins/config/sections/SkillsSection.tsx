@@ -4,8 +4,7 @@ import { fetchSkillContent, saveSkillContent, setSkillDeferred } from "coara:she
 import { ConfigEmpty, ConfigMore, configClamp, configRow, configTitle } from "./configChrome";
 
 const SOURCE_LABELS: Record<string, string> = {
-  builtin: "内置",
-  user: "用户",
+  global: "全局",
   workspace: "工作空间",
   extra: "扩展",
 };

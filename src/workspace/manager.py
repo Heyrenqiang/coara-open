@@ -148,6 +148,20 @@ class WorkspaceManager:
             return False
         return self.registry.set_default(entry.id)
 
+    def set_summary(self, workspace_id: str, summary: str) -> WorkspaceEntry | None:
+        """更新空间一句话摘要（注册表是消费端真相：手机空间列表/CLI ws list 都读它）"""
+        entry = self.registry.resolve_name_or_id(workspace_id)
+        if entry is None:
+            return None
+        chosen = summary.strip()
+        if chosen == entry.summary.strip():
+            return entry
+        entry.summary = chosen
+        self.registry.save()
+        self._notify_registry_changed("updated", entry)
+        logger.info(f"Updated workspace summary: {entry.name} -> {chosen[:50]}")
+        return entry
+
     def _notify_registry_changed(self, action: str, entry: WorkspaceEntry | None) -> None:
         callback = self.on_registry_changed
         if callback is None:

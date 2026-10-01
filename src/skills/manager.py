@@ -16,18 +16,28 @@ from src.core.types import SkillDefinition
 from src.skills.loader import load_skills_from_dir
 
 
+def factory_skills_dir() -> Path:
+    """出厂技能目录（程序包内 skills/）：在线只读，升级随包覆盖。"""
+    return Path(__file__).parent.parent.parent / "skills"
+
+
+def is_factory_skill(location: str) -> bool:
+    """该 SKILL.md 是否在出厂目录里（只读判据的唯一真源）。"""
+    try:
+        Path(location).resolve().relative_to(factory_skills_dir().resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def infer_skill_source(location: str) -> str:
-    """Infer skill origin from its SKILL.md path."""
+    """推断技能来源（两级语义）：global = 全局级（含出厂技能，随程序目录或全局目录）；
+    workspace = 工作空间级；extra = 额外挂载路径。SKILL.md 路径是唯一判据。"""
     normalized = location.replace("\\", "/").lower()
-    user_prefix = str(Path.home() / ".coara" / "skills").replace("\\", "/").lower()
-    if normalized.startswith(user_prefix):
-        return "user"
-    if "/users/default/skills/" in normalized:
-        return "user"
     if "/.coara/skills/" in normalized:
         return "workspace"
     if "/skills/" in normalized:
-        return "builtin"
+        return "global"
     return "extra"
 
 
@@ -69,14 +79,14 @@ class SkillManager:
         coara_home: Path | None,
     ) -> list[tuple[Path, str]]:
         sources: list[tuple[Path, str]] = []
-        builtin_skills_dir = Path(__file__).parent.parent.parent / "skills"
-        if builtin_skills_dir.exists():
-            sources.append((builtin_skills_dir, "builtin"))
+        # 出厂默认：程序目录里的 skills/，全局级可被同名覆盖（用户改过的版本生效）
+        if factory_skills_dir().exists():
+            sources.append((factory_skills_dir(), "global"))
         if coara_home is not None:
             home = Path(coara_home).expanduser().resolve()
             user_skill_dir = user_paths(home).skills_dir
             if user_skill_dir.exists():
-                sources.append((user_skill_dir, "user"))
+                sources.append((user_skill_dir, "global"))
         workspace_skills_dir = Path(workspace_dir) / ".coara" / "skills"
         if workspace_skills_dir.exists():
             sources.append((workspace_skills_dir, "workspace"))
@@ -98,8 +108,8 @@ class SkillManager:
         发现并加载所有可用的 Skill。
 
         技能来源（后加载的覆盖先加载的）：
-        1. 内置 skills/ 目录
-        2. 用户级技能 ``<coara_home>/users/default/skills/``
+        1. 出厂默认 skills/（程序目录，全局级）
+        2. 全局级 ``<coara_home>/users/default/skills/``（覆盖出厂同名）
         3. 工作区技能 ``.coara/skills/``
         4. 额外指定的路径
 

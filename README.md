@@ -84,3 +84,5 @@ gomatrix 随 coara 自动启动，无需手动编译或配置。托盘右键「�
 ## 许可
 
 [MIT](LICENSE) © 2026 coara contributors
+
+本项目使用的所有第三方依赖及其许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。

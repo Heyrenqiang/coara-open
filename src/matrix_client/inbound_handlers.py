@@ -203,11 +203,17 @@ async def process_matrix_text_message(
         turn_stats = turn_send_stats(raw_send_chunk)
         if turn_stats is not None:
             host.send_chunk = turn_stats.send  # type: ignore[assignment]  # 统计包装后的发送函数签名更宽
+        from src.coara.turn_detach import workspace_display_name
+
         async with matrix_turn_scope(
             room.room_id,
             send_chunk=raw_send_chunk,
             background_active=background_work_active,
             send_stats=turn_stats,
+            ws_tag=(
+                str(turn_ws_id or ""),
+                workspace_display_name(host.root, str(getattr(turn_coara, "workspace_dir", "") or "")),
+            ),
         ):
             trust_level = resolve_matrix_trust_level(event.sender, cli_owner=host.cli_owner)
             if trust_level == "untrusted":
@@ -297,11 +303,17 @@ async def process_matrix_media_message(
         turn_stats = turn_send_stats(raw_send_chunk)
         if turn_stats is not None:
             host.send_chunk = turn_stats.send  # type: ignore[assignment]  # 统计包装后的发送函数签名更宽
+        from src.coara.turn_detach import workspace_display_name
+
         async with matrix_turn_scope(
             room.room_id,
             send_chunk=raw_send_chunk,
             background_active=background_work_active,
             send_stats=turn_stats,
+            ws_tag=(
+                str(turn_ws_id or ""),
+                workspace_display_name(host.root, str(getattr(target_coara, "workspace_dir", "") or "")),
+            ),
         ):
             await process_matrix_media_inbound(
                 host.client,
